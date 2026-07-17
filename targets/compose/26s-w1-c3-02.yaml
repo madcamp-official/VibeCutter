@@ -1,0 +1,62 @@
+name: vibecutter-26s-w1-c3-02
+services:
+  database:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: booknote_db
+      MYSQL_ROOT_PASSWORD: p2-local-mysql-only
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes: [database-data:/var/lib/mysql]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -pp2-local-mysql-only --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+    networks: [vibecutter-internal]
+  backend:
+    build:
+      context: ../../.vibecutter/targets/sources/26s-w1-c3-02/backend
+    environment:
+      DB_ENGINE: django.db.backends.mysql
+      MYSQL_DATABASE: booknote_db
+      MYSQL_USER: root
+      MYSQL_PASSWORD: p2-local-mysql-only
+      MYSQL_HOST: database
+      MYSQL_PORT: "3306"
+      DJANGO_SECRET_KEY: p2-local-runtime-only
+      DJANGO_DEBUG: "True"
+      DJANGO_ALLOWED_HOSTS: 127.0.0.1,localhost
+      CORS_ALLOW_ALL_ORIGINS: "True"
+      ALADIN_TTB_KEY: ""
+      OPENAI_API_KEY: ""
+      KAKAO_REST_API_KEY: ""
+      KAKAO_CLIENT_SECRET: ""
+    command: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --timeout 120"
+    volumes: [static-data:/app/staticfiles]
+    depends_on: {database: {condition: service_healthy}}
+    ports: ["127.0.0.1:14025:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/auth/nickname-check?nickname=p2')"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+    networks: [vibecutter-internal]
+  frontend:
+    build:
+      context: ../../.vibecutter/targets/sources/26s-w1-c3-02/frontend
+    volumes: [static-data:/usr/share/nginx/html/static:ro]
+    depends_on: {backend: {condition: service_healthy}}
+    ports: ["127.0.0.1:14026:80"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [vibecutter-internal]
+networks:
+  vibecutter-internal:
+    driver: bridge
+    driver_opts: {com.docker.network.bridge.enable_ip_masquerade: "false"}
+volumes:
+  database-data:
+  static-data:
