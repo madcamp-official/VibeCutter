@@ -43,7 +43,7 @@
    ```
    Finding 상태는 별도: `candidate | verified | rejected | fixed | human_review`. **이 이름은 cowork_rule.md에서 "조용히 변경 금지"로 못박은 공통 계약이다** — 바꾸려면 handoff에 영향 범위를 남겨야 한다.
 - [x] **Finding/Candidate 상태 전이는 deterministic judge만 판정**하도록 구조를 짠다 (LLM confidence는 우선순위에만 사용, 최종 판정에는 미사용 — 5.3절 원칙). 이건 이후 judge.py 설계의 전제이므로 Day1에 인터페이스로 못박아 둔다.
-- [ ] 이 스키마와 tool schema 초안을 **`docs/handoffs/D1-P1.md`로 오전 중 먼저 게시**하고, 팀 채널에 "공통 계약 나왔다"고 알린다. (다른 팀원이 기다리는 지점)
+- [x] 이 스키마와 tool schema 초안을 **`docs/handoffs/D1-P1.md`로 오전 중 먼저 게시**하고, 팀 채널에 "공통 계약 나왔다"고 알린다. (다른 팀원이 기다리는 지점)
 
 ### 오후
 
@@ -56,7 +56,7 @@
 - [ ] 검증: MCP Host(Claude Code 등)에서 stdio로 서버를 붙여 resource 조회, dummy tool 호출이 되는지 확인. **stdout에 JSON-RPC 외 출력이 없는지 반드시 확인** (Definition of Done 1번 항목, print debug 하나만 있어도 프로토콜이 깨짐).
 
 ### 오늘 커뮤니케이션
-- [ ] **P2, P3, P4에게 오전 중**: 공통 스키마 + tool schema 확정본 공유 (docs/handoffs/D1-P1.md).
+- [x] **P2, P3, P4에게 오전 중**: 공통 스키마 + tool schema 확정본 공유 (docs/handoffs/D1-P1.md).
 - [ ] **P3에게**: evidence_store의 쓰기 API(observation 기록 방법)를 명확히 전달 — Notion 리스크 표에 "P1 evidence store(D2)"가 P3 착수 조건으로 명시되어 있어, 실제로는 오늘 저녁까지 나와야 P3가 Day2 오전에 막히지 않는다.
 - [ ] **P2에게**: target manifest 스키마(9.3절)를 내 `Target` Pydantic 모델과 필드명을 맞춰야 하므로, P2가 만드는 manifest 필드(`id`, `stack`, `build.command_id`, `network.allowed_hosts` 등)를 오늘 중 서로 확인.
 - [ ] **P4에게**: inventory 결과가 들어갈 `Target` 스키마 필드 확인.
