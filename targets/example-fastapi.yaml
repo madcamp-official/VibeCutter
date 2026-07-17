@@ -1,0 +1,40 @@
+manifest_version: 1
+target_id: example-fastapi
+display_name: Example FastAPI target
+adapter: fastapi
+source_dir: .
+base_url: http://127.0.0.1:18080
+commands:
+  build:
+    argv: [docker, compose, -f, targets/example-fastapi.compose.yaml, build]
+    timeout_seconds: 900
+  start:
+    argv: [docker, compose, -f, targets/example-fastapi.compose.yaml, up, -d]
+    timeout_seconds: 180
+  stop:
+    argv: [docker, compose, -f, targets/example-fastapi.compose.yaml, down]
+    timeout_seconds: 180
+  reset:
+    argv: [docker, compose, -f, targets/example-fastapi.compose.yaml, down, --volumes]
+    timeout_seconds: 180
+  pytest:
+    argv: [docker, compose, -f, targets/example-fastapi.compose.yaml, run, --rm, app, pytest]
+    timeout_seconds: 300
+healthcheck:
+  path: /health
+  expected_status: 200
+  timeout_seconds: 20
+reset:
+  command_id: reset
+  snapshot_name: example-fastapi-seed-v1
+role_fixtures:
+  - name: user_a
+    description: Fixture account owning a private resource.
+    secret_env_names: [VIBECUTTER_ROLE_A_TOKEN]
+  - name: user_b
+    description: Fixture account without access to user_a resources.
+    secret_env_names: [VIBECUTTER_ROLE_B_TOKEN]
+test_suites:
+  - name: api-regression
+    command_id: pytest
+log_paths: [logs/app.log, logs/db.log]

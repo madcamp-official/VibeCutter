@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+from runtime.lifecycle import ApprovalRequired, LifecycleManager
+from runtime.manifest import TargetManifest
+from runtime.worktree import WorktreeManager
+
+
+def manifest_for_python_commands() -> TargetManifest:
+    argv = [sys.executable, "-c", "print('ok')"]
+    return TargetManifest.model_validate(
+        {
+            "manifest_version": 1,
+            "target_id": "demo-api",
+            "display_name": "Demo API",
+            "adapter": "fastapi",
+            "source_dir": ".",
+            "base_url": "http://127.0.0.1:18080",
+            "commands": {
+                "build": {"argv": argv},
+                "start": {"argv": argv},
+                "stop": {"argv": argv},
+                "reset": {"argv": argv},
+                "test": {"argv": argv},
+            },
+            "reset": {"command_id": "reset"},
+            "test_suites": [{"name": "unit", "command_id": "test"}],
+        }
+    )
+
+
+class LifecycleTests(unittest.TestCase):
+    def test_manifest_command_executes_without_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = LifecycleManager(manifest_for_python_commands(), Path(temp_dir))
+            result = manager.build()
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.stdout.strip(), "ok")
+
+    def test_reset_requires_explicit_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = LifecycleManager(manifest_for_python_commands(), Path(temp_dir))
+            with self.assertRaises(ApprovalRequired):
+                manager.reset(approved=False)
+
+    def test_test_suites_return_structured_results(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = LifecycleManager(manifest_for_python_commands(), Path(temp_dir))
+            results = manager.run_test_suites()
+        self.assertEqual([(result.command_id, result.status) for result in results], [("test", "passed")])
+
+    def test_worktree_path_rejects_traversal(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = WorktreeManager(Path(temp_dir))
+            with self.assertRaises(ValueError):
+                manager.path_for("../escape")
+
+    def test_worktree_rejects_untrusted_revision_syntax(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = WorktreeManager(Path(temp_dir))
+            with self.assertRaises(ValueError):
+                manager.create("run-1", "--upload-pack=unexpected")
