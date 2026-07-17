@@ -34,8 +34,8 @@
    policies/{scope.yaml, commands.yaml, vulnerability_profiles/}
    docs/handoffs/
    ```
-- [ ] **공통 데이터 모델을 Pydantic으로 정의** (기획서 11.3절 Entity 표 그대로): `Target`, `Run`, `Observation`, `Candidate`, `Finding`, `Patch`, `Validation`, `Trajectory`. 각 필드는 문서 표를 따른다 (예: Finding = verification_state, impact, evidence_ids, reproducibility 등).
-- [ ] **상태 머신 정의** (`core/state_machine.py`): 기획서 5.2절 고정 상태를 그대로 enum화.
+- [x] **공통 데이터 모델을 Pydantic으로 정의** (기획서 11.3절 Entity 표 그대로): `Target`, `Run`, `Observation`, `Candidate`, `Finding`, `Patch`, `Validation`, `Trajectory`. 각 필드는 문서 표를 따른다 (예: Finding = verification_state, impact, evidence_ids, reproducibility 등).
+- [x] **상태 머신 정의** (`core/state_machine.py`): 기획서 5.2절 고정 상태를 그대로 enum화.
    ```
    REGISTERED → BUILDING → READY → MAPPING → CANDIDATE_SCAN → VERIFYING
    → VERIFIED / REJECTED → LOCALIZING → PATCH_PROPOSED → WAITING_APPROVAL
