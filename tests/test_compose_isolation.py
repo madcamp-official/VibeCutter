@@ -59,6 +59,18 @@ class ComposeIsolationTests(unittest.TestCase):
         self.assertTrue(report.compliant)
         self.assertTrue(readiness.ready)
 
+    def test_nat_disabled_bridge_allows_loopback_target_isolation(self) -> None:
+        document = compliant_compose()
+        document["networks"]["vc-internal"] = {
+            "driver": "bridge",
+            "driver_opts": {"com.docker.network.bridge.enable_ip_masquerade": "false"},
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "compose.yaml").write_text(yaml.safe_dump(document), encoding="utf-8")
+            report = ComposeIsolationInspector(manifest_for_compose(), root).inspect()
+        self.assertTrue(report.compliant)
+
     def test_non_loopback_privileged_compose_is_rejected(self) -> None:
         document = compliant_compose()
         document["services"]["app"]["ports"] = ["18080:8080"]

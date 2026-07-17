@@ -113,11 +113,14 @@ class LifecycleManager:
     def _run(self, command_id: str, spec: CommandSpec) -> CommandResult:
         environment = os.environ.copy()
         environment.update(spec.environment)
+        working_dir = self.source_dir
+        if spec.working_dir is not None:
+            working_dir = _resolve_within_root(self.repository_root, spec.working_dir)
         started = time.monotonic()
         try:
             completed = subprocess.run(
                 spec.argv,
-                cwd=self.source_dir,
+                cwd=working_dir,
                 env=environment,
                 capture_output=True,
                 text=True,

@@ -48,6 +48,12 @@ class TargetManifestTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             TargetManifest.model_validate(data)
 
+    def test_command_working_directory_must_stay_within_repository(self) -> None:
+        data = valid_manifest()
+        data["commands"]["build"]["working_dir"] = "../outside"
+        with self.assertRaises(ValidationError):
+            TargetManifest.model_validate(data)
+
     def test_yaml_loader_reads_checked_in_shape(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "target.yaml"

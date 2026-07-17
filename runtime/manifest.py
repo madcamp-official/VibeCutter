@@ -35,6 +35,10 @@ class CommandSpec(BaseModel):
     argv: list[Annotated[str, Field(min_length=1, max_length=500)]] = Field(min_length=1, max_length=32)
     timeout_seconds: int = Field(default=300, ge=1, le=3600)
     environment: dict[str, str] = Field(default_factory=dict)
+    # Defaults to the target source directory.  Use this only when a trusted,
+    # checked-in orchestration file (for example a P2 Compose overlay) lives
+    # elsewhere inside the VibeCutter repository.
+    working_dir: RelativePath | None = None
 
     @field_validator("argv")
     @classmethod
@@ -45,6 +49,13 @@ class CommandSpec(BaseModel):
         if any(any(token in arg for token in prohibited) for arg in argv):
             raise ValueError("command argv must not contain shell syntax")
         return argv
+
+    @field_validator("working_dir")
+    @classmethod
+    def working_dir_must_be_relative(cls, value: str | None) -> str | None:
+        if value is not None:
+            _validate_relative_path(value, "command working directory")
+        return value
 
 
 class HealthCheck(BaseModel):

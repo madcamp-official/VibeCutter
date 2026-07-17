@@ -1,0 +1,50 @@
+manifest_version: 1
+id: 26s-w1-c1-02
+display_name: 26s-w1-c1-02 local isolated runtime
+adapter: node
+source_dir: .vibecutter/targets/sources/26s-w1-c1-02
+base_url: http://127.0.0.1:14003
+commands:
+  build:
+    argv: [docker, compose, -f, targets/compose/26s-w1-c1-02.yaml, build]
+    working_dir: .
+    timeout_seconds: 900
+  start:
+    argv: [docker, compose, -f, targets/compose/26s-w1-c1-02.yaml, up, -d, --wait]
+    working_dir: .
+    timeout_seconds: 300
+  stop:
+    argv: [docker, compose, -f, targets/compose/26s-w1-c1-02.yaml, down, --remove-orphans]
+    working_dir: .
+    timeout_seconds: 180
+  reset:
+    argv: [docker, compose, -f, targets/compose/26s-w1-c1-02.yaml, down, --volumes, --remove-orphans]
+    working_dir: .
+    timeout_seconds: 180
+  verify:
+    argv: [docker, compose, -f, targets/compose/26s-w1-c1-02.yaml, exec, -T, backend, node, scripts/verify-vowel-mp.js]
+    working_dir: .
+    timeout_seconds: 180
+tool_versions:
+  docker: "29.6.1"
+  docker-compose: "v5.3.0"
+healthcheck:
+  path: /health
+  expected_status: 200
+  timeout_seconds: 30
+reset:
+  command_id: reset
+  snapshot_name: local-postgres-ephemeral-v1
+role_fixtures:
+  - name: game_user_a
+    description: Local ephemeral user created by the target's regression script.
+  - name: game_user_b
+    description: Second local ephemeral user used for multiplayer verification.
+test_suites:
+  - name: multiplayer-regression
+    command_id: verify
+log_paths: []
+docker_isolation:
+  compose_file: targets/compose/26s-w1-c1-02.yaml
+  internal_network: vibecutter-internal
+  require_loopback_port_bindings: true

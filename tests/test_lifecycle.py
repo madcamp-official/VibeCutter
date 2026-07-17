@@ -53,6 +53,17 @@ class LifecycleTests(unittest.TestCase):
             results = manager.run_test_suites()
         self.assertEqual([(result.command_id, result.status) for result in results], [("test", "passed")])
 
+    def test_command_can_use_a_trusted_repository_working_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "orchestration").mkdir()
+            manifest = manifest_for_python_commands()
+            manifest.commands["build"].argv = [sys.executable, "-c", "import os; print(os.getcwd())"]
+            manifest.commands["build"].working_dir = "orchestration"
+            result = LifecycleManager(manifest, root).build()
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(Path(result.stdout.strip()).name, "orchestration")
+
     def test_worktree_path_rejects_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = WorktreeManager(Path(temp_dir))

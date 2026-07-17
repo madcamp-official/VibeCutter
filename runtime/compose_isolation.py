@@ -57,8 +57,11 @@ def _inspect_document(document: dict, spec: DockerIsolationSpec) -> list[str]:
     issues: list[str] = []
     networks = document.get("networks")
     network = networks.get(spec.internal_network) if isinstance(networks, dict) else None
-    if not isinstance(network, dict) or network.get("internal") is not True:
-        issues.append(f"network {spec.internal_network!r} must declare internal: true")
+    if not isinstance(network, dict) or not _blocks_egress(network):
+        issues.append(
+            f"network {spec.internal_network!r} must declare internal: true "
+            "or disable bridge NAT masquerading"
+        )
 
     services = document.get("services")
     if not isinstance(services, dict) or not services:
@@ -86,6 +89,26 @@ def _uses_network(value: object, expected_network: str) -> bool:
     if isinstance(value, dict):
         return expected_network in value
     return False
+
+
+def _blocks_egress(network: dict) -> bool:
+    """Accept Docker's two local-network modes that block container egress.
+
+    A Compose ``internal: true`` bridge prevents egress, but Docker Desktop
+    also prevents host loopback ingress to published service ports on that
+    bridge.  For targets that P3 must reach through a loopback base URL, a
+    bridge with NAT masquerading disabled preserves host ingress while packets
+    cannot be source-NATed onto external networks.
+    """
+
+    if network.get("internal") is True:
+        return True
+    if network.get("driver", "bridge") != "bridge":
+        return False
+    options = network.get("driver_opts")
+    if not isinstance(options, dict):
+        return False
+    return options.get("com.docker.network.bridge.enable_ip_masquerade") in {False, "false", "False", "0"}
 
 
 def _is_loopback_port_binding(port: object) -> bool:
