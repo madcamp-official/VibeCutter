@@ -44,3 +44,26 @@ P1 regression gate 연결점은 `catalog.test_runner_for(target_id).run(run_id)`
 임의 경로를 받지 않고 P2 `WorktreeManager`가 관리하는 `.vibecutter/worktrees/<run_id>`가
 실제 Git worktree인지 확인한 뒤에만 manifest test suite를 실행한다. test suite가 없으면
 `not_configured`이며 regression 통과로 처리하면 안 된다.
+
+## P1 policy onboarding
+
+manifest만으로는 실행할 수 없다. 해당 `id`를 `policies/scope.yaml`에 아래처럼 등록하고,
+lifecycle tool용 typed command도 `policies/commands.yaml`에 등록해야 한다.
+
+```yaml
+# scope.yaml
+targets:
+  example-fastapi:
+    allowed_hosts: [127.0.0.1]
+    port: 18080
+
+# commands.yaml
+commands:
+  build_target: {args: {target_id: str}}
+  start_target: {args: {target_id: str}}
+  reset_target: {args: {target_id: str}}
+```
+
+P2 `TargetRuntimeService`는 checked-in manifest와 MCP로 제출된 manifest가 완전히 같은지,
+host와 port가 scope와 같은지, lifecycle command ID가 typed policy에 있는지를 차례로
+검증한다. `vc_reset_target`는 추가로 `approved: true`가 필수다.

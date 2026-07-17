@@ -6,6 +6,7 @@ from .manifest import TargetManifest, load_manifest
 from .readiness import TargetReadiness, TargetRuntimeInspector
 from .registration import load_contract_target, manifest_sha256, to_contract_target
 from .test_runner import RunScopedTestRunner, TestRunSummary
+from .target_service import TargetOperationError, TargetRuntimeService
 
 __all__ = [
     "ApprovalRequired",
@@ -21,4 +22,6 @@ __all__ = [
     "TargetRuntimeInspector",
     "RunScopedTestRunner",
     "TestRunSummary",
+    "TargetOperationError",
+    "TargetRuntimeService",
 ]
