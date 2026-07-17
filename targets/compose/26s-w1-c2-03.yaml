@@ -1,0 +1,42 @@
+name: vibecutter-26s-w1-c2-03
+services:
+  api:
+    image: vibecutter-26s-w1-c2-03-api:latest
+    build:
+      context: ../../.vibecutter/targets/sources/26s-w1-c2-03
+      dockerfile: ../../../../targets/dockerfiles/26s-w1-c2-03.Dockerfile
+      target: api-runtime
+    environment:
+      SESSION_SECRET_KEY: local-test-only-session-secret
+      ADMIN_API_KEY: local-test-only-admin-key
+    ports: ["127.0.0.1:14015:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    networks: [vibecutter-internal]
+  frontend:
+    build:
+      context: ../../.vibecutter/targets/sources/26s-w1-c2-03
+      dockerfile: ../../../../targets/dockerfiles/26s-w1-c2-03.Dockerfile
+      target: frontend-runtime
+    volumes: [../../targets/nginx/26s-w1-c2-03.conf:/etc/nginx/conf.d/default.conf:ro]
+    depends_on: {api: {condition: service_healthy}}
+    ports: ["127.0.0.1:14016:80"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [vibecutter-internal]
+  test:
+    image: vibecutter-26s-w1-c2-03-api:latest
+    profiles: [test]
+    environment: {PYTHONPATH: /app}
+    command: [pytest, -q]
+    networks: [vibecutter-internal]
+networks:
+  vibecutter-internal:
+    driver: bridge
+    driver_opts: {com.docker.network.bridge.enable_ip_masquerade: "false"}
