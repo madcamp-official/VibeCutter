@@ -1,0 +1,79 @@
+name: vibecutter-26s-w1-c1-07
+
+services:
+  database:
+    image: mysql:8.0
+    restart: "no"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${VIBECUTTER_26S_W1_C1_07_MYSQL_ROOT_PASSWORD:?set a local test value before starting}
+      MYSQL_DATABASE: madcade
+      MYSQL_USER: vibecutter
+      MYSQL_PASSWORD: ${VIBECUTTER_26S_W1_C1_07_MYSQL_PASSWORD:?set a local test value before starting}
+      TZ: Asia/Seoul
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    volumes:
+      - database-data:/var/lib/mysql
+    networks: [vibecutter-internal]
+
+  schema:
+    build:
+      context: ../../.vibecutter/targets/sources/26s-w1-c1-07
+      dockerfile: ../../../../targets/dockerfiles/26s-w1-c1-07.Dockerfile
+      target: workspace
+    restart: "no"
+    command: [sh, -c, "npm --workspace @madcade/server run migrate:deploy && npm --workspace @madcade/server run db:seed"]
+    environment:
+      DATABASE_URL: mysql://vibecutter:${VIBECUTTER_26S_W1_C1_07_MYSQL_PASSWORD}@database:3306/madcade
+    depends_on:
+      database:
+        condition: service_healthy
+    networks: [vibecutter-internal]
+
+  app:
+    build:
+      context: ../../.vibecutter/targets/sources/26s-w1-c1-07
+      dockerfile: ../../../../targets/dockerfiles/26s-w1-c1-07.Dockerfile
+      target: runtime
+      args:
+        VITE_GOOGLE_CLIENT_ID: local-test-only.apps.googleusercontent.com
+    restart: "no"
+    environment:
+      PORT: "3000"
+      DATABASE_URL: mysql://vibecutter:${VIBECUTTER_26S_W1_C1_07_MYSQL_PASSWORD}@database:3306/madcade
+      CLIENT_ORIGIN: http://127.0.0.1:14010
+      GOOGLE_CLIENT_ID: local-test-only.apps.googleusercontent.com
+      COOKIE_SECURE: "0"
+    depends_on:
+      schema:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:14010:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    networks: [vibecutter-internal]
+
+  test:
+    build:
+      context: ../../.vibecutter/targets/sources/26s-w1-c1-07
+      dockerfile: ../../../../targets/dockerfiles/26s-w1-c1-07.Dockerfile
+      target: workspace
+    profiles: [test]
+    command: [sh, -c, "npm --workspace @madcade/shared run typecheck && npm --workspace @madcade/server run typecheck && npm --workspace @madcade/client run typecheck && npm run check:standalone"]
+    networks: [vibecutter-internal]
+
+networks:
+  vibecutter-internal:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+
+volumes:
+  database-data:
