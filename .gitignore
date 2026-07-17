@@ -8,6 +8,7 @@ venv/
 # Env / secrets (절대 커밋 금지 — cowork_rule.md secret handling 원칙)
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 

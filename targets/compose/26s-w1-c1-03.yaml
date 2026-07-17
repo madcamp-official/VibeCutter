@@ -1,0 +1,65 @@
+name: vibecutter-26s-w1-c1-03
+
+services:
+  database:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      POSTGRES_DB: madnova
+      POSTGRES_USER: vibecutter
+      POSTGRES_PASSWORD: ${VIBECUTTER_26S_W1_C1_03_DB_PASSWORD:?set a local test value before starting}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vibecutter -d madnova"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - database-data:/var/lib/postgresql/data
+    networks: [vibecutter-internal]
+
+  app:
+    build:
+      context: ../../.vibecutter/targets/sources/26s-w1-c1-03/main
+      dockerfile: ../../../../../targets/dockerfiles/26s-w1-c1-03.Dockerfile
+    restart: "no"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://database:5432/madnova
+      SPRING_DATASOURCE_USERNAME: vibecutter
+      SPRING_DATASOURCE_PASSWORD: ${VIBECUTTER_26S_W1_C1_03_DB_PASSWORD}
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      JWT_SECRET: ${VIBECUTTER_26S_W1_C1_03_JWT_SECRET:?set a local test value before starting}
+      SUPABASE_STORAGE_URL: http://storage.invalid
+      SUPABASE_SERVICE_ROLE_KEY: local-test-only-storage-key
+      OPENAI_BASE_URL: http://openai.invalid/v1
+      OPENAI_API_KEY: local-test-only-openai-key
+    depends_on:
+      database:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:14005:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "status=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/teams); test \"$$status\" = 401"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    networks: [vibecutter-internal]
+
+  test:
+    build:
+      context: ../../.vibecutter/targets/sources/26s-w1-c1-03/main
+      dockerfile: ../../../../../targets/dockerfiles/26s-w1-c1-03.Dockerfile
+      target: build
+    profiles: [test]
+    command: [gradle, --no-daemon, test]
+    environment:
+      SPRING_PROFILES_ACTIVE: test
+    networks: [vibecutter-internal]
+
+networks:
+  vibecutter-internal:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+
+volumes:
+  database-data:
