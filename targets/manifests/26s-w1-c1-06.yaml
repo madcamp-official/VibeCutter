@@ -1,0 +1,51 @@
+manifest_version: 1
+id: 26s-w1-c1-06
+display_name: 26s-w1-c1-06 local isolated runtime
+adapter: node
+source_dir: .vibecutter/targets/sources/26s-w1-c1-06
+base_url: http://127.0.0.1:14008
+commands:
+  build:
+    argv: [docker, compose, --profile, test, -f, targets/compose/26s-w1-c1-06.yaml, build]
+    working_dir: .
+    timeout_seconds: 1800
+  start:
+    argv: [docker, compose, -f, targets/compose/26s-w1-c1-06.yaml, up, -d, --wait]
+    working_dir: .
+    timeout_seconds: 300
+  stop:
+    argv: [docker, compose, -f, targets/compose/26s-w1-c1-06.yaml, down, --remove-orphans]
+    working_dir: .
+    timeout_seconds: 180
+  reset:
+    argv: [docker, compose, -f, targets/compose/26s-w1-c1-06.yaml, down, --volumes, --remove-orphans]
+    working_dir: .
+    timeout_seconds: 180
+  node_regression:
+    argv: [docker, compose, --profile, test, -f, targets/compose/26s-w1-c1-06.yaml, run, --rm, --no-deps, test]
+    working_dir: .
+    timeout_seconds: 900
+tool_versions:
+  docker: "29.6.1"
+  docker-compose: "v5.3.0"
+  node: "22"
+  postgresql: "16"
+healthcheck:
+  path: /api/health
+  expected_status: 200
+  timeout_seconds: 60
+reset:
+  command_id: reset
+  snapshot_name: local-postgres-ephemeral-v1
+role_fixtures:
+  - name: latestock_local_runtime
+    description: Local PostgreSQL schema and ignored JWT/database credentials; no Neon or production deployment access.
+    secret_env_names: [VIBECUTTER_26S_W1_C1_06_DB_PASSWORD, VIBECUTTER_26S_W1_C1_06_JWT_SECRET]
+test_suites:
+  - name: node-workspace-regression
+    command_id: node_regression
+log_paths: []
+docker_isolation:
+  compose_file: targets/compose/26s-w1-c1-06.yaml
+  internal_network: vibecutter-internal
+  require_loopback_port_bindings: true

@@ -1,0 +1,63 @@
+name: vibecutter-26s-w1-c1-02
+
+services:
+  database:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      POSTGRES_DB: minigameheaven
+      POSTGRES_USER: vibecutter
+      POSTGRES_PASSWORD: ${VIBECUTTER_POSTGRES_PASSWORD:?set a local test value before starting}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vibecutter -d minigameheaven"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - database-data:/var/lib/postgresql/data
+    networks: [vibecutter-internal]
+
+  backend:
+    build:
+      context: ../../.vibecutter/targets/sources/26s-w1-c1-02/backend
+      dockerfile: Dockerfile
+    restart: "no"
+    environment:
+      PORT: "8080"
+      DATABASE_URL: postgresql://vibecutter:${VIBECUTTER_POSTGRES_PASSWORD}@database:5432/minigameheaven
+      JWT_SECRET: ${VIBECUTTER_JWT_SECRET:?set a local test value before starting}
+    depends_on:
+      database:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:14003:8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [vibecutter-internal]
+
+  seed:
+    build:
+      context: ../../.vibecutter/targets/sources/26s-w1-c1-02/backend
+      dockerfile: Dockerfile
+    restart: "no"
+    command: [node, src/vowel_game/seed.js]
+    environment:
+      DATABASE_URL: postgresql://vibecutter:${VIBECUTTER_POSTGRES_PASSWORD}@database:5432/minigameheaven
+    depends_on:
+      database:
+        condition: service_healthy
+    networks: [vibecutter-internal]
+
+networks:
+  vibecutter-internal:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+
+volumes:
+  database-data:

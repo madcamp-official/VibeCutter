@@ -1,0 +1,51 @@
+manifest_version: 1
+id: 26s-w1-c1-03
+display_name: 26s-w1-c1-03 local isolated runtime
+adapter: spring-boot
+source_dir: .vibecutter/targets/sources/26s-w1-c1-03/main
+base_url: http://127.0.0.1:14005
+commands:
+  build:
+    argv: [docker, compose, --profile, test, -f, targets/compose/26s-w1-c1-03.yaml, build]
+    working_dir: .
+    timeout_seconds: 1800
+  start:
+    argv: [docker, compose, -f, targets/compose/26s-w1-c1-03.yaml, up, -d, --wait]
+    working_dir: .
+    timeout_seconds: 300
+  stop:
+    argv: [docker, compose, -f, targets/compose/26s-w1-c1-03.yaml, down, --remove-orphans]
+    working_dir: .
+    timeout_seconds: 180
+  reset:
+    argv: [docker, compose, -f, targets/compose/26s-w1-c1-03.yaml, down, --volumes, --remove-orphans]
+    working_dir: .
+    timeout_seconds: 180
+  gradle_test:
+    argv: [docker, compose, --profile, test, -f, targets/compose/26s-w1-c1-03.yaml, run, --rm, --no-deps, test]
+    working_dir: .
+    timeout_seconds: 600
+tool_versions:
+  docker: "29.6.1"
+  docker-compose: "v5.3.0"
+  java: "21"
+  gradle: "8.14"
+healthcheck:
+  path: /api/teams
+  expected_status: 401
+  timeout_seconds: 60
+reset:
+  command_id: reset
+  snapshot_name: local-postgres-ephemeral-v1
+role_fixtures:
+  - name: spring_local_runtime
+    description: Local Postgres and application credentials supplied only through ignored runtime environment variables.
+    secret_env_names: [VIBECUTTER_26S_W1_C1_03_DB_PASSWORD, VIBECUTTER_26S_W1_C1_03_JWT_SECRET]
+test_suites:
+  - name: spring-h2-regression
+    command_id: gradle_test
+log_paths: []
+docker_isolation:
+  compose_file: targets/compose/26s-w1-c1-03.yaml
+  internal_network: vibecutter-internal
+  require_loopback_port_bindings: true

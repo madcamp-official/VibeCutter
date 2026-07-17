@@ -1,0 +1,47 @@
+manifest_version: 1
+id: 26s-w1-c1-04
+display_name: 26s-w1-c1-04 local isolated runtime
+adapter: node
+source_dir: .vibecutter/targets/sources/26s-w1-c1-04/업데이트 모델
+base_url: http://127.0.0.1:14004
+commands:
+  build:
+    argv: [docker, compose, -f, targets/compose/26s-w1-c1-04.yaml, build]
+    working_dir: .
+    timeout_seconds: 900
+  start:
+    argv: [docker, compose, -f, targets/compose/26s-w1-c1-04.yaml, up, -d, --wait]
+    working_dir: .
+    timeout_seconds: 180
+  stop:
+    argv: [docker, compose, -f, targets/compose/26s-w1-c1-04.yaml, down, --remove-orphans]
+    working_dir: .
+    timeout_seconds: 180
+  reset:
+    argv: [docker, compose, -f, targets/compose/26s-w1-c1-04.yaml, down, --volumes, --remove-orphans]
+    working_dir: .
+    timeout_seconds: 180
+  smoke:
+    argv: [py, "-3.13", targets/scripts/26s-w1-c1-04-smoke.py]
+    working_dir: .
+    timeout_seconds: 60
+tool_versions:
+  docker: "29.6.1"
+  docker-compose: "v5.3.0"
+  node: "20-alpine"
+  python: "3.13"
+healthcheck:
+  path: /api/leaderboard
+  expected_status: 200
+  timeout_seconds: 30
+reset:
+  command_id: reset
+  snapshot_name: writable-container-state-v1
+test_suites:
+  - name: leaderboard-smoke
+    command_id: smoke
+log_paths: []
+docker_isolation:
+  compose_file: targets/compose/26s-w1-c1-04.yaml
+  internal_network: vibecutter-internal
+  require_loopback_port_bindings: true
