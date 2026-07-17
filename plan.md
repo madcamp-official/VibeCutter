@@ -47,13 +47,13 @@
 
 ### 오후
 
-- [ ] MCP stdio 서버 확장 (`mcp_server/server.py` → 모듈 분리). 부록 A 방식으로 tool schema 정의 (`inputSchema`/`outputSchema` 명시).
-- [ ] MCP Resources 뼈대 구현 (6.4절): `vibecutter://targets`, `vibecutter://targets/{target_id}/manifest`, `vibecutter://runs/{run_id}/state`, `vibecutter://runs/{run_id}/evidence`, `vibecutter://findings/{finding_id}`, `vibecutter://policies/scope`, `vibecutter://reports/{run_id}`. 이 시점엔 target/run이 없으므로 mock/dummy 데이터로 응답하되 schema 형태는 최종 형태로 맞춘다.
-- [ ] `evidence_store.py` 구현: observation, tool call, artifact를 저장. **모든 artifact는 SHA-256 hash + 생성 tool/version과 함께 저장** (5.3절, 재현성 요구사항). SQLite로 시작 (SQLModel/SQLAlchemy).
-- [ ] `policy_engine.py` v1: target allowlist 검증 골격 (`target_id → 고정 IP/port/container ID`), `command_id + typed args`만 허용하는 커맨드 검증 골격. 아직 실제 target이 없어도 인터페이스와 거부 로직(임의 URL/IP 거부)은 지금 만든다 — Definition of Done 항목("등록되지 않은 target_id, IP, URL, command_id가 모두 거부된다")이 여기 걸려 있다.
-- [ ] audit log 골격: tool call, args hash, actor, target, time, result, changed files를 남기는 최소 로거. 오늘부터 모든 tool 호출에 걸어둔다.
-- [ ] **다른 역할의 tool은 P1이 스텁으로 노출**한다: `vc_verify_access_control` 등 P3 소유 도구는 오늘 스키마만 등록하고 구현은 "not implemented" 응답. P2/P4도 동일. 이렇게 해야 오늘 저녁 시점에 전체 tool 목록이 Host에서 보인다.
-- [ ] 검증: MCP Host(Claude Code 등)에서 stdio로 서버를 붙여 resource 조회, dummy tool 호출이 되는지 확인. **stdout에 JSON-RPC 외 출력이 없는지 반드시 확인** (Definition of Done 1번 항목, print debug 하나만 있어도 프로토콜이 깨짐).
+- [x] MCP stdio 서버 확장 (`mcp_server/server.py` → 모듈 분리). 부록 A 방식으로 tool schema 정의 (`inputSchema`/`outputSchema` 명시).
+- [x] MCP Resources 뼈대 구현 (6.4절): `vibecutter://targets`, `vibecutter://targets/{target_id}/manifest`, `vibecutter://runs/{run_id}/state`, `vibecutter://runs/{run_id}/evidence`, `vibecutter://findings/{finding_id}`, `vibecutter://policies/scope`, `vibecutter://reports/{run_id}`. 이 시점엔 target/run이 없으므로 mock/dummy 데이터로 응답하되 schema 형태는 최종 형태로 맞춘다.
+- [x] `evidence_store.py` 구현: observation, tool call, artifact를 저장. **모든 artifact는 SHA-256 hash + 생성 tool/version과 함께 저장** (5.3절, 재현성 요구사항). SQLite로 시작 (SQLModel/SQLAlchemy).
+- [x] `policy_engine.py` v1: target allowlist 검증 골격 (`target_id → 고정 IP/port/container ID`), `command_id + typed args`만 허용하는 커맨드 검증 골격. 아직 실제 target이 없어도 인터페이스와 거부 로직(임의 URL/IP 거부)은 지금 만든다 — Definition of Done 항목("등록되지 않은 target_id, IP, URL, command_id가 모두 거부된다")이 여기 걸려 있다.
+- [x] audit log 골격: tool call, args hash, actor, target, time, result, changed files를 남기는 최소 로거. 오늘부터 모든 tool 호출에 걸어둔다.
+- [x] **다른 역할의 tool은 P1이 스텁으로 노출**한다: `vc_verify_access_control` 등 P3 소유 도구는 오늘 스키마만 등록하고 구현은 "not implemented" 응답. P2/P4도 동일. 이렇게 해야 오늘 저녁 시점에 전체 tool 목록이 Host에서 보인다. (6번 항목에서 24개 tool 전부 스키마+스텁으로 이미 등록 완료)
+- [x] 검증: MCP Host(Claude Code 등)에서 stdio로 서버를 붙여 resource 조회, dummy tool 호출이 되는지 확인. **stdout에 JSON-RPC 외 출력이 없는지 반드시 확인** (Definition of Done 1번 항목, print debug 하나만 있어도 프로토콜이 깨짐).
 
 ### 오늘 커뮤니케이션
 - [x] **P2, P3, P4에게 오전 중**: 공통 스키마 + tool schema 확정본 공유 (docs/handoffs/D1-P1.md).

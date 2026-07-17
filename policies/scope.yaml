@@ -1,3 +1,9 @@
 # target allowlist: target_id -> 고정 IP/port/container ID 매핑.
-# 여기 없는 target_id/IP/URL은 정책 계층에서 무조건 거부한다.
-targets: []
+# 여기 없는 target_id/IP/URL은 정책 계층에서 무조건 거부한다 (core/policy_engine.py).
+#
+# 형식 예시 (아직 실제 target은 없어 비워둔다):
+# targets:
+#   scrum-helper:
+#     allowed_hosts: [127.0.0.1, target-db]
+#     port: 8080
+targets: {}
