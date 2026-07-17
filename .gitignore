@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Env / secrets (절대 커밋 금지 — cowork_rule.md secret handling 원칙)
+.env
+.env.*
+*.pem
+*.key
+
+# Runtime artifacts (evidence store, run 산출물, worktree, 리포트)
+.vibecutter/
+*.db
+*.sqlite3
+runs/
+worktrees/
+reports/*.html
+reports/*.pdf
+reports/*.sarif
+*.log
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
