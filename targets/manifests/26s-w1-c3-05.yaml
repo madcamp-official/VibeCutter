@@ -1,0 +1,24 @@
+manifest_version: 1
+id: 26s-w1-c3-05
+display_name: 26s-w1-c3-05 local isolated runtime
+adapter: node
+source_dir: .vibecutter/targets/sources/26s-w1-c3-05
+base_url: http://127.0.0.1:14030
+commands:
+  build: {argv: [docker, compose, -f, targets/compose/26s-w1-c3-05.yaml, build], working_dir: ., timeout_seconds: 1800}
+  start: {argv: [docker, compose, -f, targets/compose/26s-w1-c3-05.yaml, up, -d, --wait], working_dir: ., timeout_seconds: 480}
+  stop: {argv: [docker, compose, -f, targets/compose/26s-w1-c3-05.yaml, down, --remove-orphans], working_dir: ., timeout_seconds: 180}
+  reset: {argv: [docker, compose, -f, targets/compose/26s-w1-c3-05.yaml, down, --volumes, --remove-orphans], working_dir: ., timeout_seconds: 180}
+  smoke: {argv: [py, "-3.13", targets/scripts/26s-w1-c3-05-smoke.py], working_dir: ., timeout_seconds: 60}
+tool_versions: {docker: "29.6.1", docker-compose: "v5.3.0", node: "20/22", postgres: "16", nginx: "1.27-alpine", python: "3.13"}
+healthcheck: {path: /api/health, expected_status: 200, timeout_seconds: 180}
+reset: {command_id: reset, snapshot_name: local-postgres-seeded-v1}
+role_fixtures:
+  - name: myocatmongo_seed_user
+    description: Source seed creates catlover123@example.com / 12345678 and campus cat/map data. Vision, Google, Kakao, SMTP, and public tunnel integrations are disabled or mocked under local isolation.
+    secret_env_names: [JWT_SECRET, GOOGLE_CLIENT_ID, SMTP_PASS]
+test_suites:
+  - name: myocatmongo-api-smoke
+    command_id: smoke
+log_paths: []
+docker_isolation: {compose_file: targets/compose/26s-w1-c3-05.yaml, internal_network: vibecutter-internal, require_loopback_port_bindings: true}
