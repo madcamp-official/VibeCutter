@@ -101,6 +101,8 @@ class LifecycleManager:
                     last_reason = f"expected HTTP {self.manifest.healthcheck.expected_status}, received {last_status}"
             except HTTPError as exc:
                 last_status = exc.code
+                if last_status == self.manifest.healthcheck.expected_status:
+                    return HealthResult(status="ready", attempts=attempts, observed_status=last_status)
                 last_reason = f"received HTTP {exc.code}"
             except (URLError, TimeoutError, OSError) as exc:
                 last_reason = str(exc)

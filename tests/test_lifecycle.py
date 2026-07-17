@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from runtime.lifecycle import ApprovalRequired, LifecycleManager
@@ -63,6 +65,30 @@ class LifecycleTests(unittest.TestCase):
             result = LifecycleManager(manifest, root).build()
         self.assertEqual(result.status, "passed")
         self.assertEqual(Path(result.stdout.strip()).name, "orchestration")
+
+    def test_healthcheck_accepts_configured_http_error_status(self) -> None:
+        class UnauthorizedHandler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802 - required stdlib handler name.
+                self.send_response(401)
+                self.end_headers()
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), UnauthorizedHandler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            manifest = manifest_for_python_commands()
+            manifest.base_url = f"http://127.0.0.1:{server.server_port}"
+            manifest.healthcheck.expected_status = 401
+            result = LifecycleManager(manifest, Path.cwd()).check_health()
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+        self.assertEqual(result.status, "ready")
+        self.assertEqual(result.observed_status, 401)
 
     def test_worktree_path_rejects_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
