@@ -8,16 +8,12 @@ target/run/evidence/finding을 담을 evidence_store가 아직 없으므로(item
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import yaml
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from contracts.schemas import Finding, FindingStatus, Observation, Run, RunState, Target
+from core.policy_engine import load_scope
 from mcp_server.tools_repair import ReportResult
-
-_POLICIES_DIR = Path(__file__).resolve().parent.parent / "policies"
 
 
 # --- target manifest 형태 (9.3절). P2가 실제 manifest 작성 규격을 확정하면 맞춰 조정한다. ---
@@ -156,9 +152,13 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.resource("vibecutter://policies/scope")
     def get_scope_policy() -> dict:
-        """target allowlist 정책 — mock이 아니라 policies/scope.yaml 실제 내용."""
-        path = _POLICIES_DIR / "scope.yaml"
-        return yaml.safe_load(path.read_text()) or {}
+        """target allowlist 정책 — mock이 아니라 policies/scope.yaml 실제 내용.
+
+        core.policy_engine.load_scope()를 그대로 재사용한다 — 이 파일을 읽는 로직이
+        두 군데(정책 강제 경로 + 조회용 resource)에서 따로 구현되어 있으면, 한쪽만
+        고치고 다른 쪽(예: 파일 없을 때 에러 처리)을 놓치기 쉽다.
+        """
+        return {"targets": load_scope()}
 
     @mcp.resource("vibecutter://reports/{run_id}")
     def get_report(run_id: str) -> ReportResult:

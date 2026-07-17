@@ -63,6 +63,11 @@ def require_target_allowed(target_id: str, *, path: Path = _DEFAULT_SCOPE_PATH) 
 def _extract_host(url_or_host: str) -> str:
     if "://" in url_or_host:
         return urlparse(url_or_host).hostname or url_or_host
+    if url_or_host.startswith("[") or url_or_host.count(":") > 1:
+        # bare "host:port" 형태만 지원한다(기획서 전체가 127.0.0.1만 다룸). IPv6는
+        # 콜론이 여러 개라 naive split(":")[0]으로는 조용히 잘못 파싱된다 — 지원하지
+        # 않는 형태는 조용히 틀리게 처리하는 대신 명확히 거부한다.
+        raise PolicyViolation(f"IPv6로 보이는 host는 아직 지원하지 않습니다: {url_or_host!r}")
     return url_or_host.split(":")[0]
 
 

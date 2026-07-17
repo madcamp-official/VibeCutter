@@ -18,15 +18,14 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import inspect
 import json
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Callable
 
-from sqlmodel import JSON, Column, Field, Session, SQLModel, create_engine, select
+from sqlmodel import JSON, Column, Field, Session, SQLModel, select
 
-_DATA_DIR = Path(__file__).resolve().parent.parent / ".vibecutter"
-_DB_PATH = _DATA_DIR / "evidence.db"  # evidence_store와 같은 SQLite 파일을 공유한다
+from core.db import get_engine
 
 
 class AuditEntry(SQLModel, table=True):
@@ -41,18 +40,6 @@ class AuditEntry(SQLModel, table=True):
     result: str  # "ok" | "error"
     error: str | None = None
     changed_files: list[str] = Field(default_factory=list, sa_column=Column(JSON))
-
-
-_engine = None
-
-
-def get_engine():
-    global _engine
-    if _engine is None:
-        _DATA_DIR.mkdir(parents=True, exist_ok=True)
-        _engine = create_engine(f"sqlite:///{_DB_PATH}")
-        SQLModel.metadata.create_all(_engine)
-    return _engine
 
 
 def _hash_args(arguments: dict[str, Any]) -> str:
@@ -110,19 +97,29 @@ def audited(fn: Callable) -> Callable:
         @audited
         def vc_generate_patch(finding_id: str) -> Patch: ...
 
-    FastMCP는 항상 keyword argument로 tool 함수를 호출하므로(`fn(**arguments_parsed_dict)`),
-    이 wrapper도 `**kwargs`만 받으면 충분하다. `functools.wraps`가 `__wrapped__`를 남겨
-    FastMCP의 시그니처 검사(inputSchema/outputSchema 생성)는 원본 함수 그대로 본다.
+    FastMCP는 항상 keyword argument로 tool 함수를 호출하지만(`fn(**arguments_parsed_dict)`),
+    이 wrapper는 위치 인자로도 호출 가능하게 `*args, **kwargs`를 그대로 받는다 — `**kwargs`만
+    받으면 P2/P3/P4가 이 tool 함수를 직접 단위 테스트에서 위치 인자로 호출할 때
+    `TypeError: wrapper() takes 0 positional arguments`처럼 원인을 알기 어려운 에러가 난다.
+    `inspect.signature(fn).bind`로 위치/키워드 인자를 원본 파라미터 이름에 맞게 묶어서
+    기록하므로 audit log의 `arguments`는 호출 방식과 무관하게 항상 키워드 이름 기준이다.
+    `functools.wraps`가 `__wrapped__`를 남겨 FastMCP의 시그니처 검사(inputSchema/outputSchema
+    생성)는 원본 함수 그대로 본다.
     """
 
+    signature = inspect.signature(fn)
+
     @functools.wraps(fn)
-    def wrapper(**kwargs: Any):
+    def wrapper(*args: Any, **kwargs: Any):
+        bound = signature.bind_partial(*args, **kwargs)
+        bound.apply_defaults()
+        arguments = dict(bound.arguments)
         try:
-            output = fn(**kwargs)
+            output = fn(*args, **kwargs)
         except Exception as exc:
-            record(tool=fn.__name__, arguments=kwargs, result="error", error=str(exc))
+            record(tool=fn.__name__, arguments=arguments, result="error", error=str(exc))
             raise
-        record(tool=fn.__name__, arguments=kwargs, result="ok")
+        record(tool=fn.__name__, arguments=arguments, result="ok")
         return output
 
     return wrapper

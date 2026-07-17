@@ -14,10 +14,9 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Sequence
 from datetime import datetime
-from pathlib import Path
 from uuid import uuid4
 
-from sqlmodel import JSON, Column, Field, Session, SQLModel, create_engine, select
+from sqlmodel import JSON, Column, Field, Session, SQLModel, select
 
 from contracts.schemas import (
     ApprovalStatus,
@@ -32,10 +31,8 @@ from contracts.schemas import (
     Trajectory,
     Validation,
 )
+from core.db import DATA_DIR, get_engine
 from core.state_machine import transition_finding
-
-_DATA_DIR = Path(__file__).resolve().parent.parent / ".vibecutter"
-_DB_PATH = _DATA_DIR / "evidence.db"
 
 
 def sha256_of(data: bytes) -> str:
@@ -173,18 +170,6 @@ _ROW_CLASSES: dict[type, type[SQLModel]] = {
     Trajectory: TrajectoryRow,
 }
 
-_engine = None
-
-
-def get_engine():
-    global _engine
-    if _engine is None:
-        _DATA_DIR.mkdir(parents=True, exist_ok=True)
-        _engine = create_engine(f"sqlite:///{_DB_PATH}")
-        SQLModel.metadata.create_all(_engine)
-    return _engine
-
-
 # --- 공개 API: contracts.schemas 모델만 입출력한다 -------------------------------------
 
 
@@ -215,7 +200,7 @@ def list_by_run(model_cls: type, run_id: str) -> list:
 def write_artifact(
     run_id: str,
     *,
-    type: str,
+    observation_type: str,
     producer: str,
     data: bytes,
     observation_id: str | None = None,
@@ -224,7 +209,7 @@ def write_artifact(
     Observation으로 기록한다. 재현성 확보를 위해 hash와 producer(생성 tool)를 항상 남긴다."""
     obs_id = observation_id or f"obs-{uuid4().hex[:12]}"
     digest = sha256_of(data)
-    artifact_dir = _DATA_DIR / "runs" / run_id / "artifacts"
+    artifact_dir = DATA_DIR / "runs" / run_id / "artifacts"
     artifact_dir.mkdir(parents=True, exist_ok=True)
     artifact_path = artifact_dir / f"{obs_id}.bin"
     artifact_path.write_bytes(data)
@@ -232,7 +217,7 @@ def write_artifact(
     observation = Observation(
         id=obs_id,
         run_id=run_id,
-        type=type,
+        type=observation_type,
         artifact_uri=f"file://{artifact_path}",
         hash=digest,
         producer=producer,

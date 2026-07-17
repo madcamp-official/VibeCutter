@@ -29,10 +29,15 @@ class ScanResult(BaseModel):
 
 
 class VerifyResult(BaseModel):
-    """부록 A `vc_verify_access_control` 예시 outputSchema를 그대로 따른다."""
+    """부록 A `vc_verify_access_control` 예시 outputSchema를 그대로 따른다.
+
+    evidence_ids는 기본값을 두지 않는다 — 부록 A는 verified=false인 경우에도
+    evidence_ids를 required로 명시하므로(빈 배열이라도 명시적으로 반환), 구현부가
+    항상 값을 채워 넣도록 강제한다.
+    """
 
     verified: bool
-    evidence_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str]
     reason: str
 
 
