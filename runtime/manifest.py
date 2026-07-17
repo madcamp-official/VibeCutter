@@ -1,7 +1,7 @@
 """Trusted target-manifest schema and loader.
 
 The manifest is repository-controlled configuration, not an MCP tool input.
-Callers select a registered ``target_id`` and a fixed operation only.
+Callers select a registered ``Target.id`` and a fixed operation only.
 """
 
 from __future__ import annotations
@@ -92,12 +92,15 @@ class TargetManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     manifest_version: int = Field(default=1, ge=1, le=1)
-    target_id: TargetId
+    # This field name is intentionally the same as contracts.schemas.Target.id.
+    # P1's target registry and P2's manifest therefore share one identifier.
+    id: TargetId
     display_name: str = Field(min_length=1, max_length=120)
     adapter: AdapterKind
     source_dir: RelativePath = "."
     base_url: str
     commands: dict[CommandId, CommandSpec]
+    tool_versions: dict[str, str] = Field(default_factory=dict)
     healthcheck: HealthCheck = Field(default_factory=HealthCheck)
     reset: ResetSpec
     role_fixtures: list[RoleFixture] = Field(default_factory=list, max_length=20)
@@ -137,6 +140,11 @@ class TargetManifest(BaseModel):
         if missing:
             raise ValueError(f"commands missing from manifest: {', '.join(sorted(missing))}")
         return self
+
+    @property
+    def allowed_host(self) -> str:
+        """The fixed host:port P1 policy should allow for this target."""
+        return urlparse(self.base_url).netloc
 
 
 def _validate_relative_path(value: str, label: str) -> None:

@@ -12,7 +12,7 @@ from runtime.manifest import TargetManifest, load_manifest
 def valid_manifest() -> dict:
     return {
         "manifest_version": 1,
-        "target_id": "demo-api",
+        "id": "demo-api",
         "display_name": "Demo API",
         "adapter": "fastapi",
         "source_dir": ".",
@@ -32,7 +32,7 @@ def valid_manifest() -> dict:
 class TargetManifestTests(unittest.TestCase):
     def test_valid_manifest_is_accepted(self) -> None:
         manifest = TargetManifest.model_validate(valid_manifest())
-        self.assertEqual(manifest.target_id, "demo-api")
+        self.assertEqual(manifest.id, "demo-api")
         self.assertEqual(manifest.base_url, "http://127.0.0.1:18080")
 
     def test_external_base_url_is_rejected(self) -> None:
@@ -53,7 +53,7 @@ class TargetManifestTests(unittest.TestCase):
             path = Path(temp_dir) / "target.yaml"
             path.write_text("""\
 manifest_version: 1
-target_id: demo-api
+id: demo-api
 display_name: Demo API
 adapter: node
 source_dir: .

@@ -58,7 +58,7 @@ class LifecycleManager:
         try:
             spec = self.manifest.commands[command_id]
         except KeyError as exc:
-            raise KeyError(f"command_id is not registered for {self.manifest.target_id}: {command_id}") from exc
+            raise KeyError(f"command_id is not registered for {self.manifest.id}: {command_id}") from exc
         return self._run(command_id, spec)
 
     def build(self) -> CommandResult:
@@ -77,6 +77,11 @@ class LifecycleManager:
 
     def run_test_suites(self) -> list[CommandResult]:
         return [self.execute(suite.command_id) for suite in self.manifest.test_suites]
+
+    @property
+    def tool_versions(self) -> dict[str, str]:
+        """Version metadata P1 records on the corresponding Run."""
+        return self.manifest.tool_versions.copy()
 
     def check_health(self) -> HealthResult:
         url = f"{self.manifest.base_url}{self.manifest.healthcheck.path}"

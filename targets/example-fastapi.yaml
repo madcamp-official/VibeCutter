@@ -1,5 +1,5 @@
 manifest_version: 1
-target_id: example-fastapi
+id: example-fastapi
 display_name: Example FastAPI target
 adapter: fastapi
 source_dir: .
@@ -20,6 +20,8 @@ commands:
   pytest:
     argv: [docker, compose, -f, targets/example-fastapi.compose.yaml, run, --rm, app, pytest]
     timeout_seconds: 300
+tool_versions:
+  docker-compose: "v2 (record actual version at inventory time)"
 healthcheck:
   path: /health
   expected_status: 200

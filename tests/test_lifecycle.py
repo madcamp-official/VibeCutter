@@ -15,7 +15,7 @@ def manifest_for_python_commands() -> TargetManifest:
     return TargetManifest.model_validate(
         {
             "manifest_version": 1,
-            "target_id": "demo-api",
+            "id": "demo-api",
             "display_name": "Demo API",
             "adapter": "fastapi",
             "source_dir": ".",
