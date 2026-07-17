@@ -1,0 +1,22 @@
+name: vibecutter-26s-w1-c3-03
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: targets/dockerfiles/26s-w1-c3-03.Dockerfile
+    restart: "no"
+    environment:
+      PORT: "3000"
+      FIREBASE_SERVICE_ACCOUNT_PATH: /run/secrets/firebase-service-account.json
+      FIREBASE_STORAGE_BUCKET: p2-local-unconfigured.invalid
+    ports: ["127.0.0.1:14027:3000"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [vibecutter-internal]
+networks:
+  vibecutter-internal:
+    driver: bridge
+    driver_opts: {com.docker.network.bridge.enable_ip_masquerade: "false"}
