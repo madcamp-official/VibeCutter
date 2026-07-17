@@ -34,3 +34,8 @@ P1은 이 값을 해당 target의 `Run.tool_versions`에 복사해 run 재현성
 실제 승인 후보 manifest는 `targets/manifests/`에만 둔다. P2 `TargetCatalog`는 이 경로의
 YAML만 읽어 `Target.id`로 조회하며, 예제 파일은 catalog에 포함하지 않는다. P1 policy
 allowlist를 통과하기 전에는 catalog에 있는 target도 실행하면 안 된다.
+
+P1의 `vc_check_readiness` 연결점은 `catalog.readiness_for(target_id)`이다. 이 검사는
+build/start/reset을 실행하지 않고 source directory, manifest command의 executable, role
+fixture 환경변수 이름, 로그 **위치/크기**만 검사한다. 로그 본문이나 secret 값은 반환하지
+않으며 evidence에 저장하려면 별도 redaction 절차가 필요하다.

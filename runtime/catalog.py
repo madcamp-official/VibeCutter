@@ -10,6 +10,7 @@ from contracts.schemas import Target
 
 from .lifecycle import LifecycleManager
 from .manifest import TargetManifest, load_manifest
+from .readiness import TargetReadiness, TargetRuntimeInspector
 from .registration import load_contract_target
 
 if TYPE_CHECKING:
@@ -70,6 +71,9 @@ class TargetCatalog:
 
     def lifecycle_for(self, target_id: str) -> LifecycleManager:
         return LifecycleManager(self.get(target_id).manifest, self.repository_root)
+
+    def readiness_for(self, target_id: str) -> TargetReadiness:
+        return TargetRuntimeInspector(self.get(target_id).manifest, self.repository_root).check_readiness()
 
     def adapter_for(self, target_id: str) -> "TargetAdapter":
         # Imported lazily to keep the runtime core independent from adapter imports.
