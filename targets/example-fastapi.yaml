@@ -40,3 +40,7 @@ test_suites:
   - name: api-regression
     command_id: pytest
 log_paths: [logs/app.log, logs/db.log]
+docker_isolation:
+  compose_file: targets/example-fastapi.compose.yaml
+  internal_network: vibecutter-internal
+  require_loopback_port_bindings: true

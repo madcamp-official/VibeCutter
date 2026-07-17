@@ -67,3 +67,10 @@ commands:
 P2 `TargetRuntimeService`는 checked-in manifest와 MCP로 제출된 manifest가 완전히 같은지,
 host와 port가 scope와 같은지, lifecycle command ID가 typed policy에 있는지를 차례로
 검증한다. `vc_reset_target`는 추가로 `approved: true`가 필수다.
+
+## Docker Compose isolation
+
+Docker Compose target은 `docker_isolation`을 선언한다. readiness 검사는 실행 전에 compose
+파일이 repository 내부에 있는지, 모든 service가 `internal: true` network에 속하는지,
+host port가 `127.0.0.1` 또는 `::1`에만 bind되는지, `privileged: true`나 `network_mode`가
+없는지를 확인한다. 하나라도 어기면 readiness는 false다.

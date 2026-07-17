@@ -86,6 +86,22 @@ class TestSuite(BaseModel):
     command_id: CommandId
 
 
+class DockerIsolationSpec(BaseModel):
+    """Static safety requirements for a Docker Compose-based target."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    compose_file: RelativePath
+    internal_network: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+    require_loopback_port_bindings: bool = True
+
+    @field_validator("compose_file")
+    @classmethod
+    def compose_file_must_be_relative(cls, value: str) -> str:
+        _validate_relative_path(value, "compose file")
+        return value
+
+
 class TargetManifest(BaseModel):
     """The versioned P2 contract for one approved, loopback-only target."""
 
@@ -106,6 +122,7 @@ class TargetManifest(BaseModel):
     role_fixtures: list[RoleFixture] = Field(default_factory=list, max_length=20)
     test_suites: list[TestSuite] = Field(default_factory=list, max_length=20)
     log_paths: list[RelativePath] = Field(default_factory=list, max_length=20)
+    docker_isolation: DockerIsolationSpec | None = None
 
     @field_validator("source_dir")
     @classmethod

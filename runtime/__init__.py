@@ -1,6 +1,7 @@
 """P2 runtime primitives: trusted manifests, lifecycle, worktrees, and tests."""
 
 from .catalog import RegisteredRuntimeTarget, TargetCatalog
+from .compose_isolation import ComposeIsolationInspector, ComposeIsolationReport
 from .lifecycle import ApprovalRequired, LifecycleManager
 from .manifest import TargetManifest, load_manifest
 from .readiness import TargetReadiness, TargetRuntimeInspector
@@ -10,6 +11,8 @@ from .target_service import TargetOperationError, TargetRuntimeService
 
 __all__ = [
     "ApprovalRequired",
+    "ComposeIsolationInspector",
+    "ComposeIsolationReport",
     "LifecycleManager",
     "RegisteredRuntimeTarget",
     "TargetManifest",

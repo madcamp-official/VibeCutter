@@ -9,6 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .compose_isolation import ComposeIsolationInspector, ComposeIsolationReport
 from .lifecycle import _resolve_within_root
 from .manifest import TargetManifest
 
@@ -44,6 +45,7 @@ class TargetReadiness(BaseModel):
     unavailable_executables: list[str] = Field(default_factory=list)
     fixtures: list[RoleFixtureStatus] = Field(default_factory=list)
     logs: list[LogLocation] = Field(default_factory=list)
+    docker_isolation: ComposeIsolationReport | None = None
     issues: list[str] = Field(default_factory=list)
 
 
@@ -73,6 +75,7 @@ class TargetRuntimeInspector:
             for fixture in self.manifest.role_fixtures
         ]
         logs = self.log_locations()
+        isolation = ComposeIsolationInspector(self.manifest, self.repository_root).inspect()
         issues: list[str] = []
         if not source_dir_exists:
             issues.append("target source directory does not exist")
@@ -83,6 +86,8 @@ class TargetRuntimeInspector:
             issues.append(f"role fixture environment not configured: {', '.join(missing_fixture_names)}")
         if any(location.status == "outside_target" for location in logs):
             issues.append("one or more configured log paths escape the target source directory")
+        if isolation.status not in {"not_configured", "compliant"}:
+            issues.extend(f"docker isolation: {issue}" for issue in isolation.issues or [isolation.status])
         return TargetReadiness(
             target_id=self.manifest.id,
             ready=not issues,
@@ -91,6 +96,7 @@ class TargetRuntimeInspector:
             unavailable_executables=unavailable_executables,
             fixtures=fixtures,
             logs=logs,
+            docker_isolation=isolation,
             issues=issues,
         )
 
