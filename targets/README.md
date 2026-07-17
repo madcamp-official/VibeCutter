@@ -39,3 +39,8 @@ P1의 `vc_check_readiness` 연결점은 `catalog.readiness_for(target_id)`이다
 build/start/reset을 실행하지 않고 source directory, manifest command의 executable, role
 fixture 환경변수 이름, 로그 **위치/크기**만 검사한다. 로그 본문이나 secret 값은 반환하지
 않으며 evidence에 저장하려면 별도 redaction 절차가 필요하다.
+
+P1 regression gate 연결점은 `catalog.test_runner_for(target_id).run(run_id)`이다. runner는
+임의 경로를 받지 않고 P2 `WorktreeManager`가 관리하는 `.vibecutter/worktrees/<run_id>`가
+실제 Git worktree인지 확인한 뒤에만 manifest test suite를 실행한다. test suite가 없으면
+`not_configured`이며 regression 통과로 처리하면 안 된다.

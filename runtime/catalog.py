@@ -12,6 +12,7 @@ from .lifecycle import LifecycleManager
 from .manifest import TargetManifest, load_manifest
 from .readiness import TargetReadiness, TargetRuntimeInspector
 from .registration import load_contract_target
+from .test_runner import RunScopedTestRunner
 
 if TYPE_CHECKING:
     from adapters.base import TargetAdapter
@@ -81,3 +82,7 @@ class TargetCatalog:
 
         target = self.get(target_id)
         return adapter_for(target.manifest.adapter, self.lifecycle_for(target_id))
+
+    def test_runner_for(self, target_id: str) -> RunScopedTestRunner:
+        """Return the P1 regression-gate runner for an approved target ID."""
+        return RunScopedTestRunner(self.get(target_id).manifest, self.repository_root)

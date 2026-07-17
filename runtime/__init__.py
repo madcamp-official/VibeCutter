@@ -5,6 +5,7 @@ from .lifecycle import ApprovalRequired, LifecycleManager
 from .manifest import TargetManifest, load_manifest
 from .readiness import TargetReadiness, TargetRuntimeInspector
 from .registration import load_contract_target, manifest_sha256, to_contract_target
+from .test_runner import RunScopedTestRunner, TestRunSummary
 
 __all__ = [
     "ApprovalRequired",
@@ -18,4 +19,6 @@ __all__ = [
     "to_contract_target",
     "TargetReadiness",
     "TargetRuntimeInspector",
+    "RunScopedTestRunner",
+    "TestRunSummary",
 ]
