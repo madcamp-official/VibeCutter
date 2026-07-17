@@ -13,6 +13,8 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from core.audit_log import audited
+
 
 class MapResult(BaseModel):
     run_id: str
@@ -36,41 +38,49 @@ class VerifyResult(BaseModel):
 
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
+    @audited
     def vc_map_routes(run_id: str) -> MapResult:
         """소스 route + 동적 크롤링으로 endpoint를 수집한다. P3 소유."""
         raise NotImplementedError("P3 attack surface mapper 구현 대기")
 
     @mcp.tool()
+    @audited
     def vc_map_roles(run_id: str) -> MapResult:
         """역할별 접근 가능 endpoint를 매핑한다. P3 소유."""
         raise NotImplementedError("P3 attack surface mapper 구현 대기")
 
     @mcp.tool()
+    @audited
     def vc_index_code(run_id: str) -> MapResult:
         """소스 코드 심볼 그래프를 인덱싱한다. P3 소유."""
         raise NotImplementedError("P3 attack surface mapper 구현 대기")
 
     @mcp.tool()
+    @audited
     def vc_run_sast(run_id: str) -> ScanResult:
         """Semgrep 등 정적 분석으로 candidate를 생성한다. P4 소유."""
         raise NotImplementedError("P4 Semgrep 통합 대기")
 
     @mcp.tool()
+    @audited
     def vc_run_sca(run_id: str) -> ScanResult:
         """dependency/SBOM 취약점을 스캔한다. P4 소유."""
         raise NotImplementedError("P4 SCA 통합 대기")
 
     @mcp.tool()
+    @audited
     def vc_run_secret_scan(run_id: str) -> ScanResult:
         """secret exposure를 스캔한다. P4 소유."""
         raise NotImplementedError("P4 secret scanner 통합 대기")
 
     @mcp.tool()
+    @audited
     def vc_browser_crawl(run_id: str) -> ScanResult:
         """Playwright로 역할별 화면을 크롤링해 behavioral diff candidate를 만든다. P3 소유."""
         raise NotImplementedError("P3 Playwright crawler 구현 대기")
 
     @mcp.tool()
+    @audited
     def vc_verify_access_control(
         run_id: str, candidate_id: str, max_requests: int = 10
     ) -> VerifyResult:
@@ -78,6 +88,7 @@ def register(mcp: FastMCP) -> None:
         raise NotImplementedError("P3 verifier 구현 대기, Day2에 승인 게이트 배선")
 
     @mcp.tool()
+    @audited
     def vc_verify_injection(
         run_id: str, candidate_id: str, max_requests: int = 10
     ) -> VerifyResult:
@@ -85,6 +96,7 @@ def register(mcp: FastMCP) -> None:
         raise NotImplementedError("P3 verifier 구현 대기, Day2에 승인 게이트 배선")
 
     @mcp.tool()
+    @audited
     def vc_verify_xss(
         run_id: str, candidate_id: str, max_requests: int = 10
     ) -> VerifyResult:
