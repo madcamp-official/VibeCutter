@@ -1,0 +1,51 @@
+name: vibecutter-26s-w1-c2-06
+services:
+  database:
+    image: postgres:16-alpine
+    environment: {POSTGRES_DB: codebee, POSTGRES_USER: codebee, POSTGRES_PASSWORD: codebee}
+    volumes: [database-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codebee -d codebee"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    networks: [vibecutter-internal]
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    networks: [vibecutter-internal]
+  app:
+    image: vibecutter-26s-w1-c2-06:latest
+    build:
+      context: ../../.vibecutter/targets/sources/26s-w1-c2-06
+      dockerfile: ../../../../targets/dockerfiles/26s-w1-c2-06.Dockerfile
+    environment:
+      DB_HOST: database
+      DB_PORT: "5432"
+      DB_NAME: codebee
+      DB_USER: codebee
+      DB_PASSWORD: codebee
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      DJANGO_ALLOWED_HOSTS: "127.0.0.1,localhost"
+      DJANGO_CSRF_TRUSTED_ORIGINS: "http://127.0.0.1:14021"
+    depends_on:
+      database: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    ports: ["127.0.0.1:14021:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/csrf/')"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+    networks: [vibecutter-internal]
+networks:
+  vibecutter-internal:
+    driver: bridge
+    driver_opts: {com.docker.network.bridge.enable_ip_masquerade: "false"}
+volumes:
+  database-data:
