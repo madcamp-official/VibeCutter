@@ -3,3 +3,4 @@ pydantic==2.13.4
 pydantic-settings==2.14.2
 PyYAML==6.0.3
 sqlmodel==0.0.39
+semgrep==1.90.0

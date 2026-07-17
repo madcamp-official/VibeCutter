@@ -1,0 +1,170 @@
+# Vibe Cutter — Benchmark Reference Inventory (P4 / Model·Eval 소유)
+#
+# ※ 이건 벤치마크/교정용 "공개 취약앱" 세트다. 실제 감사 대상(몰입캠프 학생
+#    프로젝트)은 inventory.yaml 을 본다. 이 세트는 알려진 정답(ground truth)이
+#    있어 baseline·metric·detector 교정에 쓴다(plan.md D4 OWASP Benchmark 참고).
+#
+# 필드 정의는 datasets/README.md 참조.
+# focus ⊆ {idor, xss, injection}. adapter ∈ {node, fastapi, spring, generic_docker}.
+# verify: true 면 stack/url/adapter 를 실제로 확인해야 함.
+# ─────────────────────────────────────────────────────────────────────────────
+
+apps:
+  # ── Node / Express ───────────────────────────────────────────────────────
+  - id: juice-shop
+    name: OWASP Juice Shop
+    repo_url: https://github.com/juice-shop/juice-shop
+    stack: node/express + angular
+    adapter: node
+    focus: [idor, xss, injection]
+    expected_vulns: [idor, xss, sqli, nosqli, auth]
+    verify: false
+    notes: 3군 전부 풍부. 벤치마크 1순위. 단일 컨테이너 실행 쉬움.
+
+  - id: nodegoat
+    name: OWASP NodeGoat
+    repo_url: https://github.com/OWASP/NodeGoat
+    stack: node/express + mongodb
+    adapter: node
+    focus: [injection, xss]
+    expected_vulns: [nosqli, xss, auth, ssrf]
+    verify: false
+    notes: MongoDB 필요(docker-compose). OWASP Top10 매핑 명확.
+
+  - id: dvna
+    name: Damn Vulnerable NodeJS Application
+    repo_url: https://github.com/appsecco/dvna
+    stack: node/express + mysql
+    adapter: node
+    focus: [injection, xss, idor]
+    expected_vulns: [sqli, xss, idor, deserialization]
+    verify: false
+    notes: MySQL seed 필요. 3군 모두 존재.
+
+  - id: vulnerable-node
+    name: Vulnerable Node (cr0hn)
+    repo_url: https://github.com/cr0hn/vulnerable-node
+    stack: node/express + postgres
+    adapter: node
+    focus: [injection, idor]
+    expected_vulns: [sqli, idor, auth]
+    verify: true
+    notes: 유지보수 오래됨. 의존성/빌드 실패 리스크 — 폴백 후보.
+
+  - id: dvga
+    name: Damn Vulnerable GraphQL Application
+    repo_url: https://github.com/dolevf/Damn-Vulnerable-GraphQL-Application
+    stack: node/graphql
+    adapter: node
+    focus: [injection, idor]
+    expected_vulns: [injection, idor]
+    verify: true
+    notes: GraphQL 특화. attack surface mapper(P3)가 GraphQL 지원해야 유효.
+
+  # ── Python ───────────────────────────────────────────────────────────────
+  - id: vampi
+    name: OWASP VAmPI
+    repo_url: https://github.com/erev0s/VAmPI
+    stack: python/flask
+    adapter: generic_docker
+    focus: [idor, injection]
+    expected_vulns: [idor, sqli, auth]
+    verify: true
+    notes: >
+      BOLA/IDOR 데모에 최적. Flask(ASGI 아님) — fastapi adapter로 안 맞을 수
+      있음. P2와 python adapter 범위 협의 필요.
+
+  - id: tiredful-api
+    name: Tiredful API
+    repo_url: https://github.com/payatu/Tiredful-API
+    stack: python/django-rest
+    adapter: generic_docker
+    focus: [idor, injection, xss]
+    expected_vulns: [idor, sqli, xss, auth]
+    verify: true
+    notes: REST API 취약점 학습용. Django. 3군 모두 커버.
+
+  - id: dvpwa
+    name: Damn Vulnerable Python Web App
+    repo_url: https://github.com/anxolerd/dvpwa
+    stack: python/aiohttp + postgres
+    adapter: generic_docker
+    focus: [injection, xss]
+    expected_vulns: [sqli, xss, csrf]
+    verify: true
+    notes: aiohttp. docker-compose 제공되어 격리 쉬움.
+
+  - id: dsvw
+    name: Damn Small Vulnerable Web (DSVW)
+    repo_url: https://github.com/stamparm/DSVW
+    stack: python/stdlib (단일 파일)
+    adapter: generic_docker
+    focus: [xss, injection, idor]
+    expected_vulns: [xss, sqli, idor, ssrf]
+    verify: false
+    notes: 단일 파일 ~100줄. 실행 극히 간단 → smoke test/파이프라인 배선용 최적.
+
+  # ── Java / Spring ────────────────────────────────────────────────────────
+  - id: webgoat
+    name: OWASP WebGoat
+    repo_url: https://github.com/WebGoat/WebGoat
+    stack: java/spring-boot
+    adapter: spring
+    focus: [xss, injection, idor]
+    expected_vulns: [xss, sqli, idor, deserialization, ssrf]
+    verify: false
+    notes: Spring 대표 타깃. 3군 전부. 공식 도커 이미지 존재.
+
+  - id: java-sec-code
+    name: java-sec-code (JoyChou93)
+    repo_url: https://github.com/JoyChou93/java-sec-code
+    stack: java/spring-boot
+    adapter: spring
+    focus: [injection, xss]
+    expected_vulns: [sqli, xss, ssrf, deserialization, idor]
+    verify: true
+    notes: 취약 엔드포인트가 라우트별로 정리되어 있어 route↔sink 매핑 좋음.
+
+  # ── Multi-service (docker-compose) ───────────────────────────────────────
+  - id: crapi
+    name: OWASP crAPI
+    repo_url: https://github.com/OWASP/crAPI
+    stack: multi (java + python + node microservices)
+    adapter: generic_docker
+    focus: [idor, injection]
+    expected_vulns: [idor, sqli, nosqli]
+    verify: true
+    notes: >
+      BOLA/IDOR 정석 데모. 다중 서비스 docker-compose — 무겁고 reset/snapshot
+      난이도 높음. P2와 격리 비용 협의 필요.
+
+  # ── PHP → generic_docker 폴백 ─────────────────────────────────────────────
+  - id: dvwa
+    name: Damn Vulnerable Web Application
+    repo_url: https://github.com/digininja/DVWA
+    stack: php + mysql
+    adapter: generic_docker
+    focus: [injection, xss, idor]
+    expected_vulns: [sqli, xss, idor, cmdi, csrf]
+    verify: false
+    notes: 난이도 조절 슬라이더 존재. 3군 전부. 실행 매우 쉬움.
+
+  - id: bwapp
+    name: bWAPP (buggy web application)
+    repo_url: https://github.com/raesene/bWAPP
+    stack: php + mysql
+    adapter: generic_docker
+    focus: [injection, xss, idor]
+    expected_vulns: [sqli, xss, idor, cmdi, ssrf]
+    verify: true
+    notes: 100+ 취약점. 원본은 SourceForge, github는 미러 — URL 확인 필요.
+
+  - id: mutillidae
+    name: OWASP Mutillidae II
+    repo_url: https://github.com/webpwnized/mutillidae
+    stack: php + mysql
+    adapter: generic_docker
+    focus: [injection, xss, idor]
+    expected_vulns: [sqli, xss, idor, cmdi, csrf, deserialization]
+    verify: true
+    notes: OWASP Top10 매핑 명확. docker-compose 제공.
