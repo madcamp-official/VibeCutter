@@ -1,0 +1,44 @@
+name: vibecutter-26s-w1-c2-07
+services:
+  database:
+    image: postgres:16-alpine
+    environment: {POSTGRES_DB: concerts, POSTGRES_USER: vibecutter, POSTGRES_PASSWORD: vibecutter}
+    volumes:
+      - database-data:/var/lib/postgresql/data
+      - ../../targets/scripts/26s-w1-c2-07-supabase-storage-compat.sql:/docker-entrypoint-initdb.d/01-supabase-storage-compat.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vibecutter -d concerts"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    networks: [vibecutter-internal]
+  app:
+    image: vibecutter-26s-w1-c2-07:latest
+    build:
+      context: ../../.vibecutter/targets/sources/26s-w1-c2-07
+      dockerfile: ../../../../targets/dockerfiles/26s-w1-c2-07.Dockerfile
+    environment:
+      DATABASE_URL: postgresql://vibecutter:vibecutter@database:5432/concerts
+      DIRECT_URL: postgresql://vibecutter:vibecutter@database:5432/concerts
+      NEXT_PUBLIC_SUPABASE_URL: https://supabase.invalid
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: local-placeholder
+      SUPABASE_SECRET_KEY: replace-with-local-placeholder
+      OPENAI_API_KEY: replace-with-local-placeholder
+      KOPIS_API_KEY: replace-with-local-placeholder
+      CONCERT_SYNC_SECRET: local-placeholder
+      CRON_SECRET: local-placeholder
+    depends_on:
+      database: {condition: service_healthy}
+    ports: ["127.0.0.1:14022:3000"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r => { if (!r.ok) process.exit(1) })"]
+      interval: 5s
+      timeout: 3s
+      retries: 48
+    networks: [vibecutter-internal]
+networks:
+  vibecutter-internal:
+    driver: bridge
+    driver_opts: {com.docker.network.bridge.enable_ip_masquerade: "false"}
+volumes:
+  database-data:

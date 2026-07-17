@@ -1,0 +1,21 @@
+manifest_version: 1
+id: 26s-w1-c2-07
+display_name: 26s-w1-c2-07 local isolated runtime
+adapter: node
+source_dir: .vibecutter/targets/sources/26s-w1-c2-07
+base_url: http://127.0.0.1:14022
+commands:
+  build: {argv: [docker, compose, -f, targets/compose/26s-w1-c2-07.yaml, build], working_dir: ., timeout_seconds: 1800}
+  start: {argv: [docker, compose, -f, targets/compose/26s-w1-c2-07.yaml, up, -d, --wait], working_dir: ., timeout_seconds: 480}
+  stop: {argv: [docker, compose, -f, targets/compose/26s-w1-c2-07.yaml, down, --remove-orphans], working_dir: ., timeout_seconds: 180}
+  reset: {argv: [docker, compose, -f, targets/compose/26s-w1-c2-07.yaml, down, --volumes, --remove-orphans], working_dir: ., timeout_seconds: 180}
+tool_versions: {docker: "29.6.1", docker-compose: "v5.3.0", node: "22", pnpm: "10.33.0", postgres: "16"}
+healthcheck: {path: /api/health, expected_status: 200, timeout_seconds: 240}
+reset: {command_id: reset, snapshot_name: local-postgres-prisma-ephemeral-v1}
+role_fixtures:
+  - name: concert_local_postgres
+    description: Fresh local PostgreSQL is migrated and seeded exclusively inside the isolated runtime; external Supabase, OpenAI, and KOPIS integrations remain unavailable.
+    secret_env_names: [SUPABASE_SECRET_KEY, OPENAI_API_KEY, KOPIS_API_KEY, CONCERT_SYNC_SECRET, CRON_SECRET]
+test_suites: []
+log_paths: []
+docker_isolation: {compose_file: targets/compose/26s-w1-c2-07.yaml, internal_network: vibecutter-internal, require_loopback_port_bindings: true}
