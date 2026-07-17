@@ -42,7 +42,7 @@
    → PATCH_APPLIED → VALIDATING → FIXED / RETRY / HUMAN_REVIEW
    ```
    Finding 상태는 별도: `candidate | verified | rejected | fixed | human_review`. **이 이름은 cowork_rule.md에서 "조용히 변경 금지"로 못박은 공통 계약이다** — 바꾸려면 handoff에 영향 범위를 남겨야 한다.
-- [ ] **Finding/Candidate 상태 전이는 deterministic judge만 판정**하도록 구조를 짠다 (LLM confidence는 우선순위에만 사용, 최종 판정에는 미사용 — 5.3절 원칙). 이건 이후 judge.py 설계의 전제이므로 Day1에 인터페이스로 못박아 둔다.
+- [x] **Finding/Candidate 상태 전이는 deterministic judge만 판정**하도록 구조를 짠다 (LLM confidence는 우선순위에만 사용, 최종 판정에는 미사용 — 5.3절 원칙). 이건 이후 judge.py 설계의 전제이므로 Day1에 인터페이스로 못박아 둔다.
 - [ ] 이 스키마와 tool schema 초안을 **`docs/handoffs/D1-P1.md`로 오전 중 먼저 게시**하고, 팀 채널에 "공통 계약 나왔다"고 알린다. (다른 팀원이 기다리는 지점)
 
 ### 오후
