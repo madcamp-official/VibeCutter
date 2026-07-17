@@ -1,0 +1,501 @@
+# Vibe Cutter — Target App Inventory (P4 / Model·Eval 소유)
+#
+# 감사 대상: GitHub org `madcamp-official` 의 몰입캠프 학생 프로젝트 중 "웹앱".
+# (모바일 Flutter / 게임 Unity·Godot / 빈 레포는 제외. 벤치마크용 OWASP 공개앱은
+#  inventory_benchmark.yaml 참조.)
+#
+# 이 파일은 자동 분류(git tree 시그니처)로 만든 **분류 카탈로그**다. 여기서 앱을
+# 고르지 않는다 — 어떤 앱이 실제로 빌드·기동되는지는 P2 가 전 레포에 health check 를
+# 돌려 판정한다. 전부 verify=true(stack/adapter 는 추정값이라 실제 확인 전).
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# 계약 주의 (cowork_rule.md 3·5절, docs/handoffs/D1-P1.md):
+#   - `id` = contracts.schemas.Target.id = P2 manifest id (동일 문자열 계약).
+#     여기서는 repo 이름을 소문자화한 값을 id 로 쓴다.
+#   - `adapter` 는 P2 소유 영역에 대한 "제안". 최종 결정은 P2.
+#     python 은 fastapi adapter 로 제안했으나 실제 프레임워크(fastapi/flask)는
+#     verify 대상. django/go/php 등은 generic_docker.
+#
+# 필드 정의는 inventory_benchmark.yaml 헤더 및 datasets/README.md 참조.
+# focus ⊆ {idor, xss, injection}. 미감사 앱이라 expected_vulns 는 비움(추정 금지).
+# stack 뒤 "≈"/verify=true 는 자동 분류값이라 사람이 확인해야 함을 뜻한다.
+# ─────────────────────────────────────────────────────────────────────────────
+
+apps:
+- id: 26s-w1-c1-01
+  name: 26s-w1-c1-01
+  repo_url: https://github.com/madcamp-official/26s-w1-c1-01
+  stack: python
+  adapter: fastapi
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C1 팀01. 학생 프로젝트(미감사). files=93, backend=Y, stack≈python, sigs=Dockerfile,app.js,docker-compose,index.html,package.json,requirements.txt
+- id: 26s-w1-c1-02
+  name: 26s-w1-c1-02
+  repo_url: https://github.com/madcamp-official/26s-w1-c1-02
+  stack: node/js-ts
+  adapter: node
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C1 팀02. 학생 프로젝트(미감사). files=51, backend=Y, stack≈node/js-ts, sigs=Dockerfile,app.js,docker-compose,index.html,package.json,server.js
+- id: 26s-w1-c1-03
+  name: 26s-w1-c1-03
+  repo_url: https://github.com/madcamp-official/26s-w1-c1-03
+  stack: java/spring
+  adapter: spring
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C1 팀03. 학생 프로젝트(미감사). files=234, backend=Y, stack≈java/spring, sigs=build.gradle,index.html,next.config,package.json,vite.config
+- id: 26s-w1-c1-04
+  name: 26s-w1-c1-04
+  repo_url: https://github.com/madcamp-official/26s-w1-c1-04
+  stack: node/js-ts
+  adapter: node
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C1 팀04. 학생 프로젝트(미감사). files=10, backend=Y, stack≈node/js-ts, sigs=app.js,index.html,index.js,package.json
+- id: 26s-w1-c1-05
+  name: 26s-w1-c1-05
+  repo_url: https://github.com/madcamp-official/26s-w1-c1-05
+  stack: java/spring
+  adapter: spring
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C1 팀05. 학생 프로젝트(미감사). files=278, backend=Y, stack≈java/spring, sigs=app.js,build.gradle,index.html,package.json,vite.config
+- id: 26s-w1-c1-07
+  name: 26s-w1-c1-07
+  repo_url: https://github.com/madcamp-official/26s-w1-c1-07
+  stack: node/js-ts
+  adapter: node
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C1 팀07. 학생 프로젝트(미감사). files=924, backend=Y, stack≈node/js-ts, sigs=docker-compose,index.html,package.json,schema.prisma,vite.config
+- id: 26s-w1-c2-01
+  name: 26s-w1-c2-01
+  repo_url: https://github.com/madcamp-official/26s-w1-c2-01
+  stack: python
+  adapter: fastapi
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C2 팀01. 학생 프로젝트(미감사). files=119, backend=Y, stack≈python, sigs=Dockerfile,docker-compose,index.html,main.py,package.json,requirements.txt
+- id: 26s-w1-c2-02
+  name: 26s-w1-c2-02
+  repo_url: https://github.com/madcamp-official/26s-w1-c2-02
+  stack: node/js-ts
+  adapter: node
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C2 팀02. 학생 프로젝트(미감사). files=124, backend=Y, stack≈node/js-ts, sigs=docker-compose,index.html,package.json,schema.prisma,vite.config
+- id: 26s-w1-c2-03
+  name: 26s-w1-c2-03
+  repo_url: https://github.com/madcamp-official/26s-w1-c2-03
+  stack: python
+  adapter: fastapi
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C2 팀03. 학생 프로젝트(미감사). files=81, backend=Y, stack≈python, sigs=index.html,main.py,package.json,requirements.txt,vite.config
+- id: 26s-w1-c2-04
+  name: 26s-w1-c2-04
+  repo_url: https://github.com/madcamp-official/26s-w1-c2-04
+  stack: python
+  adapter: fastapi
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C2 팀04. 학생 프로젝트(미감사). files=52, backend=Y, stack≈python, sigs=app.js,index.html,main.py,package.json,requirements.txt,vite.config
+- id: 26s-w1-c2-05
+  name: 26s-w1-c2-05
+  repo_url: https://github.com/madcamp-official/26s-w1-c2-05
+  stack: python
+  adapter: fastapi
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C2 팀05. 학생 프로젝트(미감사). files=130, backend=Y, stack≈python, sigs=index.html,main.py,package.json,requirements.txt,vite.config
+- id: 26s-w1-c2-07
+  name: 26s-w1-c2-07
+  repo_url: https://github.com/madcamp-official/26s-w1-c2-07
+  stack: node/next
+  adapter: node
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C2 팀07. 학생 프로젝트(미감사). files=150, backend=Y, stack≈node/next, sigs=next.config,package.json,schema.prisma
+- id: 26s-w1-c3-03
+  name: 26s-w1-c3-03
+  repo_url: https://github.com/madcamp-official/26s-w1-c3-03
+  stack: node/js-ts
+  adapter: node
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C3 팀03. 학생 프로젝트(미감사). files=37, backend=Y, stack≈node/js-ts, sigs=package.json,server.js
+- id: 26s-w1-c3-04
+  name: 26s-w1-c3-04
+  repo_url: https://github.com/madcamp-official/26s-w1-c3-04
+  stack: node/js-ts
+  adapter: node
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C3 팀04. 학생 프로젝트(미감사). files=100, backend=Y, stack≈node/js-ts, sigs=index.html,package.json,server.js,vite.config
+- id: 26s-w1-c3-05
+  name: 26s-w1-c3-05
+  repo_url: https://github.com/madcamp-official/26s-w1-c3-05
+  stack: python
+  adapter: fastapi
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C3 팀05. 학생 프로젝트(미감사). files=126, backend=Y, stack≈python, sigs=Dockerfile,docker-compose,index.html,main.py,package.json,requirements.txt
+- id: 26s-w1-c3-06
+  name: 26s-w1-c3-06
+  repo_url: https://github.com/madcamp-official/26s-w1-c3-06
+  stack: python
+  adapter: fastapi
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C3 팀06. 학생 프로젝트(미감사). files=86, backend=Y, stack≈python, sigs=app.py,index.html,main.py,requirements.txt
+- id: 26s-w1-c3-07
+  name: 26s-w1-c3-07
+  repo_url: https://github.com/madcamp-official/26s-w1-c3-07
+  stack: node/js-ts
+  adapter: node
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C3 팀07. 학생 프로젝트(미감사). files=141, backend=Y, stack≈node/js-ts, sigs=app.js,index.html,package.json,vite.config
+- id: 26s-w1-c3-08
+  name: 26s-w1-c3-08
+  repo_url: https://github.com/madcamp-official/26s-w1-c3-08
+  stack: node/next
+  adapter: node
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C3 팀08. 학생 프로젝트(미감사). files=228, backend=Y, stack≈node/next, sigs=docker-compose,next.config,package.json,schema.prisma
+- id: 26s-w1-c3-09
+  name: 26s-w1-c3-09
+  repo_url: https://github.com/madcamp-official/26s-w1-c3-09
+  stack: java/spring
+  adapter: spring
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C3 팀09. 학생 프로젝트(미감사). files=232, backend=Y, stack≈java/spring, sigs=Dockerfile,app.js,build.gradle,docker-compose,index.html,package.json
+- id: 26s-w2-c1-01
+  name: 26s-w2-c1-01
+  repo_url: https://github.com/madcamp-official/26s-w2-c1-01
+  stack: python
+  adapter: fastapi
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W2 C1 팀01. 학생 프로젝트(미감사). files=138, backend=Y, stack≈python, sigs=app.js,docker-compose,index.html,main.py,package.json,requirements.txt
+- id: 26s-w2-c2-01
+  name: 26s-w2-c2-01
+  repo_url: https://github.com/madcamp-official/26s-w2-c2-01
+  stack: java/spring
+  adapter: spring
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W2 C2 팀01. 학생 프로젝트(미감사). files=217, backend=Y, stack≈java/spring, sigs=Dockerfile,build.gradle,docker-compose,index.html,main.py,package.json
+- id: 26s-w2-c2-03
+  name: 26s-w2-c2-03
+  repo_url: https://github.com/madcamp-official/26s-w2-c2-03
+  stack: node/js-ts
+  adapter: node
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W2 C2 팀03. 학생 프로젝트(미감사). files=138, backend=Y, stack≈node/js-ts, sigs=app.js,index.html,index.js,package.json,server.js,vite.config
+- id: 26s-w2-c2-05
+  name: 26s-w2-c2-05
+  repo_url: https://github.com/madcamp-official/26s-w2-c2-05
+  stack: python
+  adapter: fastapi
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W2 C2 팀05. 학생 프로젝트(미감사). files=111, backend=Y, stack≈python, sigs=main.py,next.config,package.json,requirements.txt
+- id: 26s-w2-c2-06
+  name: 26s-w2-c2-06
+  repo_url: https://github.com/madcamp-official/26s-w2-c2-06
+  stack: python
+  adapter: fastapi
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W2 C2 팀06. 학생 프로젝트(미감사). files=144, backend=Y, stack≈python, sigs=Dockerfile,docker-compose,index.html,main.py,pyproject.toml,requirements.txt
+- id: 26s-w2-c2-08
+  name: 26s-w2-c2-08
+  repo_url: https://github.com/madcamp-official/26s-w2-c2-08
+  stack: python
+  adapter: fastapi
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W2 C2 팀08. 학생 프로젝트(미감사). files=483, backend=Y, stack≈python, sigs=app.js,app.py,index.html,main.py,package.json,pyproject.toml
+- id: 26s-w2-c3-03
+  name: 26s-w2-c3-03
+  repo_url: https://github.com/madcamp-official/26s-w2-c3-03
+  stack: node/js-ts
+  adapter: node
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W2 C3 팀03. 학생 프로젝트(미감사). files=94, backend=Y, stack≈node/js-ts, sigs=app.js,index.html,index.js,package.json,vite.config
+- id: 26s-w2-c3-04
+  name: 26s-w2-c3-04
+  repo_url: https://github.com/madcamp-official/26s-w2-c3-04
+  stack: node/js-ts
+  adapter: node
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W2 C3 팀04. 학생 프로젝트(미감사). files=115, backend=Y, stack≈node/js-ts, sigs=index.html,package.json,server.js,vite.config
+- id: 26s-w2-c3-05
+  name: 26s-w2-c3-05
+  repo_url: https://github.com/madcamp-official/26s-w2-c3-05
+  stack: java/spring
+  adapter: spring
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W2 C3 팀05. 학생 프로젝트(미감사). files=174, backend=Y, stack≈java/spring, sigs=Dockerfile,build.gradle,docker-compose,index.html,package.json,vite.config
+- id: 26s-w2-c3-08
+  name: 26s-w2-c3-08
+  repo_url: https://github.com/madcamp-official/26s-w2-c3-08
+  stack: node/js-ts
+  adapter: node
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W2 C3 팀08. 학생 프로젝트(미감사). files=50, backend=Y, stack≈node/js-ts, sigs=app.js,index.html,package.json,schema.prisma,vite.config
+- id: legendary-super-ultra-red-dragon
+  name: legendary-super-ultra-red-dragon
+  repo_url: https://github.com/madcamp-official/legendary-super-ultra-red-dragon
+  stack: python
+  adapter: fastapi
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 프로젝트. 학생 프로젝트(미감사). files=27, backend=Y, stack≈python, sigs=pyproject.toml
+- id: 26s-w1-c2-06
+  name: 26s-w1-c2-06
+  repo_url: https://github.com/madcamp-official/26s-w1-c2-06
+  stack: python/django
+  adapter: generic_docker
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C2 팀06. 학생 프로젝트(미감사). files=113, backend=Y, stack≈python/django, sigs=app.js,docker-compose,index.html,manage.py,package.json,requirements.txt
+- id: 26s-w1-c2-08
+  name: 26s-w1-c2-08
+  repo_url: https://github.com/madcamp-official/26s-w1-c2-08
+  stack: python/django
+  adapter: generic_docker
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C2 팀08. 학생 프로젝트(미감사). files=145, backend=Y, stack≈python/django, sigs=index.html,manage.py,package.json,requirements.txt,vite.config
+- id: 26s-w1-c3-02
+  name: 26s-w1-c3-02
+  repo_url: https://github.com/madcamp-official/26s-w1-c3-02
+  stack: python/django
+  adapter: generic_docker
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C3 팀02. 학생 프로젝트(미감사). files=174, backend=Y, stack≈python/django, sigs=Dockerfile,docker-compose,index.html,manage.py,package.json,requirements.txt
+- id: 26s-w3-c2-01
+  name: 26s-w3-c2-01
+  repo_url: https://github.com/madcamp-official/26s-w3-c2-01
+  stack: go
+  adapter: generic_docker
+  focus:
+  - idor
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W3 C2 팀01. 학생 프로젝트(미감사). files=45, backend=Y, stack≈go, sigs=go.mod
+- id: 26s-w1-c1-06
+  name: 26s-w1-c1-06
+  repo_url: https://github.com/madcamp-official/26s-w1-c1-06
+  stack: node/js-ts
+  adapter: node
+  focus:
+  - xss
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C1 팀06. 학생 프로젝트(미감사). files=205, backend=N, stack≈node/js-ts, sigs=index.html,package.json,vite.config
+- id: 26s-w1-c3-01
+  name: 26s-w1-c3-01
+  repo_url: https://github.com/madcamp-official/26s-w1-c3-01
+  stack: node/js-ts
+  adapter: node
+  focus:
+  - xss
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W1 C3 팀01. 학생 프로젝트(미감사). files=265, backend=N, stack≈node/js-ts, sigs=index.html,package.json,vite.config
+- id: 26s-w2-c1-06
+  name: 26s-w2-c1-06
+  repo_url: https://github.com/madcamp-official/26s-w2-c1-06
+  stack: node/js-ts
+  adapter: node
+  focus:
+  - xss
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W2 C1 팀06. 학생 프로젝트(미감사). files=120, backend=N, stack≈node/js-ts, sigs=index.html,package.json,vite.config
+- id: 26s-w2-c2-02
+  name: 26s-w2-c2-02
+  repo_url: https://github.com/madcamp-official/26s-w2-c2-02
+  stack: node/js-ts
+  adapter: node
+  focus:
+  - xss
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W2 C2 팀02. 학생 프로젝트(미감사). files=207, backend=N, stack≈node/js-ts, sigs=index.html,package.json,vite.config
+- id: 26s-w2-c3-07
+  name: 26s-w2-c3-07
+  repo_url: https://github.com/madcamp-official/26s-w2-c3-07
+  stack: node/next
+  adapter: node
+  focus:
+  - xss
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 26s W2 C3 팀07. 학생 프로젝트(미감사). files=425, backend=N, stack≈node/next, sigs=next.config,package.json
+- id: into-the-deep
+  name: Into-the-Deep
+  repo_url: https://github.com/madcamp-official/Into-the-Deep
+  stack: node/js-ts
+  adapter: node
+  focus:
+  - xss
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 프로젝트. 학생 프로젝트(미감사). files=34, backend=N, stack≈node/js-ts, sigs=index.html,package.json
+- id: spk
+  name: spk
+  repo_url: https://github.com/madcamp-official/spk
+  stack: static/html
+  adapter: generic_docker
+  focus:
+  - xss
+  expected_vulns: []
+  verify: true
+  notes: 몰입캠프 프로젝트. 학생 프로젝트(미감사). files=7, backend=N, stack≈static/html, sigs=index.html
