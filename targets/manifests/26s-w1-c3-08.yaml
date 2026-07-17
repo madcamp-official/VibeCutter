@@ -1,0 +1,24 @@
+manifest_version: 1
+id: 26s-w1-c3-08
+display_name: 26s-w1-c3-08 local isolated runtime
+adapter: node
+source_dir: .vibecutter/targets/sources/26s-w1-c3-08
+base_url: http://127.0.0.1:14034
+commands:
+  build: {argv: [docker, compose, -f, targets/compose/26s-w1-c3-08.yaml, build], working_dir: ., timeout_seconds: 2400}
+  start: {argv: [docker, compose, -f, targets/compose/26s-w1-c3-08.yaml, up, -d, --wait], working_dir: ., timeout_seconds: 600}
+  stop: {argv: [docker, compose, -f, targets/compose/26s-w1-c3-08.yaml, down, --remove-orphans], working_dir: ., timeout_seconds: 180}
+  reset: {argv: [docker, compose, -f, targets/compose/26s-w1-c3-08.yaml, down, --volumes, --remove-orphans], working_dir: ., timeout_seconds: 180}
+  smoke: {argv: [py, "-3.13", targets/scripts/26s-w1-c3-08-smoke.py], working_dir: ., timeout_seconds: 60}
+tool_versions: {docker: "29.6.1", docker-compose: "v5.3.0", node: "22", pnpm: "9.15.0", postgres: "16-alpine", next: "15.0.3", prisma: "5.22.0", python: "3.13"}
+healthcheck: {path: /api/health, expected_status: 200, timeout_seconds: 240}
+reset: {command_id: reset, snapshot_name: local-postgres-prisma-v1}
+role_fixtures:
+  - name: maeari_local_health
+    description: Fresh PostgreSQL volume is initialized with source Prisma migrations. Kakao OAuth, OpenAI moderation, OCR, Gmail SMTP, SOLAPI SMS, and phone lookup use local placeholders or disabled flags; smoke verifies API health/time, unauthenticated boundary, Next login page, and Next /api proxy.
+    secret_env_names: [JWT_SECRET, KAKAO_CLIENT_SECRET, OPENAI_API_KEY, PUBLIC_TOKEN_PEPPER, PUBLIC_TOKEN_ENCRYPTION_KEY]
+test_suites:
+  - name: maeari-health-smoke
+    command_id: smoke
+log_paths: []
+docker_isolation: {compose_file: targets/compose/26s-w1-c3-08.yaml, internal_network: vibecutter-internal, require_loopback_port_bindings: true}

@@ -1,0 +1,90 @@
+name: vibecutter-26s-w1-c3-08
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: maeari
+      POSTGRES_USER: maeari
+      POSTGRES_PASSWORD: maeari
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U maeari -d maeari"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+    networks: [vibecutter-internal]
+
+  api:
+    build:
+      context: ../../.vibecutter/targets/sources/26s-w1-c3-08
+      dockerfile: ../../../../targets/dockerfiles/26s-w1-c3-08.Dockerfile
+      target: api-runtime
+    environment: &maeari-env
+      NODE_ENV: production
+      DATABASE_URL: postgresql://maeari:maeari@postgres:5432/maeari
+      SERVICE_DOMAIN: 127.0.0.1
+      WWW_SERVICE_DOMAIN: 127.0.0.1
+      API_PORT: "4000"
+      WEB_PORT: "3000"
+      WEB_ORIGIN: http://127.0.0.1:14035
+      SERVICE_URL: http://127.0.0.1:14035
+      JWT_SECRET: p2-local-jwt-secret
+      COOKIE_DOMAIN: ""
+      COOKIE_SECURE: "false"
+      KAKAO_CLIENT_ID: p2-local-kakao-client
+      KAKAO_CLIENT_SECRET: p2-local-kakao-secret
+      KAKAO_REDIRECT_URI: http://127.0.0.1:14035/api/auth/kakao/callback
+      OPENAI_API_KEY: p2-local-openai-placeholder
+      OPENAI_MODERATION_MODEL: omni-moderation-latest
+      OPENAI_GUARDRAIL_MODEL: gpt-5.4-mini
+      DAILY_LINE_OPENAI_MODEL: gpt-5.4-mini
+      PUBLIC_TOKEN_PEPPER: p2-local-public-token-pepper
+      PUBLIC_TOKEN_ENCRYPTION_KEY: p2-local-public-token-encryption-key
+      UPLOAD_DIR: uploads
+      UPLOAD_PUBLIC_PATH: /api/uploads
+      IMAGE_OCR_MODERATION_ENABLED: "false"
+      ADMIN_KAKAO_IDS: ""
+      DELIVERY_CRON: "* * * * *"
+      MODERATION_RETRY_CRON: "0 3 * * *"
+      MODERATION_MAX_ATTEMPTS: "2"
+      NOTIFICATION_RETRY_CRON: "*/5 * * * *"
+      DAILY_LINE_CRON: "5 0 * * *"
+      NOTIFICATION_MAX_ATTEMPTS: "3"
+      GMAIL_SMTP_ENABLED: "false"
+      SOLAPI_SMS_ENABLED: "false"
+      PHONE_LOOKUP_ENABLED: "false"
+      PHONE_LOOKUP_PROVIDER: TWILIO
+    depends_on: {postgres: {condition: service_healthy}}
+    ports: ["127.0.0.1:14034:4000"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+    networks: [vibecutter-internal]
+
+  web:
+    build:
+      context: ../../.vibecutter/targets/sources/26s-w1-c3-08
+      dockerfile: ../../../../targets/dockerfiles/26s-w1-c3-08.Dockerfile
+      target: web-runtime
+    environment:
+      <<: *maeari-env
+      NEXT_PUBLIC_API_BASE_URL: /api
+      API_PROXY_TARGET: http://api:4000
+    depends_on: {api: {condition: service_healthy}}
+    ports: ["127.0.0.1:14035:3000"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "Promise.all([fetch('http://127.0.0.1:3000/login'), fetch('http://127.0.0.1:3000/api/health')]).then(([a,b])=>process.exit(a.status===200&&b.status===200?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    networks: [vibecutter-internal]
+
+networks:
+  vibecutter-internal:
+    driver: bridge
+    driver_opts: {com.docker.network.bridge.enable_ip_masquerade: "false"}
+
+volumes:
+  postgres-data:
