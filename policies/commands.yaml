@@ -1,0 +1,2 @@
+# command_id -> 실행 가능한 command template 매핑 (shell 문자열 직접 입력 금지, subprocess shell=False).
+commands: []
