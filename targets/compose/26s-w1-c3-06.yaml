@@ -1,0 +1,53 @@
+name: vibecutter-26s-w1-c3-06
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: mockinvest
+      POSTGRES_PASSWORD: mockinvest
+      POSTGRES_DB: mockinvest
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mockinvest -d mockinvest"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+    networks: [vibecutter-internal]
+
+  backend:
+    build:
+      context: ../../.vibecutter/targets/sources/26s-w1-c3-06
+      dockerfile: ../../../../targets/dockerfiles/26s-w1-c3-06-backend.Dockerfile
+    environment:
+      DATABASE_URL: postgresql://mockinvest:mockinvest@postgres:5432/mockinvest
+      PYTHONUNBUFFERED: "1"
+    depends_on: {postgres: {condition: service_healthy}}
+    ports: ["127.0.0.1:14032:5000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/auth/check-id?id=p2-health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+    networks: [vibecutter-internal]
+
+  frontend:
+    image: nginx:1.27-alpine
+    volumes:
+      - ../../.vibecutter/targets/sources/26s-w1-c3-06/frontend:/usr/share/nginx/html:ro
+      - ../../targets/nginx/26s-w1-c3-06.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on: {backend: {condition: service_healthy}}
+    ports: ["127.0.0.1:14033:80"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/ && wget -q -O- 'http://127.0.0.1/api/auth/check-id?id=p2-health' >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [vibecutter-internal]
+
+networks:
+  vibecutter-internal:
+    driver: bridge
+    driver_opts: {com.docker.network.bridge.enable_ip_masquerade: "false"}
+
+volumes:
+  postgres-data:
