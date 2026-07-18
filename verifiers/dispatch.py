@@ -19,9 +19,26 @@ from contracts.schemas import Candidate
 from verifiers import access_control
 from verifiers.types import MAX_REQUESTS_DEFAULT, VerifierOutput
 
+def _idor_verifier(
+    run_id: str,
+    candidate: Candidate,
+    *,
+    max_requests: int = MAX_REQUESTS_DEFAULT,
+) -> VerifierOutput:
+    """IDOR 후보를 read/write oracle로 분기한다.
+
+    `attack_params.idor_mode == "write"`면 상태변화(write) oracle(`verify_mutation_candidate`)로,
+    아니면 read oracle(`verify`)로 보낸다. write 후보는 `surface.candidates.write_candidate_from_fixture`가
+    `idor_mode=write`로 표시한다. 표시가 없는 기존 read 후보는 그대로 read verify로 간다(하위호환).
+    """
+    if candidate.attack_params.get("idor_mode") == "write":
+        return access_control.verify_mutation_candidate(run_id, candidate, max_requests=max_requests)
+    return access_control.verify(run_id, candidate, max_requests=max_requests)
+
+
 # 구현된 verifier만 등록. xss/injection은 아직 스캐폴딩(verifiers/{xss,injection}.py, docstring뿐).
 _VERIFIERS = {
-    "idor": access_control.verify,
+    "idor": _idor_verifier,
 }
 _NOT_READY = frozenset({"xss", "injection"})
 
