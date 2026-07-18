@@ -1,0 +1,29 @@
+# GPU 서버 전용 의존성 (P4 model serving / QLoRA 학습).
+#
+# 공통 requirements.txt 와 분리한다 — torch/vllm/bitsandbytes 는 수 GB 이고 GPU
+# 전용이라 팀원 전원 머신(P1/P2/P3, Windows 포함)에 깔면 안 된다. GPU 서버에서만:
+#   python3.13 -m venv .venv-gpu && source .venv-gpu/bin/activate
+#   pip install -r requirements.txt -r requirements-gpu.txt
+#
+# 대상: 24GB VRAM (3090/4090/A5000) + Qwen2.5-Coder-7B-Instruct QLoRA(4bit).
+# torch 는 CUDA 빌드가 필요하다 — 설치 실패 시 아래로:
+#   pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+#
+# 버전은 late-2024/early-2025 기준 상호호환 조합. CUDA/드라이버에 따라 조정 필요
+# (조정하면 이유를 handoff 에 남긴다).
+
+# --- 서빙 (vLLM = OpenAI 호환 endpoint) ------------------------------------------------
+vllm==0.6.6
+
+# --- 학습 (QLoRA) ---------------------------------------------------------------------
+torch==2.5.1
+transformers==4.48.0
+peft==0.14.0
+bitsandbytes==0.45.0          # 4bit 양자화(QLoRA)
+accelerate==1.2.1
+datasets==3.2.0
+trl==0.13.0                   # SFTTrainer
+
+# --- 임베딩(code_index embed_fn 백엔드, 선택) -----------------------------------------
+# 코드 임베딩 모델을 vLLM 로 서빙하지 않고 로컬로 돌릴 때만 필요:
+sentence-transformers==3.3.1
