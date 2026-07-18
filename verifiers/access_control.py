@@ -110,12 +110,16 @@ class IdorProbe(BaseModel):
 
 
 def probe_from_candidate(candidate: Candidate) -> IdorProbe:
-    """candidate.signals의 "key=value" 리스트에서 probe를 파싱한다.
+    """candidate에서 probe를 만든다. typed `attack_params`를 우선 쓴다.
 
-    (D1-P3.md 이견 1: Candidate에 typed 공격 파라미터가 없어 signals 우회. `Candidate.attack_params`
-    도입됐으니 다음 라운드에 그쪽으로 이전 예정.)
+    D1-P3.md 이견 1 / D2-P3 우회였던 `signals` "key=value" 파싱은 이제 하위호환 폴백으로만 남긴다
+    (P1이 `Candidate.attack_params: dict[str,str]`를 도입, P4가 SAST에서 vuln_class를 채움 —
+    D2-P4 최우선 요청). 새 후보는 attack_params로 온다.
     """
-    kv: dict[str, str] = {}
+    if candidate.attack_params:
+        return IdorProbe(**candidate.attack_params)
+
+    kv: dict[str, str] = {}  # 하위호환: 예전 signals 기반 후보(WebGoat 데모 등)
     for s in candidate.signals:
         if "=" in s:
             key, _, value = s.partition("=")
@@ -158,18 +162,19 @@ def probe_from_fixture(fixture: dict | str | Path) -> IdorProbe:
 def candidate_from_fixture(
     run_id: str, fixture: dict | str | Path, *, candidate_id: str | None = None
 ) -> Candidate:
-    """fixture → Candidate. verify()에 바로 넘길 수 있게 probe를 signals로 직렬화한다.
+    """fixture → Candidate. probe를 typed `attack_params`로 담아 verify()에 바로 넘길 수 있다.
 
-    probe → "key=value" signals → probe_from_candidate로 왕복 복원된다.
+    probe → attack_params dict → probe_from_candidate로 왕복 복원된다. vuln_class="idor"라
+    verify_candidate 디스패처가 access_control로 라우팅한다.
     """
     probe = probe_from_fixture(fixture)
-    signals = [f"{k}={v}" for k, v in probe.model_dump().items() if v is not None]
+    attack_params = {k: str(v) for k, v in probe.model_dump().items() if v is not None}
     return Candidate(
         id=candidate_id or f"cand-{uuid4().hex[:12]}",
         run_id=run_id,
         cwe="CWE-639",
         vuln_class="idor",
-        signals=signals,
+        attack_params=attack_params,
     )
 
 
