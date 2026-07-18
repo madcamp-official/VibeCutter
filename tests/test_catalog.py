@@ -85,5 +85,6 @@ class TargetCatalogTests(unittest.TestCase):
                 self.assertEqual(catalog.source_repository_for("demo-api"), source.resolve())
                 self.assertEqual((worktree / "app.txt").read_text(encoding="utf-8"), "target source")
                 self.assertNotEqual(worktree.parents[1], root)
+                self.assertEqual(catalog.run_overlay_for("demo-api", "run-1").worktree_path, worktree)
             finally:
                 worktrees.remove("run-1", approved=True)

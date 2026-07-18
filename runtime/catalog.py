@@ -113,6 +113,19 @@ class TargetCatalog:
             artifact_root=self.repository_root / ".vibecutter" / "worktrees" / target_id,
         )
 
+    def run_overlay_for(self, target_id: str, run_id: str):
+        """Project a checked-in Compose runtime onto an existing target worktree."""
+        from .run_overlay import RunComposeOverlay
+
+        worktrees = self.worktree_manager_for(target_id)
+        return RunComposeOverlay(
+            self.get(target_id).manifest,
+            self.repository_root,
+            self.source_repository_for(target_id),
+            worktrees.path_for(run_id),
+            run_id,
+        )
+
     def readiness_for(self, target_id: str) -> TargetReadiness:
         return TargetRuntimeInspector(self.get(target_id).manifest, self.repository_root).check_readiness()
 
