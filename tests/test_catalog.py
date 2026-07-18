@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+import subprocess
 
 from runtime.catalog import TargetCatalog
 
@@ -58,3 +59,31 @@ class TargetCatalogTests(unittest.TestCase):
             catalog.load()
             with self.assertRaises(KeyError):
                 catalog.get("unknown-api")
+
+    def test_target_worktree_is_created_from_source_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest_root = root / "manifests"
+            manifest_root.mkdir()
+            source = root / ".vibecutter" / "targets" / "sources" / "demo-api"
+            source.mkdir(parents=True)
+            subprocess.run(["git", "-C", str(source), "init"], check=True, capture_output=True, text=True)
+            subprocess.run(["git", "-C", str(source), "config", "user.email", "p2@example.test"], check=True)
+            subprocess.run(["git", "-C", str(source), "config", "user.name", "P2 Test"], check=True)
+            (source / "app.txt").write_text("target source", encoding="utf-8")
+            subprocess.run(["git", "-C", str(source), "add", "app.txt"], check=True)
+            subprocess.run(["git", "-C", str(source), "commit", "-m", "initial"], check=True, capture_output=True)
+            (manifest_root / "demo.yaml").write_text(
+                manifest_yaml("demo-api").replace("source_dir: .", "source_dir: .vibecutter/targets/sources/demo-api"),
+                encoding="utf-8",
+            )
+            catalog = TargetCatalog(manifest_root=manifest_root, repository_root=root)
+            catalog.load()
+            worktrees = catalog.worktree_manager_for("demo-api")
+            worktree = worktrees.create("run-1")
+            try:
+                self.assertEqual(catalog.source_repository_for("demo-api"), source.resolve())
+                self.assertEqual((worktree / "app.txt").read_text(encoding="utf-8"), "target source")
+                self.assertNotEqual(worktree.parents[1], root)
+            finally:
+                worktrees.remove("run-1", approved=True)

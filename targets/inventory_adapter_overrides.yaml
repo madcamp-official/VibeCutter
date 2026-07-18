@@ -1,0 +1,13 @@
+# P2-confirmed differences from P4's pre-runtime adapter proposal.
+# `datasets/inventory.yaml` remains the complete discovery/coverage catalog;
+# checked-in P2 manifests remain the executable runtime source of truth.
+version: 1
+overrides:
+  26s-w1-c1-01:
+    inventory_adapter: fastapi
+    manifest_adapter: generic-docker
+    reason: P2 runtime uses a mixed-service Compose overlay; the generic adapter is the verified lifecycle contract.
+  26s-w1-c3-05:
+    inventory_adapter: fastapi
+    manifest_adapter: node
+    reason: P2 verified the Express API runtime; P4's static pre-classification was Python/FastAPI.

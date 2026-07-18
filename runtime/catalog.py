@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import subprocess
 from typing import TYPE_CHECKING
 
 from contracts.schemas import Target
@@ -73,6 +74,45 @@ class TargetCatalog:
     def lifecycle_for(self, target_id: str) -> LifecycleManager:
         return LifecycleManager(self.get(target_id).manifest, self.repository_root)
 
+    def source_root_for(self, target_id: str) -> Path:
+        """Return the checked-in target source directory, never an MCP-supplied path."""
+        manifest = self.get(target_id).manifest
+        source_root = (self.repository_root / manifest.source_dir).resolve()
+        if source_root != self.repository_root and self.repository_root not in source_root.parents:
+            raise ValueError("target source directory escapes repository root")
+        if not source_root.is_dir():
+            raise FileNotFoundError(f"target source directory does not exist: {source_root}")
+        return source_root
+
+    def source_repository_for(self, target_id: str) -> Path:
+        """Resolve the Git repository that owns a target source subdirectory."""
+        source_root = self.source_root_for(target_id)
+        result = subprocess.run(
+            ["git", "-C", str(source_root), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            check=False,
+            shell=False,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if result.returncode != 0:
+            raise ValueError(f"target source is not a Git repository: {source_root}")
+        repository = Path(result.stdout.strip()).resolve()
+        sources_root = (self.repository_root / ".vibecutter" / "targets" / "sources").resolve()
+        if repository != sources_root and sources_root not in repository.parents:
+            raise ValueError("target Git repository is outside managed source clones")
+        return repository
+
+    def worktree_manager_for(self, target_id: str):
+        """Create run worktrees from the target app repository, not VibeCutter itself."""
+        from .worktree import WorktreeManager
+
+        return WorktreeManager(
+            self.source_repository_for(target_id),
+            artifact_root=self.repository_root / ".vibecutter" / "worktrees" / target_id,
+        )
+
     def readiness_for(self, target_id: str) -> TargetReadiness:
         return TargetRuntimeInspector(self.get(target_id).manifest, self.repository_root).check_readiness()
 
@@ -85,4 +125,8 @@ class TargetCatalog:
 
     def test_runner_for(self, target_id: str) -> RunScopedTestRunner:
         """Return the P1 regression-gate runner for an approved target ID."""
-        return RunScopedTestRunner(self.get(target_id).manifest, self.repository_root)
+        return RunScopedTestRunner(
+            self.get(target_id).manifest,
+            self.source_repository_for(target_id),
+            artifact_root=self.repository_root / ".vibecutter" / "worktrees" / target_id,
+        )
