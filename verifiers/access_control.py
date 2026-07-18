@@ -167,9 +167,10 @@ def probe_from_fixture(fixture: dict | str | Path) -> IdorProbe:
     resources = data.get("resources", {})
     victim = _pick_resource(resources, "victim_marker")
     attacker = _pick_resource(resources, "baseline_path")
+    auth = data.get("auth") if isinstance(data.get("auth"), dict) else data.get("authentication", {})
     return IdorProbe(
         base_url=data["base_url"],
-        auth_mode=data.get("authentication", {}).get("mode", "none"),
+        auth_mode=auth.get("mode", "none") if isinstance(auth, dict) else "none",
         baseline_path=attacker["baseline_path"],
         attack_path=victim["read_path"],
         victim_marker=victim["victim_marker"],
@@ -504,13 +505,16 @@ def mutation_probe_from_fixture(fixture: dict | str | Path) -> MutationProbe:
     )
     victim = _pick_resource(data.get("resources", {}), "safe_mutation")
     sm = victim["safe_mutation"]
-    owner_id = data["roles"][victim.get("owner_role", "user_a")]["id"]
+    observe_path = sm.get("observe_path")
+    if observe_path is None:
+        owner_id = data["roles"][victim.get("owner_role", "user_a")]["id"]
+        observe_path = f"/vocabs/?owner_id={owner_id}"
     body = dict(sm.get("json", {}))
     marker_field = "description" if "description" in body else next(iter(body), "description")
     body.pop(marker_field, None)
     return MutationProbe(
         base_url=data["base_url"],
-        observe_path=f"/vocabs/?owner_id={owner_id}",  # c2-04: 피해자 vocab(설명 포함) 되읽기
+        observe_path=observe_path,
         mutation_method=sm["method"],
         mutation_path=sm["path"],
         mutation_marker=f"vc-write-idor-{uuid4().hex[:8]}",

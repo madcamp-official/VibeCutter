@@ -43,6 +43,14 @@ scoped clean/blocked 결과를 만드는 것이다.
 - `tests/test_apply_patch.py`, `tests/test_catalog.py`, `tests/test_judge.py`: source-root-relative diff가
   manifest 하위 디렉터리(`backend/src/...`) 안에 적용되는 회귀 테스트와 Compose regression overlay
   호출 테스트를 추가했다.
+- `targets/scripts/26s-w1-c2-04-idor-fixture.py`: P3가 요청한 fixture 정규화 계약을 반영했다.
+  기존 `authentication`과 `victim_vocabulary`/`attacker_vocabulary` 필드는 유지하고, 새 consumer용
+  `auth.mode`와 `resources.vocabulary.{attacker_id,victim_id,victim_marker,owner_marker,baseline_path,read_path}`
+  및 `safe_mutation.observe_path`를 함께 출력한다. password/token은 여전히 파일에 저장하지 않는다.
+- `surface/candidates.py`, `verifiers/access_control.py`: 정규화 fixture resource pair와 `auth.mode`
+  alias를 읽도록 보강했다. 기존 c2-04 fixture도 그대로 읽힌다.
+- `tests/test_fixture_contract.py`: 정규화 fixture reader, mutation observe path, c2-04 fixture 스크립트
+  출력(no-secret + legacy/normalized 동시 제공) 회귀 테스트를 추가했다.
 
 ## 제공 인터페이스
 
@@ -70,7 +78,7 @@ scoped clean/blocked 결과를 만드는 것이다.
 
 ## 검증
 
-- 최신 main 통합 후 전체 회귀 182건 PASS. 이 중 P2 관련 항목은 checked-in manifests, catalog, overlay,
+- 최신 main 통합 후 전체 회귀 186건 PASS. 이 중 P2 관련 항목은 checked-in manifests, catalog, overlay,
   worktree test runner, target service, portability, lifecycle, readiness, apply-patch 연동을
   포함하며, 새 provisioning registry/MCP tool/fixture approval 경로도 포함한다.
 - `vc_get_verifier_provisioning(26s-w1-c2-04)` 실제 MCP read 호출이
@@ -81,6 +89,10 @@ scoped clean/blocked 결과를 만드는 것이다.
   확인했다.
 - Compose target regression이 static compose path를 직접 실행하지 않고 `run_overlay_for(...).execute()`
   경로를 타는지 단위 테스트로 확인했다.
+- P3가 요청한 fixture 정규화 계약을 단위 테스트로 확인했다. fixture-file은 `auth.mode` alias,
+  정규화 `resources.<kind>` 쌍, `safe_mutation.observe_path`를 제공하며, legacy reader도 유지된다.
+  실제 `.vibecutter/fixtures/26s-w1-c2-04-idor.json` 재생성은 mutation 단계라 별도 승인 후
+  `vc_prepare_verifier_fixture(26s-w1-c2-04, approved=True)`로 수행한다.
 - 22개 checked-in runtime manifest를 read-only audit했다. 16개는 `ready=True`이고,
   6개(`c1-03`, `c1-05`, `c1-06`, `c1-07`, `c2-01`, `c2-02`)는 필요한 role-fixture 환경변수가
   아직 주입되지 않아 `ready=False`다. source/Compose/실행 파일 오류는 없으며, 이 변수는 P3의
@@ -171,6 +183,8 @@ blocked trajectory 기록)을 확인했다. P2는 `c2-02`부터 실제 batch 결
 write-IDOR verifier를 새 MCP tool로 노출하지 않았고, 대신 closed-loop을 막던 P2/P1 접점인
 patch apply/repoint 경로를 고쳤다. P1이 `vc_verify_mutation` 또는 기존 `vc_verify_access_control`
 확장을 추가하면 P2 runtime/provisioning은 그 결과를 그대로 소비할 수 있다.
+`c2-04` fixture에는 이미 `safe_mutation`과 새 `safe_mutation.observe_path`가 있으므로, P1 tool 배선이
+들어오면 별도 credential 없이 write-IDOR replay input을 만들 수 있다.
 
 ### P3
 
@@ -200,6 +214,9 @@ P3 generic bridge가 들어오면 새 runtime run을 그대로 소비할 수 있
   예: `26s-w1-c1-05`는 manifest `source_dir`가 `.../26s-w1-c1-05/backend`이므로 diff 헤더는
   `+++ b/src/main/.../UserProfileController.java`여야 하며, `+++ b/backend/src/main/...`가 아니다.
   P2는 `vc_apply_patch`와 judge scope/static/build를 이 기준으로 맞췄다.
+- fixture-file은 이제 `auth.mode`와 `resources.<kind>.attacker_id/victim_id/...` 정규화 쌍을 함께
+  제공한다. 기존 c2-04 legacy 필드도 유지하므로 `probe_from_fixture`/`candidate_from_fixture`는
+  계속 동작한다. reset 후에는 승인된 prepare command로 fixture artifact를 새로 만들어야 한다.
 - P3가 공유한 bearer marker nonce 충돌은 P3 verifier 소유 변경으로 본다. P2는 token/password를
   저장하지 않는 provisioning metadata만 제공하며, verifier가 매 replay마다 fresh marker를 만들면 된다.
 - Semgrep의 Python 3.14 호환 실패는 P2 runtime 문제가 아니다. 팀의 실행 기준을 3.11 또는 3.12로
