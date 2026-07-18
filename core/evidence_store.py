@@ -243,6 +243,21 @@ def find_or_create_finding(run_id: str, candidate: Candidate) -> Finding:
     return finding
 
 
+def find_or_create_validation(run_id: str, patch_id: str) -> Validation:
+    """patch → Validation row를 지연 생성한다(judge 6게이트 결과가 누적되는 단일 row).
+
+    `vc_build_and_test`/`vc_replay_attack`/`vc_validate_regression` 세 tool이 각자 맡은
+    게이트만 채우고 나머지는 `None`으로 둔 채 이 row를 공유한다 — `find_or_create_finding()`과
+    같은 지연 생성 패턴.
+    """
+    existing = [v for v in list_by_run(Validation, run_id) if v.patch_id == patch_id]
+    if existing:
+        return existing[0]
+    validation = Validation(id=f"validation-{uuid4().hex[:12]}", run_id=run_id, patch_id=patch_id)
+    save(validation)
+    return validation
+
+
 def write_artifact(
     run_id: str,
     *,
