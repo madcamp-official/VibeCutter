@@ -74,12 +74,15 @@
 
 ### 0. 어제 구멍 메우기 (다른 모든 작업보다 먼저)
 
-- [ ] **구멍① 허구 evidence_id 승격 차단**: `core/evidence_store.py:update_finding_status()`에서 각 `evidence_id`를 `get(Observation, eid)`로 실존 확인 + `Observation.run_id == finding.run_id` 일치 검사 추가. 존재하지 않거나 다른 run 소속이면 예외(`MissingEvidenceError` 재사용 또는 신규 `InvalidEvidenceError`). `transition_finding()`은 순수 함수로 그대로 두고 store 계층에서만 막는다(P3 제안).
-  - [ ] 회귀 테스트: 존재하지 않는 id로 승격 시도 → 실패. 다른 run의 진짜 id로 승격 시도 → 실패. 기존 정상 경로(P3가 확인한 PASS 케이스) → 그대로 통과.
-- [ ] **구멍② secret redaction 소유권 확정 + 구현**: P1이 저장 계층 소유로 확정하고 `write_artifact()` 저장 직전에 redaction을 건다. P3의 `verifiers/access_control.py:redact()`(JSESSIONID/Bearer 토큰/password → `<redacted>`) 로직을 `core/redaction.py`로 승격해 재사용. 완료 후 P3에게 알려 verifier 쪽 임시 `redact()` 호출 제거(이중 redaction 방지) 요청.
-  - [ ] JWT/세션 토큰 포함 데이터로 `write_artifact()` 호출 → 저장된 artifact에 평문이 없는지 재현 테스트.
-- [ ] **구멍③ max_requests 상한 강제**: `mcp_server/tools_analysis.py`의 `vc_verify_*` 세 함수 시그니처를 `max_requests: int = Field(10, ge=1, le=20)`로 변경. 생성된 tool inputSchema에 `minimum: 1, maximum: 20`이 실제로 박히는지 확인(스키마 직접 조회).
-- [ ] **`VerifyResult`/`VerifierOutput` 중복 제거**: 필드가 완전히 같은 두 타입(`mcp_server/tools_analysis.py.VerifyResult`, `verifiers/types.py.VerifierOutput`)을 `contracts/schemas.py`에 `VerificationResult`로 통합하고 양쪽이 import하도록 수정 (verifier가 `mcp_server`를 import하지 않는 의존 방향은 유지 — `contracts`는 공통이라 무방).
+- [x] **구멍① 허구 evidence_id 승격 차단**: `core/evidence_store.py:update_finding_status()`에서 각 `evidence_id`를 `get(Observation, eid)`로 실존 확인 + `Observation.run_id == finding.run_id` 일치 검사 추가. 존재하지 않거나 다른 run 소속이면 신규 `InvalidEvidenceError`. `transition_finding()`은 순수 함수로 그대로 두고 store 계층에서만 막았다(P3 제안대로).
+  - [x] 회귀 테스트(`tests/test_evidence_store.py`): 존재하지 않는 id로 승격 시도 → 실패. 다른 run의 진짜 id로 승격 시도 → 실패. 같은 run의 진짜 id → 정상 승격.
+- [x] **구멍② secret redaction 소유권 확정 + 구현**: P1이 저장 계층 소유로 확정하고 `core/redaction.py`(신규)를 만들어 `write_artifact()` 저장 직전에 적용. P3의 `verifiers/access_control.py:redact()` 패턴(JSESSIONID/Bearer/password)을 승격했고, Bearer 접두사 없이 body에 그냥 박힌 JWT도 잡는 패턴을 추가했다. hash는 저장되는(redaction 후) bytes 기준으로 계산되도록 수정. UTF-8로 디코딩 안 되는 바이너리는 원본 그대로 저장(현재 텍스트 기반 규칙의 한계, 문서화함).
+  - [x] 회귀 테스트(`tests/test_redaction.py`, `tests/test_evidence_store.py`): JWT/Bearer/JSESSIONID/password 평문 미노출, hash-저장 bytes 일치, 바이너리 무변형, redact 멱등성 확인.
+  - [ ] **P3에게 알려 verifier 쪽 임시 `redact()` 호출 제거 요청** — 아직 안 함(오늘 커뮤니케이션 항목에서 처리). 이중 적용은 idempotent라 지금 당장 깨지진 않는다.
+- [x] **구멍③ max_requests 상한 강제**: `mcp_server/tools_analysis.py`의 `vc_verify_*` 세 함수 시그니처를 `Annotated[int, Field(ge=1, le=20)]`(FastMCP가 실제로 스키마 제약을 뽑아내는 패턴 확인 후 적용)로 변경. 생성된 tool inputSchema에 `minimum: 1, maximum: 20, default: 10`이 실제로 박히는 것과, `max_requests=999` 호출이 tool 본문 도달 전 스키마 검증 단계에서 거부되는 것을 `mcp.call_tool()`로 직접 확인.
+- [x] **`VerifyResult`/`VerifierOutput` 중복 제거**: `contracts/schemas.py`에 `VerificationResult`를 신설해 통합. `verifiers/types.py`는 `VerifierOutput = VerificationResult` 별칭으로 바꿔 `verifiers/access_control.py`(P3 소유, 미수정) 등 기존 코드가 변경 없이 그대로 동작한다. `mcp_server/tools_analysis.py`도 이 타입을 사용하도록 변경.
+
+**검증**: 전체 회귀 테스트(P1 신규 10 + P2 31 + 기존) `python -m unittest discover -s tests` 47 passed. P4의 독립 스위트(`scanners.test_batch_scan`/`eval.test_baseline`/`model.test_code_index`/`datasets.inventory`)도 재실행해 스키마 변경 영향 없음 확인.
 
 ### 1. 정책 등록 — target allowlist/command 채우기 (verify tool을 실 target에 붙이기 위한 전제)
 
