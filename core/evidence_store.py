@@ -35,6 +35,7 @@ from contracts.schemas import (
 from core.db import DATA_DIR, get_engine
 from core.redaction import redact
 from core.state_machine import transition_finding
+from scanners.vocab import candidate_owasp, candidate_severity
 
 
 def sha256_of(data: bytes) -> str:
@@ -235,6 +236,8 @@ def find_or_create_finding(run_id: str, candidate: Candidate) -> Finding:
         affected_endpoint=candidate.endpoint,
         source_symbols=list(candidate.source_symbols),
         confidence=candidate.confidence,
+        severity=candidate_severity(candidate),
+        owasp_category=candidate_owasp(candidate),
     )
     save(finding)
     return finding
