@@ -9,7 +9,7 @@ commands:
   start: {argv: [docker, compose, -f, targets/compose/26s-w1-c3-08.yaml, up, -d, --wait], working_dir: ., timeout_seconds: 600}
   stop: {argv: [docker, compose, -f, targets/compose/26s-w1-c3-08.yaml, down, --remove-orphans], working_dir: ., timeout_seconds: 180}
   reset: {argv: [docker, compose, -f, targets/compose/26s-w1-c3-08.yaml, down, --volumes, --remove-orphans], working_dir: ., timeout_seconds: 180}
-  smoke: {argv: [py, "-3.13", targets/scripts/26s-w1-c3-08-smoke.py], working_dir: ., timeout_seconds: 60}
+  smoke: {argv: ["{vibecutter_python}", targets/scripts/26s-w1-c3-08-smoke.py], working_dir: ., timeout_seconds: 60}
 tool_versions: {docker: "29.6.1", docker-compose: "v5.3.0", node: "22", pnpm: "9.15.0", postgres: "16-alpine", next: "15.0.3", prisma: "5.22.0", python: "3.13"}
 healthcheck: {path: /api/health, expected_status: 200, timeout_seconds: 240}
 reset: {command_id: reset, snapshot_name: local-postgres-prisma-v1}

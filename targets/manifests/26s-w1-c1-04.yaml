@@ -22,7 +22,7 @@ commands:
     working_dir: .
     timeout_seconds: 180
   smoke:
-    argv: [py, "-3.13", targets/scripts/26s-w1-c1-04-smoke.py]
+    argv: ["{vibecutter_python}", targets/scripts/26s-w1-c1-04-smoke.py]
     working_dir: .
     timeout_seconds: 60
 tool_versions:
