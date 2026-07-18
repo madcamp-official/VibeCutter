@@ -46,6 +46,9 @@ class VcApplyPatchWiringTests(unittest.TestCase):
     def _fake_service(self) -> MagicMock:
         fake_service = MagicMock()
         fake_service.catalog.worktree_manager_for.return_value = self.worktree_manager
+        # source_dir == repo root in these fixtures: no --directory prefix needed.
+        fake_service.catalog.source_root_for.return_value = self.repo_root
+        fake_service.catalog.source_repository_for.return_value = self.repo_root
         return fake_service
 
     def _run(self, status: RunState = RunState.PATCH_PROPOSED) -> Run:
@@ -90,6 +93,40 @@ class VcApplyPatchWiringTests(unittest.TestCase):
         self.assertEqual(get(Patch, p.id).approval, ApprovalStatus.APPROVED)
         traj_path = TRAJECTORY_DIR / f"{run.id}.jsonl"
         self.assertIn("vc_apply_patch", traj_path.read_text(encoding="utf-8"))
+
+    def test_applies_diff_when_source_dir_is_nested_under_repo_root(self) -> None:
+        """26s-w1-c3-09 스타일: manifest source_dir(예: backend/server)가 git toplevel의
+        하위 디렉터리인 target. patcher는 diff 경로를 source_dir 기준 상대경로로 내므로
+        (예: src/Foo.java), 이를 worktree(git toplevel과 같은 레이아웃)에 적용하려면
+        source_dir 접두사(backend/server/)를 보정해야 git apply가 실제 파일을 찾는다.
+        """
+        nested = self.repo_root / "backend" / "server" / "src"
+        nested.mkdir(parents=True)
+        (nested / "Foo.java").write_text("line1\nline2\nline3\n", encoding="utf-8")
+        _git("add", "backend/server/src/Foo.java", cwd=self.repo_root)
+        _git("commit", "-q", "-m", "add nested file", cwd=self.repo_root)
+
+        run = self._run()
+        # patcher가 낸 diff: source_dir(backend/server) 기준 상대경로, repo 루트 기준이 아님.
+        diff = (
+            "--- a/src/Foo.java\n+++ b/src/Foo.java\n@@ -1,3 +1,3 @@\n"
+            " line1\n-line2\n+CHANGED\n line3\n"
+        )
+        p = self._patch(run.id, diff)
+
+        fake_service = self._fake_service()
+        fake_service.catalog.source_root_for.return_value = self.repo_root / "backend" / "server"
+        fake_service.catalog.source_repository_for.return_value = self.repo_root
+
+        with patch("mcp_server.tools_repair._service", return_value=fake_service):
+            self._call({"patch_id": p.id, "confirmed": True})
+
+        worktree_path = self.worktree_manager.path_for(run.id)
+        self.assertEqual(
+            (worktree_path / "backend" / "server" / "src" / "Foo.java").read_text(),
+            "line1\nCHANGED\nline3\n",
+        )
+        self.assertEqual(get(Run, run.id).status, RunState.PATCH_APPLIED)
 
     def test_rejects_diff_that_escapes_worktree(self) -> None:
         run = self._run()

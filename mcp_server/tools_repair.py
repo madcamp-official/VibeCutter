@@ -108,18 +108,35 @@ def _advance_to_patch_applied(run: Run) -> None:
     save(run)
 
 
-def _git_apply(worktree_path: Path, diff: str) -> None:
+def _patch_directory_prefix(catalog, target_id: str) -> str | None:
+    """patcher(P3)의 diff 기준 경로(`source_root_for` = manifest `source_dir`)를 apply
+    worktree 기준 경로(`source_repository_for` = git toplevel)로 보정할 상대경로.
+
+    `source_dir`가 git toplevel과 같으면(대부분의 target) None — 접두사가 필요 없다.
+    """
+    source_root = catalog.source_root_for(target_id)
+    repo_root = catalog.source_repository_for(target_id)
+    if source_root == repo_root:
+        return None
+    return source_root.relative_to(repo_root).as_posix()
+
+
+def _git_apply(worktree_path: Path, diff: str, *, directory: str | None = None) -> None:
+    """patch.diff를 worktree_path에 적용한다.
+
+    patcher(P3)는 diff 경로를 `catalog.source_root_for(target_id)`(manifest `source_dir`,
+    예: `backend/server`) 기준 상대경로로 낸다. 반면 `worktree_path`는
+    `catalog.source_repository_for(target_id)`(git 저장소 toplevel, `source_dir`의 상위일 수
+    있음)에서 만든 worktree라 두 기준이 다르면 `git apply`가 파일을 못 찾는다. `directory`에
+    `source_dir`의 repo-root 기준 상대경로를 넘기면 `git apply --directory=`가 그 접두사를
+    보정해 준다(patcher/diff 형식은 그대로 두고 apply 쪽에서만 흡수).
+    """
+    argv = ["git", "-c", "core.autocrlf=false", "-C", str(worktree_path), "apply", "--ignore-space-change"]
+    if directory and directory != ".":
+        argv.append(f"--directory={directory}")
+    argv.append("-")
     result = subprocess.run(
-        [
-            "git",
-            "-c",
-            "core.autocrlf=false",
-            "-C",
-            str(worktree_path),
-            "apply",
-            "--ignore-space-change",
-            "-",
-        ],
+        argv,
         input=diff,
         capture_output=True,
         text=True,
@@ -276,7 +293,8 @@ def register(mcp: FastMCP) -> None:
 
         already_applied = _require_patch_proposed_or_applied(run)
 
-        worktree_manager = _service().catalog.worktree_manager_for(run.target_id)
+        catalog = _service().catalog
+        worktree_manager = catalog.worktree_manager_for(run.target_id)
         worktree_path = worktree_manager.path_for(run.id)
         if not worktree_path.exists():
             worktree_path = worktree_manager.create(run.id)
@@ -288,7 +306,7 @@ def register(mcp: FastMCP) -> None:
             assert_diff_within_worktree(patch.diff, worktree_path)
         except ScopeViolationError as exc:
             raise PermissionError(str(exc)) from exc
-        _git_apply(worktree_path, patch.diff)
+        _git_apply(worktree_path, patch.diff, directory=_patch_directory_prefix(catalog, run.target_id))
 
         _advance_to_patch_applied(run)
         patch.approval = ApprovalStatus.APPROVED
