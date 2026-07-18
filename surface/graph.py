@@ -24,6 +24,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from surface.roles import references_current_user
+from surface.routes import _class_prefix_and_name, _join
 
 # --- 경로/시그니처의 자원 id 신호 ---
 _ID_IN_PATH = re.compile(r"\{[^}]*id[^}]*\}|:[A-Za-z_]*id\w*|<[^>]*id[^>]*>", re.IGNORECASE)
@@ -113,6 +114,7 @@ def _iter_sources(root: Path):
 
 
 def _java_handlers(text: str):
+    prefix, _cls = _class_prefix_and_name(text)  # 클래스 레벨 @RequestMapping prefix 결합
     for m in _JAVA_MARK.finditer(text):
         path = m.group(1) or ""
         after = text[m.end() :]
@@ -120,7 +122,7 @@ def _java_handlers(text: str):
         if not sm:
             continue
         brace = after.index("{", sm.end() - 1)
-        yield path, sm.group(1), sm.group(2), _brace_body(after, brace)
+        yield _join(prefix, path), sm.group(1), sm.group(2), _brace_body(after, brace)
 
 
 def _python_handlers(text: str):
