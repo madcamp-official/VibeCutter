@@ -24,6 +24,7 @@ from contracts.schemas import (
     Finding,
     FindingStatus,
     Observation,
+    ObservationType,
     Patch,
     Run,
     RunState,
@@ -99,6 +100,8 @@ class CandidateRow(SQLModel, table=True):
     source_symbols: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     confidence: float | None = None
     signals: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    vuln_class: str | None = None
+    attack_params: dict = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -114,7 +117,7 @@ class FindingRow(SQLModel, table=True):
     severity: str | None = None
     verification_state: str = FindingStatus.CANDIDATE.value
     affected_endpoint: str | None = None
-    affected_role: str | None = None
+    affected_roles: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     source_symbols: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     preconditions: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     reproduction_steps: list[str] = Field(default_factory=list, sa_column=Column(JSON))
@@ -240,7 +243,7 @@ def find_or_create_finding(run_id: str, candidate: Candidate) -> Finding:
 def write_artifact(
     run_id: str,
     *,
-    observation_type: str,
+    observation_type: ObservationType,
     producer: str,
     data: bytes,
     observation_id: str | None = None,

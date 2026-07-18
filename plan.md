@@ -125,18 +125,22 @@
 
 ### 5. 공통 계약 이견 정리 (P3가 "오늘이 사실상 마지막 무료 변경 창구"라고 지목)
 
-- [ ] `Observation.type`을 자유 문자열 대신 고정 값 집합으로: `http_exchange | db_diff | browser_trace | log | route_map | role_map`(P4 trajectory 조인과 직결 — P4에도 확인).
-- [ ] `Candidate`에 `vuln_class` + 최소한의 typed 공격 파라미터(예: `attack_params: dict[str, str]`) 추가 — P3가 IDOR 공격 정보를 `signals`에 key=value 문자열로 욱여넣는 우회를 없앤다.
-- [ ] `Finding.affected_role`(단수) → `affected_roles: list[str]`로 변경(IDOR는 victim/attacker 2역할이 본질).
-- [ ] 위 3건 변경 후 `contracts/schemas.py` 전체 인스턴스화 스모크 테스트 재실행, P3/P4에 변경 내용 공지.
-- [ ] `RootCause` 필드 확장(reachability/ownership/최소 수정 범위/유사 과거 패치, 수정 위치 계층)은 Day3 착수 전 준비로 남기고 오늘은 optional 필드 자리만 예약(로직은 Day3).
+- [x] `Observation.type`을 자유 문자열 대신 고정 값 집합으로: 신규 `ObservationType` StrEnum(`http_exchange | db_diff | browser_trace | log | route_map | role_map`). `verifiers/access_control.py`가 이미 쓰는 `"http_exchange"` 문자열 리터럴은 pydantic이 enum 값으로 그대로 coerce하므로 **P3 파일은 한 글자도 안 바뀌어도 계속 동작**함을 확인.
+- [x] `Candidate`에 `vuln_class: Optional[str]` + `attack_params: dict[str, str]` 추가 — **기존 `signals` 필드는 그대로 유지**(additive만). P3의 `verifiers/access_control.py:probe_from_candidate()`가 여전히 `signals`를 파싱하고, P4의 SAST/SCA candidate도 `signals`의 `focus:`/`severity:` 태그를 그대로 쓴다(grep으로 두 역할의 `.signals` 사용처를 전부 확인 후 결정) — `signals` 우회를 실제로 걷어내는 건 verifier 재작성이 필요해 P3와 조율 후 별도 진행.
+- [x] `Finding.affected_role`(단수) → `affected_roles: list[str]`로 변경. grep으로 이 필드가 스키마 정의 외에는 **아무 데서도 참조되지 않음**을 먼저 확인했고(사용처 0건), 그래서 마이그레이션 걱정 없이 바로 리네임.
+- [x] `core/evidence_store.py`의 SQLModel Row 클래스(`CandidateRow`/`FindingRow`)를 동일하게 동기화, `write_artifact()`의 `observation_type` 타입도 `ObservationType`로.
+- [x] 전체 회귀 테스트 재실행 → **`.vibecutter/evidence.db`가 예전 컬럼 스키마로 이미 존재해 `no such column: candidate.vuln_class`로 19개 실패**. `SQLModel.create_all()`은 기존 테이블에 컬럼을 추가하지 않는다(마이그레이션 도구 없음, D1-P1.md에서 이미 인지한 한계) — `.vibecutter/`는 gitignored 로컬 스크래치라 안전하게 삭제 후 재생성, 64개 전체 + P4 독립 스위트(SAST/SCA/batch/baseline) 재확인 통과.
+- [x] 신규 `tests/test_schema_contract_changes.py`(7건) 추가: `ObservationType`이 알려진 6개 값은 받고 미지 값은 `ValidationError`로 거부하는 것, `write_artifact(observation_type="http_exchange")`처럼 P3가 이미 쓰는 평문 문자열 호출이 여전히 동작하는 것, `Candidate`가 `signals`만 채운 기존 생성 패턴 그대로 동작하는 것 + 새 typed 필드 round-trip, `Finding.affected_roles`(list) round-trip과 예전 `affected_role`(단수) 키워드가 에러 없이 조용히 무시되는 것(extra="forbid" 미설정이 알려진 한계) 확인. 전체 회귀 71개 통과.
+  - 🟡 **팀 전체에 알릴 것**: 지금처럼 스키마를 자유롭게 바꿀 수 있는 건 로컬 DB가 비어 있기 때문이다. **실제 target으로 run이 쌓이기 시작하면(P2 블로커 해소 후) 이후의 스키마 변경은 전원이 각자 로컬 `.vibecutter/evidence.db`를 지워야 하거나 마이그레이션이 필요**해진다 — 이번이 사실상 마지막 무료 변경 창구라는 P3의 지적이 코드로도 확인됨.
+- [ ] `RootCause` 필드 확장(reachability/ownership/최소 수정 범위/유사 과거 패치, 수정 위치 계층)은 Day3 착수 전 준비로 남기고 오늘은 손대지 않음(로직은 Day3).
 
 ### 오늘 커뮤니케이션
 
-- [ ] **P3와 아침 첫 동기화(최우선)**: 구멍①②③ 수정 계획 공유, `VerifyResult`/`VerifierOutput` 통합 방향 확인, verify tool 본문 소유권이 P1이라는 전제(D1-P3.md 제안대로) 최종 확인, `verifiers/access_control.py`의 임시 `redact()` 제거 시점 조율.
+- [ ] **P3에게**: (a) 구멍①②③ 수정 완료 + `VerifyResult`/`VerifierOutput`을 `contracts.schemas.VerificationResult`로 통합 완료(별칭으로 `verifiers/types.py`도 갱신했지만 `verifiers/access_control.py`는 무수정) 공유. (b) `verifiers/access_control.py`의 임시 `redact()`는 저장 계층(`core/redaction.py`)에서도 동일 규칙으로 다시 걸리니 지금 당장 지우지 않아도 안전(idempotent) — 다만 중복 유지보수 피하려면 제거 시점 확인 요청. (c) `Candidate.vuln_class`/`attack_params` 필드를 추가했다(기존 `signals` 파싱은 그대로 둠) — 새 필드로 옮겨 갈지, 언제 옮길지는 P3 판단에 맡기고 강제하지 않았다는 것 공유. (d) verify tool 본문(P1 소유) 실배선 완료, `vc_verify_access_control`이 `verifiers.access_control.verify()`를 그대로 호출한다는 것 확인 요청.
 - [ ] **P2에게**: (a) 🔴 `targets/manifests/{26s-w1-c2-05,26s-w1-c2-08,26s-w1-c3-04}.yaml`의 `role_fixtures[].secret_env_names`가 `VIBECUTTER_*` 규칙을 어겨 `TargetCatalog.load()`가 전체 실패하는 것 최우선 수정 요청(지금은 어떤 target도 `vc_register_target`/`build`/`start`/`check_readiness`가 안 됨). (b) 🟡 `runtime/target_service.py` build 실패 경로의 `target.id`(존재 안 함) → `target.manifest.id` 오타 수정 요청. (c) `policies/scope.yaml`/`commands.yaml` 등록 내용(host/port) 최종 확인. (d) IDOR 검증 가능한 target(2 사용자 + 각자 소유 자원) 1개 지정 요청, role fixture(로그인 endpoint + 자격증명 + seed 자원 id) 요청.
-- [ ] **P4에게**: `Observation.type` 값 집합에 `http_exchange` 포함 확정 요청, batch scan JSONL(`candidates/<app>.candidates.jsonl` + `summary.json`) 산출물을 evidence/candidate store가 흡수할 포맷 확정, inventory(41개) vs `targets/`(21개 manifest) 단일 진실 소스 합의(P2/P4 상충 지점 중재).
-- [ ] **저녁 handoff**: `docs/handoffs/D2-P1.md`에 "구멍①②③ 수정 완료, scope/commands 등록 완료, verify 경로 실배선 완료(access_control만, injection/xss는 배선만), judge는 attack gate만 실동작·나머지 5게이트는 인터페이스만, 계약 변경 3건(Observation.type/Candidate.vuln_class/Finding.affected_roles)" 명시. P3/P2/P4에 필요한 다음 정보 요청 남기기.
+- [ ] **P4에게**: `Observation.type`을 `ObservationType` enum으로 고정 완료(`http_exchange` 포함이라 기존 코드 영향 없음) 공유, batch scan JSONL(`candidates/<app>.candidates.jsonl` + `summary.json`) 산출물을 evidence/candidate store가 흡수할 포맷 확정, inventory(41개) vs `targets/`(21개 manifest) 단일 진실 소스 합의(P2/P4 상충 지점 중재).
+- [ ] **전원에게**: 스키마 변경 시 로컬 `.vibecutter/evidence.db`를 지워야 한다는 것 공유(오늘 섹션 5에서 실제로 겪음 — `SQLModel.create_all()`은 기존 테이블에 컬럼을 추가하지 않아 컬럼 추가/리네임 후엔 `no such column` 에러가 남). 마이그레이션 도구 도입 여부는 Day3 이후 논의.
+- [ ] **저녁 handoff**: `docs/handoffs/D2-P1.md`에 "구멍①②③ 수정 완료, scope/commands 등록 완료(P2 manifest 블로커로 실제 round-trip은 subset 검증까지), verify 경로 실배선 완료(access_control만, injection/xss는 배선만), judge는 attack gate만 실동작·나머지 5게이트는 인터페이스만, 계약 변경 3건(Observation.type/Candidate.vuln_class·attack_params/Finding.affected_roles) 전부 additive/무해 확인, findings resource 실데이터 연동" 명시. P3/P2/P4에 필요한 다음 정보 요청 남기기.
 
 ---
 
