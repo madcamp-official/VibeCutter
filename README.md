@@ -39,7 +39,7 @@ docs/handoffs/  역할별 일일 handoff 기록
 ## 설정
 
 ```bash
-python3.11 -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
