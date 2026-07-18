@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from contracts.schemas import Run, Target
 from core.audit_log import audited
 from runtime.target_service import TargetRuntimeService
+from runtime.provisioning import VerifierProvisioning
 
 
 class StackInfo(BaseModel):
@@ -38,6 +39,12 @@ class RuntimeHandleInfo(BaseModel):
 class ResetResult(BaseModel):
     target_id: str
     ok: bool
+
+
+class FixturePreparationResult(BaseModel):
+    target_id: str
+    fixture_available: bool
+    fixture_path: str | None = None
 
 
 def _service() -> TargetRuntimeService:
@@ -66,6 +73,23 @@ def register(mcp: FastMCP) -> None:
         """target이 등록/빌드/실행 가능한 상태인지 확인한다."""
         readiness = _service().check_readiness(target_id)
         return ReadinessResult(target_id=target_id, ready=readiness.ready, reasons=readiness.issues)
+
+    @mcp.tool()
+    @audited
+    def vc_get_verifier_provisioning(target_id: str) -> VerifierProvisioning:
+        """P2 replay contract: fixed base URL, auth mode, fixture strategy, and no-secret metadata only."""
+        return _service().verifier_provisioning(target_id)
+
+    @mcp.tool()
+    @audited
+    def vc_prepare_verifier_fixture(target_id: str, approved: bool) -> FixturePreparationResult:
+        """Create a manifest-declared verifier fixture; explicit approval is required."""
+        provisioning = _service().prepare_verifier_fixture(target_id, approved=approved)
+        return FixturePreparationResult(
+            target_id=target_id,
+            fixture_available=provisioning.fixture_available,
+            fixture_path=provisioning.fixture_path,
+        )
 
     @mcp.tool()
     @audited

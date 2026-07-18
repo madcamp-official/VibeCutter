@@ -21,6 +21,7 @@ from core.state_machine import transition
 from .catalog import RegisteredRuntimeTarget, TargetCatalog
 from .lifecycle import ApprovalRequired
 from .manifest import TargetManifest
+from .provisioning import ProvisioningStrategy, VerifierProvisioning
 
 
 class TargetOperationError(RuntimeError):
@@ -110,6 +111,34 @@ class TargetRuntimeService:
         if not approved:
             raise ApprovalRequired("vc_reset_target requires explicit approval")
         return self.catalog.adapter_for(target_id).reset(approved=True).status == "passed"
+
+    def verifier_provisioning(self, target_id: str) -> VerifierProvisioning:
+        """Expose only checked-in verifier replay metadata for an allowed target."""
+        self._require_authorized(target_id)
+        return self.catalog.verifier_provisioning_for(target_id)
+
+    def prepare_verifier_fixture(self, target_id: str, *, approved: bool) -> VerifierProvisioning:
+        """Run a fixed, approved fixture command when the target declares one.
+
+        This is intentionally unavailable for self-signup targets: P3's verifier
+        creates those ephemeral accounts in memory and must not persist secrets.
+        """
+        self._require_operation(target_id, "provision_target")
+        if not approved:
+            raise ApprovalRequired("verifier fixture preparation requires explicit approval")
+        provisioning = self.catalog.verifier_provisioning_for(target_id)
+        if provisioning.strategy is not ProvisioningStrategy.FIXTURE_FILE:
+            raise TargetOperationError(
+                f"target {target_id} has no P2-managed fixture-file provisioning path"
+            )
+        assert provisioning.fixture_command_id is not None
+        result = self.catalog.lifecycle_for(target_id).execute(provisioning.fixture_command_id)
+        if result.status != "passed":
+            raise TargetOperationError(f"verifier fixture preparation failed for target {target_id}")
+        refreshed = self.catalog.verifier_provisioning_for(target_id)
+        if not refreshed.fixture_available:
+            raise TargetOperationError(f"verifier fixture artifact missing for target {target_id}")
+        return refreshed
 
     def reset_run(self, target_id: str, run_id: str, *, approved: bool) -> bool:
         """Remove one approved patched runtime and its target-source worktree.

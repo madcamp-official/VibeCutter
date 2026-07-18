@@ -1,0 +1,14 @@
+# P2-owned verifier provisioning declarations. This file contains no credential,
+# token, account value, or arbitrary command. Commands must already be fixed in
+# the corresponding target manifest.
+targets:
+  26s-w1-c2-04:
+    strategy: fixture_file
+    auth_mode: none
+    fixture_command_id: prepare_idor_fixture
+    fixture_path: .vibecutter/fixtures/26s-w1-c2-04-idor.json
+    notes: P2 creates two local users and private resources; P3 reads only no-secret replay metadata.
+  26s-w1-c1-05:
+    strategy: self_signup
+    auth_mode: bearer
+    notes: P3 verifier self-signs up two ephemeral local users and keeps bearer tokens in memory only.

@@ -143,3 +143,11 @@ class TargetCatalog:
             self.source_repository_for(target_id),
             artifact_root=self.repository_root / ".vibecutter" / "worktrees" / target_id,
         )
+
+    def verifier_provisioning_for(self, target_id: str):
+        """Return trusted P2 replay provisioning metadata for P1/P3."""
+        from .provisioning import ProvisioningRegistry
+
+        registry = ProvisioningRegistry(self.repository_root)
+        registry.load()
+        return registry.plan_for(self.get(target_id).manifest)

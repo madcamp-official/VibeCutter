@@ -27,6 +27,7 @@ def manifest_data() -> dict:
             "start": {"argv": argv},
             "stop": {"argv": argv},
             "reset": {"argv": argv},
+            "prepare_fixture": {"argv": argv},
         },
         "reset": {"command_id": "reset"},
         "tool_versions": {"python": "3.11"},
@@ -54,6 +55,7 @@ class TargetRuntimeServiceTests(unittest.TestCase):
                         "build_target": {"args": {"target_id": "str"}},
                         "start_target": {"args": {"target_id": "str"}},
                         "reset_target": {"args": {"target_id": "str"}},
+                        "provision_target": {"args": {"target_id": "str"}},
                     }
                 }
             ),
@@ -71,14 +73,46 @@ class TargetRuntimeServiceTests(unittest.TestCase):
             save_run=self.saved_runs.append,
         )
 
+        fixture_script = self.root / "write_fixture.py"
+        fixture_script.write_text(
+            "from pathlib import Path\n"
+            "path = Path('.vibecutter/fixtures/demo-api.json')\n"
+            "path.parent.mkdir(parents=True, exist_ok=True)\n"
+            "path.write_text('{}', encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+        configured = manifest_data()
+        configured["commands"]["prepare_fixture"] = {"argv": [sys.executable, "write_fixture.py"]}
+        self.manifest_path.write_text(yaml.safe_dump(configured, sort_keys=False), encoding="utf-8")
+        provisioning_path = self.root / "targets" / "verifier_provisioning.yaml"
+        provisioning_path.write_text(
+            yaml.safe_dump(
+                {
+                    "targets": {
+                        "demo-api": {
+                            "strategy": "fixture_file",
+                            "auth_mode": "none",
+                            "fixture_command_id": "prepare_fixture",
+                            "fixture_path": ".vibecutter/fixtures/demo-api.json",
+                            "notes": "test fixture only",
+                        }
+                    }
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        self.service.catalog.load()
+
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
     def test_register_requires_identical_checked_in_manifest_and_scope(self) -> None:
-        target = self.service.register(manifest_data())
+        checked_in = self.service.catalog.get("demo-api").manifest.model_dump(mode="json")
+        target = self.service.register(checked_in)
         self.assertEqual(target.id, "demo-api")
         self.assertEqual(len(self.saved_targets), 1)
-        changed = manifest_data()
+        changed = dict(checked_in)
         changed["base_url"] = "http://127.0.0.1:18081"
         with self.assertRaises(PolicyViolation):
             self.service.register(changed)
@@ -122,6 +156,20 @@ class TargetRuntimeServiceTests(unittest.TestCase):
     def test_reset_run_requires_explicit_approval_before_runtime_cleanup(self) -> None:
         with self.assertRaises(PermissionError):
             self.service.reset_run("demo-api", "run-1", approved=False)
+
+    def test_verifier_provisioning_exposes_only_trusted_metadata(self) -> None:
+        plan = self.service.verifier_provisioning("demo-api")
+        self.assertEqual(plan.base_url, "http://127.0.0.1:18080")
+        self.assertEqual(plan.auth_mode, "none")
+        self.assertEqual(plan.fixture_command_id, "prepare_fixture")
+        self.assertFalse(plan.fixture_available)
+
+    def test_prepare_verifier_fixture_requires_approval_and_runs_fixed_command(self) -> None:
+        with self.assertRaises(PermissionError):
+            self.service.prepare_verifier_fixture("demo-api", approved=False)
+        plan = self.service.prepare_verifier_fixture("demo-api", approved=True)
+        self.assertTrue(plan.fixture_available)
+        self.assertEqual(plan.fixture_path, ".vibecutter/fixtures/demo-api.json")
 
     def test_port_mismatch_is_rejected_before_command_execution(self) -> None:
         self.scope_path.write_text(

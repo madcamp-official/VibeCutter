@@ -17,3 +17,6 @@ commands:
   reset_target:
     args:
       target_id: str
+  provision_target:
+    args:
+      target_id: str

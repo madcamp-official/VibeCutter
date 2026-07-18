@@ -1,104 +1,92 @@
 # Remaining Target Execution Plan
 
-## Scope gate
+## 실행 범위
 
-**Notion 체크리스트에서 체크된 `target_id`만 실행 대상이다.** `datasets/inventory.yaml`, P2 manifest,
-readiness, P3 prefilter는 실행 가능성·우선순위를 알려주는 보조 정보일 뿐, 실행 범위를 결정하지 않는다.
+Notion 체크는 우선순위 신호로 사용하되, **P2가 manifest·loopback runtime·readiness로 실행 가능하다고
+판정한 W1 target은 미체크여도 진행 후보에 포함한다.** 이 문서의 active queue는 P2 executable
+manifest 22개에서 이미 P3 결과가 있는 4개 reference target을 뺀 18개다.
 
-현재 repository에는 Notion 체크 상태가 동기화되어 있지 않다. 따라서 P2 manifest 22개 중 P3가 이미
-결과를 남긴 4개를 제외한 18개도 실행 대상이 아니라 **후보 pool**이다. 체크된 목록이 이 문서의 slot에
-반영되기 전에는 build, scan, attack, fixture 생성 대상으로 진행하지 않는다.
+- reference: `c1-05`(수동 closed-loop), `c2-04`(read/write IDOR), `c2-05`(clean),
+  `c3-08`(검토 표면 방어됨)
+- active candidate queue: 18개
+- W2·기타 inventory는 아직 P2 manifest/runtime contract가 없으므로 backlog다. P2가 viability를
+  확인하면 다음 batch에 별도 추가한다.
 
-이미 P3 evidence/정찰 결과가 있는 아래 target은 reference로 유지하며 재발견 queue에 넣지 않는다.
+## 배분 (P1 5 / P2 5 / P3 8)
 
-- `26s-w1-c1-05`: JWT IDOR live 검증 및 수동 closed-loop
-- `26s-w1-c2-04`: read/write IDOR live verified, verifier/fixture 회귀 기준
-- `26s-w1-c2-05`: IDOR 음성(clean), precision 기준
-- `26s-w1-c3-08`: 확인한 표면에서 방어됨(OAuth provisioning 제한)
+P3가 직접 security verification을 8개 수행해 P1/P2보다 많은 실행량을 맡는다. 이는 repository의
+독점 소유가 아니라 batch lead 배정이며, `verified`/`fixed`는 언제나 P1 evidence/judge가 판정한다.
 
-Notion에서 체크되지 않은 W1/W2/기타 repository는 manifest가 있더라도 **excluded**다. 별도 사용자
-지시나 체크리스트 갱신 없이는 Dockerize·scan·attack 대상으로 승격하지 않는다.
+### P1 — orchestration/candidate-store lead (5개)
 
-## 역할별 capacity 계획 (P1 5 / P2 5 / P3 8)
-
-아래는 체크된 target을 받을 때의 처리 용량이다. P3의 직접 보안 검증량을 P1·P2보다 크게 배정한다.
-각 slot의 실제 `target_id`는 Notion 체크 목록을 받은 뒤에만 채운다.
-
-| 역할 | slot 수 | 배정 기준 | 산출물 |
-| --- | ---: | --- | --- |
-| P1 | 5 | 체크된 target 중 readiness가 확보된 항목 | policy-allowed run, typed Candidate 연결, judge/report 입력 |
-| P2 | 5 | 체크된 target 중 fixture·runtime blocker가 있는 항목 | readiness/base URL/reset/fixture schema 또는 blocked 근거 |
-| P3 | 8 | 체크된 target 중 readiness가 확보된 항목 | prefilter → candidate → verifier/evidence 또는 clean/blocked 근거 |
-
-### P1 slots
-
-| slot | Notion 체크 target_id | 완료 조건 |
+| target_id | stack | P1 완료 조건 |
 | --- | --- | --- |
-| P1-1 ~ P1-5 | 체크 목록 반영 전 | surface shortlist → Candidate/run → policy/report 연결 |
+| `26s-w1-c3-09` | Spring | holdout clean-room policy/run/report 경로 |
+| `26s-w1-c3-03` | Node | suspect/candidate/evidence store 연결 |
+| `26s-w1-c3-04` | Node | suspect/candidate/evidence store 연결 |
+| `26s-w1-c3-05` | Node | suspect/candidate/evidence store 연결 |
+| `26s-w1-c2-08` | Django/generic | candidate 생성 또는 class-view 제한 기록 |
 
-P1은 P3의 `find_idor_suspects(source_root)` 결과와 P4 scan 후보를 typed `Candidate`로 연결한다.
-`audit_local_target`가 구현되기 전에는 개별 MCP tool 호출 순서와 run ID를 handoff에 기록한다.
+### P2 — provisioning/runtime unblock lead (5개)
 
-### P2 slots
-
-| slot | Notion 체크 target_id | 완료 조건 |
+| target_id | 현재 상태 | P2 완료 조건 |
 | --- | --- | --- |
-| P2-1 ~ P2-5 | 체크 목록 반영 전 | readiness/base URL/reset/fixture schema 또는 blocked 기록 |
+| `26s-w1-c1-03` | role fixture 필요 | fixture contract 또는 blocked 근거 |
+| `26s-w1-c1-07` | role fixture 필요 | seed/login fixture 또는 blocked 근거 |
+| `26s-w1-c2-01` | role fixture 필요 | two-role fixture 또는 blocked 근거 |
+| `26s-w1-c2-02` | role fixture 필요 | seed/login fixture 또는 blocked 근거 |
+| `26s-w1-c1-06` | XSS focus, role fixture 필요 | runtime 필요성/fixture 또는 blocked 근거 |
 
-P2는 fixed build/start/reset 계약을 유지한다. P3가 제공한 인증·seed 계약이 있을 때만 fixture를 만들며,
-자격증명·seed·token을 추측하거나 handoff/evidence에 저장하지 않는다.
+P2는 `vc_get_verifier_provisioning(target_id)`로 base URL, auth mode, fixture strategy를 먼저 제공한다.
+fixture-file 생성은 `vc_prepare_verifier_fixture(target_id, approved=True)`만 사용하며, P3 계약이 없는
+인증/seed를 추측하지 않는다.
 
-### P3 slots
+### P3 — direct security verification lead (8개)
 
-| slot | Notion 체크 target_id | 완료 조건 |
+| batch | target_id | stack | 우선 작업 |
 | --- | --- | --- |
-| P3-1 ~ P3-8 | 체크 목록 반영 전 | prefilter → candidate → verifier/evidence 또는 clean/blocked 근거 |
+| A | `26s-w1-c2-03` | FastAPI | prefilter → candidate → verify |
+| A | `26s-w1-c3-06` | FastAPI | prefilter → candidate → verify |
+| A | `26s-w1-c1-02` | Node | route/controller ownership surface |
+| A | `26s-w1-c1-04` | Node | route/controller ownership surface |
+| B | `26s-w1-c1-01` | generic/mixed | manifest adapter 기준 surface |
+| B | `26s-w1-c2-06` | Django/generic | decorator route 지원 범위 IDOR |
+| B | `26s-w1-c2-07` | Node/Next | API route ownership surface |
+| B | `26s-w1-c3-02` | Django/generic | decorator route 지원 범위 IDOR |
 
-P3는 우선순위 높은 endpoint만 typed candidate로 만들고 verifier를 실행한다. target별 결과는 다음 중
-하나여야 한다.
+P3 target 완료 조건은 `verified/rejected` evidence, patch 후보, clean 근거, 또는 provisioning blocker 중
+하나다. 원본 source에는 patch를 적용하지 않는다.
 
-1. `candidate → verified/rejected`와 redacted evidence
-2. 실현 가능한 patch target이면 root cause와 `Patch(approval=PENDING)`
-3. 인증/seed가 없으면 필요한 fixture 계약과 재현 불가 사유
-4. candidate가 없으면 검토 범위·prefilter 결과·clean 근거
-
-## 협업 흐름
+## 자동 batch 연결 계약
 
 ```text
-Notion checked target_id
-        │
-        ├── P1: target/run/policy/candidate 연결
-        ├── P2: readiness/fixture/base URL 제공
-        └── P3: prefilter/verifier/evidence
-                                      │
-                                      ▼
-P1: deterministic judge / patch approval
-        │
-        ▼
+P2: register/build/start → vc_get_verifier_provisioning
+       │                         │
+       │                         ├─ fixture_file: 승인된 prepare fixture
+       │                         ├─ self_signup: P3 verifier가 ephemeral 계정 생성
+       │                         └─ fixture required: P3 계약을 받아 P2가 준비
+       ▼
+P3: find_idor_suspects(source_root) → verifiable Candidate → verify_candidate
+       ▼
+P1: Candidate/evidence 저장, 상태 전이, patch 승인과 judge
+       ▼
 P2: patched worktree overlay build/start + regression
-        │
-        ▼
-P3: replay attack + positive-function evidence
-        │
-        ▼
+       ▼
+P3: replay attack + positive functionality evidence
+       ▼
 P1: FIXED / RETRY / HUMAN_REVIEW
-        │
-        ▼
+       ▼
 P4: evidence+validation-linked trajectory/report only
 ```
 
-## Handoff contract
+상세 입력·출력·호출 순서는 [Verifier Batch Interface](VERIFIER_BATCH_INTERFACE.md)를 단일 기준으로
+사용한다.
 
-각 target 작업 뒤에는 다음만 기록한다.
+## Handoff 최소 필드
 
 - `target_id`, run ID, source commit
-- Notion 체크 근거와 prefilter 후보 수/선택 endpoint
-- runtime readiness/base URL/fixture schema(이름만, secret 값 제외)
-- candidate/evidence/validation ID 또는 clean·blocked 근거
+- provisioning strategy/auth mode/base URL/fixture artifact 상태(값·secret 제외)
+- prefilter 후보 수와 선택 endpoint
+- Candidate/evidence/validation ID 또는 clean·blocked 근거
 - patch가 있으면 worktree ID와 reset 여부
-- 다음 역할에 필요한 한 가지 입력
-
-## 다음 동기화
-
-Notion의 체크된 `target_id` 목록을 이 문서의 P1/P2/P3 slot에 채운 뒤에만 실제 작업을 시작한다.
-그 뒤 manifest/readiness와 P3 prefilter 결과를 사용해 P1 5, P2 5, P3 8의 순서로 배정한다.
+- 다음 역할이 수행할 한 가지 입력
