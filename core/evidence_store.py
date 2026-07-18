@@ -211,6 +211,32 @@ def list_by_run(model_cls: type, run_id: str) -> list:
         return [model_cls(**row.model_dump()) for row in rows]
 
 
+def find_or_create_finding(run_id: str, candidate: Candidate) -> Finding:
+    """candidate → Finding 승격을 지연 생성한다.
+
+    이 저장소 어디에도 Candidate에서 Finding을 만드는 코드가 없었다(Day2 verify tool
+    실배선 전까지는 이 경로 자체가 없었기 때문). `vc_verify_*` tool 본문이 처음 호출될 때
+    finding_id 없이 candidate_id만 받으므로, 여기서 run_id+candidate_id로 기존 Finding을
+    먼저 찾고 없으면 `CANDIDATE` 상태로 새로 만든다 — 같은 candidate를 여러 번 재검증해도
+    (예: 정책 위반으로 재시도) Finding이 중복 생성되지 않는다.
+    """
+    existing = [f for f in list_by_run(Finding, run_id) if f.candidate_id == candidate.id]
+    if existing:
+        return existing[0]
+    finding = Finding(
+        id=f"finding-{uuid4().hex[:12]}",
+        run_id=run_id,
+        candidate_id=candidate.id,
+        title=f"candidate {candidate.id} ({candidate.cwe or 'unclassified'})",
+        cwe=candidate.cwe,
+        affected_endpoint=candidate.endpoint,
+        source_symbols=list(candidate.source_symbols),
+        confidence=candidate.confidence,
+    )
+    save(finding)
+    return finding
+
+
 def write_artifact(
     run_id: str,
     *,
