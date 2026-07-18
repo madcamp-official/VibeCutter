@@ -104,6 +104,23 @@ class TargetCatalog:
             raise ValueError("target Git repository is outside managed source clones")
         return repository
 
+    def source_relative_path_for(self, target_id: str) -> Path:
+        """Return manifest.source_dir relative to the managed target Git repository."""
+        source_root = self.source_root_for(target_id)
+        repository = self.source_repository_for(target_id)
+        try:
+            return source_root.relative_to(repository)
+        except ValueError as exc:
+            raise ValueError("target source directory is outside its Git repository") from exc
+
+    def run_source_root_for(self, target_id: str, run_id: str) -> Path:
+        """Return the manifest source directory inside a run-scoped target worktree."""
+        worktree_path = self.worktree_manager_for(target_id).path_for(run_id).resolve()
+        run_source_root = (worktree_path / self.source_relative_path_for(target_id)).resolve()
+        if run_source_root != worktree_path and worktree_path not in run_source_root.parents:
+            raise ValueError("run source directory escapes target worktree")
+        return run_source_root
+
     def worktree_manager_for(self, target_id: str):
         """Create run worktrees from the target app repository, not VibeCutter itself."""
         from .worktree import WorktreeManager

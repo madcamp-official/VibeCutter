@@ -43,9 +43,12 @@ class VcApplyPatchWiringTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
-    def _fake_service(self) -> MagicMock:
+    def _fake_service(self, source_subdir: str = ".") -> MagicMock:
         fake_service = MagicMock()
         fake_service.catalog.worktree_manager_for.return_value = self.worktree_manager
+        fake_service.catalog.run_source_root_for.side_effect = (
+            lambda _target_id, run_id: self.worktree_manager.path_for(run_id) / source_subdir
+        )
         return fake_service
 
     def _run(self, status: RunState = RunState.PATCH_PROPOSED) -> Run:
@@ -90,6 +93,33 @@ class VcApplyPatchWiringTests(unittest.TestCase):
         self.assertEqual(get(Patch, p.id).approval, ApprovalStatus.APPROVED)
         traj_path = TRAJECTORY_DIR / f"{run.id}.jsonl"
         self.assertIn("vc_apply_patch", traj_path.read_text(encoding="utf-8"))
+
+    def test_applies_source_root_relative_diff_inside_manifest_subdirectory(self) -> None:
+        backend_src = self.repo_root / "backend" / "src"
+        backend_src.mkdir(parents=True)
+        (backend_src / "Foo.java").write_text("line1\nline2\nline3\n", encoding="utf-8")
+        _git("add", "backend/src/Foo.java", cwd=self.repo_root)
+        _git("commit", "-q", "-m", "backend source", cwd=self.repo_root)
+
+        run = self._run()
+        diff = (
+            "--- a/src/Foo.java\n+++ b/src/Foo.java\n@@ -1,3 +1,3 @@\n"
+            " line1\n-line2\n+PATCHED\n line3\n"
+        )
+        p = self._patch(run.id, diff)
+
+        with patch("mcp_server.tools_repair._service", return_value=self._fake_service("backend")):
+            self._call({"patch_id": p.id, "confirmed": True})
+
+        worktree_path = self.worktree_manager.path_for(run.id)
+        self.assertEqual(
+            (worktree_path / "backend" / "src" / "Foo.java").read_text(encoding="utf-8"),
+            "line1\nPATCHED\nline3\n",
+        )
+        self.assertEqual(
+            (self.repo_root / "backend" / "src" / "Foo.java").read_text(encoding="utf-8"),
+            "line1\nline2\nline3\n",
+        )
 
     def test_rejects_diff_that_escapes_worktree(self) -> None:
         run = self._run()

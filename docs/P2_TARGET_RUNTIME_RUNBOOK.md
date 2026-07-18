@@ -1,7 +1,9 @@
 # P2 Target Runtime Runbook
 
-P2는 승인된 manifest의 격리 build/start/reset/worktree만 제공한다. 취약점 재현,
-evidence 저장, `verified`/`fixed` 판정은 P3/P1 소유다.
+이 문서는 P2 runtime 계약이다. P2가 target audit operator로 일할 때는 공통 verifier/judge를
+사용해 취약점 재현과 evidence 생성도 수행할 수 있지만, runtime 계층 자체의 책임은 승인된
+manifest의 격리 build/start/reset/worktree 제공으로 제한한다. `verified`/`fixed` 최종 판정은
+항상 evidence와 deterministic judge를 거친다.
 
 ## Clean-room 후보
 
@@ -26,10 +28,16 @@ worktree-only static preflight를 통과했고, 검증용 worktree는 즉시 제
 
 ## 자동 closed-loop 연결 상태
 
-P2의 run-scoped Compose overlay, worktree regression runner, `reset_run()`은 구현되어 있다.
-하지만 P1의 현재 `check_build()`는 worktree manifest만 만들고 static Compose working directory를
-그대로 사용하므로, Compose 기반 target에서 overlay를 아직 호출하지 않는다. 따라서 이 경로만으로는
-patched source가 build됐다고 판단하면 안 된다.
+P2의 run-scoped Compose overlay, patched source-root projection, worktree regression runner,
+`reset_run()`은 구현되어 있다. P1 judge의 `check_build()`와 `check_regression()`은 Compose 기반
+target에서 `catalog.run_overlay_for(target_id, run_id)`를 사용하므로, checked-in Compose가 원본
+source clone을 보지 않고 run-scoped worktree build context를 보게 된다.
+
+Patch diff는 `catalog.source_root_for(target_id)` 기준 상대 경로여야 한다. `source_dir`가 target
+Git repository의 하위 디렉터리(예: `backend`, `main`, `backend/server`)인 경우에도
+`vc_apply_patch`는 `catalog.run_source_root_for(target_id, run_id)`에서 `git apply`를 실행한다.
+따라서 P3 patcher는 repo-root 기준 `backend/src/...`가 아니라 source-root 기준 `src/...` diff를
+생성해야 한다.
 
 P1의 승인된 patch run은 아래 순서로 P2 인터페이스를 호출해야 한다.
 
@@ -37,8 +45,9 @@ P1의 승인된 patch run은 아래 순서로 P2 인터페이스를 호출해야
 2. `catalog.run_overlay_for(target_id, run_id).prepare()`로 generated Compose와 isolation 검사를
    만든다.
 3. `overlay.execute("build")` → `overlay.execute("start")` → health를 실행한다.
-4. P3가 그 patched instance에 attack replay/정상 기능 검증을 수행하고, P2는
-   `catalog.test_runner_for(target_id).run(run_id)`로 manifest-declared regression을 실행한다.
+4. P3가 그 patched instance에 attack replay/정상 기능 검증을 수행하고, regression은
+   Compose target이면 `overlay.execute(<test command_id>)`, source-native target이면
+   `catalog.test_runner_for(target_id).run(run_id)`로 실행한다.
 5. 종료·kill switch는 `TargetRuntimeService.reset_run(target_id, run_id, approved=True)`로만 한다.
 
 generated Compose는 원본의 loopback port mapping을 보존한다. baseline instance가 같은 포트를

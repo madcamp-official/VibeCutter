@@ -76,9 +76,10 @@ def _run_and_patch_with_worktree(worktree: Path) -> tuple[Run, Patch]:
     return run, p
 
 
-def _fake_service_with_worktree(worktree: Path) -> MagicMock:
+def _fake_service_with_worktree(worktree: Path, source_root: Path | None = None) -> MagicMock:
     fake_service = MagicMock()
     fake_service.catalog.worktree_manager_for.return_value.path_for.return_value = worktree
+    fake_service.catalog.run_source_root_for.return_value = source_root or worktree
     return fake_service
 
 
@@ -87,13 +88,15 @@ class CheckBuildTests(unittest.TestCase):
         import tempfile
 
         with tempfile.TemporaryDirectory() as td:
-            worktree = Path(td)
+            worktree = Path(td) / "repo"
+            source_root = worktree / "backend"
+            source_root.mkdir(parents=True)
             run, p = _run_and_patch_with_worktree(worktree)
 
             fake_manifest = MagicMock()
             fake_manifest.docker_isolation = None
             fake_manifest.model_copy.return_value = fake_manifest
-            fake_service = _fake_service_with_worktree(worktree)
+            fake_service = _fake_service_with_worktree(worktree, source_root)
             fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest)
 
             fake_lifecycle_instance = MagicMock()
@@ -105,20 +108,22 @@ class CheckBuildTests(unittest.TestCase):
                 patch("runtime.lifecycle.LifecycleManager", fake_lifecycle_cls),
             ):
                 self.assertTrue(check_build(run.id, p.id))
-            fake_lifecycle_cls.assert_called_once_with(fake_manifest, worktree)
+            fake_lifecycle_cls.assert_called_once_with(fake_manifest, source_root)
             fake_manifest.model_copy.assert_called_once_with(update={"source_dir": "."})
 
     def test_returns_false_when_worktree_build_fails(self) -> None:
         import tempfile
 
         with tempfile.TemporaryDirectory() as td:
-            worktree = Path(td)
+            worktree = Path(td) / "repo"
+            source_root = worktree / "backend"
+            source_root.mkdir(parents=True)
             run, p = _run_and_patch_with_worktree(worktree)
 
             fake_manifest = MagicMock()
             fake_manifest.docker_isolation = None
             fake_manifest.model_copy.return_value = fake_manifest
-            fake_service = _fake_service_with_worktree(worktree)
+            fake_service = _fake_service_with_worktree(worktree, source_root)
             fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest)
 
             fake_lifecycle_instance = MagicMock()
@@ -195,6 +200,9 @@ class CheckRegressionTests(unittest.TestCase):
             worktree = Path(td)
             run, p = _run_and_patch_with_worktree(worktree)
             fake_service = _fake_service_with_worktree(worktree)
+            fake_manifest = MagicMock()
+            fake_manifest.docker_isolation = None
+            fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest)
             fake_service.catalog.test_runner_for.return_value.run.return_value = MagicMock(passed=True)
 
             with patch("core.judge._service", return_value=fake_service):
@@ -208,7 +216,47 @@ class CheckRegressionTests(unittest.TestCase):
             worktree = Path(td)
             run, p = _run_and_patch_with_worktree(worktree)
             fake_service = _fake_service_with_worktree(worktree)
+            fake_manifest = MagicMock()
+            fake_manifest.docker_isolation = None
+            fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest)
             fake_service.catalog.test_runner_for.return_value.run.return_value = MagicMock(passed=False)
+
+            with patch("core.judge._service", return_value=fake_service):
+                self.assertFalse(check_regression(run.id, p.id))
+
+    def test_compose_target_regression_runs_via_run_scoped_overlay(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td)
+            run, p = _run_and_patch_with_worktree(worktree)
+            fake_service = _fake_service_with_worktree(worktree)
+            fake_manifest = MagicMock()
+            fake_manifest.docker_isolation = MagicMock()
+            fake_manifest.test_suites = [MagicMock(command_id="backend_regression")]
+            fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest)
+            fake_overlay = MagicMock()
+            fake_overlay.execute.return_value = MagicMock(status="passed")
+            fake_service.catalog.run_overlay_for.return_value = fake_overlay
+
+            with patch("core.judge._service", return_value=fake_service):
+                self.assertTrue(check_regression(run.id, p.id))
+
+            fake_service.catalog.run_overlay_for.assert_called_once_with(run.target_id, run.id)
+            fake_overlay.prepare.assert_called_once_with()
+            fake_overlay.execute.assert_called_once_with("backend_regression")
+
+    def test_compose_target_without_test_suite_does_not_pass_regression(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td)
+            run, p = _run_and_patch_with_worktree(worktree)
+            fake_service = _fake_service_with_worktree(worktree)
+            fake_manifest = MagicMock()
+            fake_manifest.docker_isolation = MagicMock()
+            fake_manifest.test_suites = []
+            fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest)
 
             with patch("core.judge._service", return_value=fake_service):
                 self.assertFalse(check_regression(run.id, p.id))
@@ -335,6 +383,7 @@ class CheckScopeTests(unittest.TestCase):
             )
             fake_service = MagicMock()
             fake_service.catalog.worktree_manager_for.return_value.path_for.return_value = worktree
+            fake_service.catalog.run_source_root_for.return_value = worktree
             with patch("core.judge._service", return_value=fake_service):
                 self.assertTrue(check_scope(run.id, p.id))
 
@@ -349,6 +398,7 @@ class CheckScopeTests(unittest.TestCase):
             )
             fake_service = MagicMock()
             fake_service.catalog.worktree_manager_for.return_value.path_for.return_value = worktree
+            fake_service.catalog.run_source_root_for.return_value = worktree
             with patch("core.judge._service", return_value=fake_service):
                 self.assertFalse(check_scope(run.id, p.id))
 

@@ -64,9 +64,9 @@ def _service():
     return TargetRuntimeService.from_repository_root(Path(__file__).resolve().parent.parent)
 
 
-def _patch_and_worktree(run_id: str, patch_id: str) -> tuple[Patch, Run, Path]:
+def _patch_and_worktree(run_id: str, patch_id: str) -> tuple[Patch, Run, Path, Path]:
     """build/regression/static 게이트가 공유하는 조회: patch/run 존재 확인 + P2가
-    `vc_apply_patch`로 이미 만든 worktree 경로(없으면 아직 적용 전이라는 뜻)."""
+    `vc_apply_patch`로 이미 만든 worktree/source-root 경로(없으면 아직 적용 전이라는 뜻)."""
     patch = get(Patch, patch_id)
     if patch is None:
         raise ValueError(f"patch {patch_id} not found")
@@ -74,12 +74,18 @@ def _patch_and_worktree(run_id: str, patch_id: str) -> tuple[Patch, Run, Path]:
     if run is None:
         raise ValueError(f"run {run_id} not found")
 
-    worktree_path = _service().catalog.worktree_manager_for(run.target_id).path_for(run.id)
+    catalog = _service().catalog
+    worktree_path = catalog.worktree_manager_for(run.target_id).path_for(run.id)
     if not worktree_path.is_dir():
         raise FileNotFoundError(
             f"run {run.id}에 대한 P2 worktree가 없습니다 — vc_apply_patch를 먼저 호출하세요"
         )
-    return patch, run, worktree_path
+    run_source_root = catalog.run_source_root_for(run.target_id, run.id)
+    if not run_source_root.is_dir():
+        raise FileNotFoundError(
+            f"run {run.id}에 대한 P2 source root가 없습니다 — vc_apply_patch를 먼저 호출하세요"
+        )
+    return patch, run, worktree_path, run_source_root
 
 
 def check_attack(
@@ -134,7 +140,7 @@ def check_build(run_id: str, patch_id: str) -> bool:
     """
     from runtime.lifecycle import LifecycleManager
 
-    _, run, worktree_path = _patch_and_worktree(run_id, patch_id)
+    _, run, worktree_path, run_source_root = _patch_and_worktree(run_id, patch_id)
     catalog = _service().catalog
     target = catalog.get(run.target_id)
     if target.manifest.docker_isolation is not None:
@@ -143,7 +149,7 @@ def check_build(run_id: str, patch_id: str) -> bool:
         result = overlay.execute("build")
     else:
         worktree_manifest = target.manifest.model_copy(update={"source_dir": "."})
-        result = LifecycleManager(worktree_manifest, worktree_path).build()
+        result = LifecycleManager(worktree_manifest, run_source_root).build()
     return result.status == "passed"
 
 
@@ -167,15 +173,25 @@ def check_positive_functionality(run_id: str, patch_id: str) -> bool:
 def check_regression(run_id: str, patch_id: str) -> bool:
     """Regression gate: 기존 test suite가 patch 적용 후(worktree 안에서)에도 통과하는지 확인한다.
 
-    `runtime.test_runner.RunScopedTestRunner`(P2)를 그대로 호출한다 — 이미 worktree 전용으로
-    구현돼 있어 build gate 같은 Compose overlay 제약이 없다(P2 계약: source-native test
-    command는 `working_dir` override 없이 worktree에서 직접 돈다).
+    Compose 기반 target은 build gate와 동일하게 P2 run overlay를 통해 실행한다. 그렇지 않으면
+    manifest의 checked-in Compose file 경로가 원본 source clone을 보거나, target worktree 안에서
+    VibeCutter repo 상대 경로를 찾지 못할 수 있다. source-native target은 P2
+    `RunScopedTestRunner`를 그대로 호출한다.
 
     test suite가 선언되지 않은 target은 `TestRunSummary.status == "not_configured"`이고
     `.passed`는 `False`다 — P2 계약대로 "없으면 통과로 치지 않는다"를 그대로 따른다.
     """
-    _, run, _ = _patch_and_worktree(run_id, patch_id)
-    summary = _service().catalog.test_runner_for(run.target_id).run(run.id)
+    _, run, _, _ = _patch_and_worktree(run_id, patch_id)
+    catalog = _service().catalog
+    target = catalog.get(run.target_id)
+    if target.manifest.docker_isolation is not None:
+        if not target.manifest.test_suites:
+            return False
+        overlay = catalog.run_overlay_for(run.target_id, run.id)
+        overlay.prepare()
+        return all(overlay.execute(suite.command_id).status == "passed" for suite in target.manifest.test_suites)
+
+    summary = catalog.test_runner_for(run.target_id).run(run.id)
     return summary.passed
 
 
@@ -195,12 +211,12 @@ def check_static(run_id: str, patch_id: str) -> bool:
     **알려진 한계**: `semgrep` 바이너리가 PATH에 없으면 `SemgrepUnavailableError`가 그대로
     전파된다(`vc_run_sast`와 동일한 제약, 로컬 미설치 환경 다수).
     """
-    _, run, worktree_path = _patch_and_worktree(run_id, patch_id)
+    _, run, _, run_source_root = _patch_and_worktree(run_id, patch_id)
     catalog = _service().catalog
     source_root = catalog.source_root_for(run.target_id)
 
     baseline = run_semgrep(source_root, run_id=f"{run.id}-static-baseline")
-    patched = run_semgrep(worktree_path, run_id=f"{run.id}-static-patched")
+    patched = run_semgrep(run_source_root, run_id=f"{run.id}-static-patched")
     return _high_severity_count(patched) <= _high_severity_count(baseline)
 
 
@@ -218,9 +234,9 @@ def check_scope(run_id: str, patch_id: str) -> bool:
     if run is None:
         raise ValueError(f"run {run_id} not found")
 
-    worktree_path = _service().catalog.worktree_manager_for(run.target_id).path_for(run.id)
+    run_source_root = _service().catalog.run_source_root_for(run.target_id, run.id)
     try:
-        assert_diff_within_worktree(patch.diff, worktree_path)
+        assert_diff_within_worktree(patch.diff, run_source_root)
     except ScopeViolationError:
         return False
     return True

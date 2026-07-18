@@ -276,7 +276,8 @@ def register(mcp: FastMCP) -> None:
 
         already_applied = _require_patch_proposed_or_applied(run)
 
-        worktree_manager = _service().catalog.worktree_manager_for(run.target_id)
+        catalog = _service().catalog
+        worktree_manager = catalog.worktree_manager_for(run.target_id)
         worktree_path = worktree_manager.path_for(run.id)
         if not worktree_path.exists():
             worktree_path = worktree_manager.create(run.id)
@@ -284,11 +285,14 @@ def register(mcp: FastMCP) -> None:
         if already_applied:
             return patch
 
+        apply_root = catalog.run_source_root_for(run.target_id, run.id)
+        if not apply_root.is_dir():
+            raise FileNotFoundError(f"run source directory does not exist: {apply_root}")
         try:
-            assert_diff_within_worktree(patch.diff, worktree_path)
+            assert_diff_within_worktree(patch.diff, apply_root)
         except ScopeViolationError as exc:
             raise PermissionError(str(exc)) from exc
-        _git_apply(worktree_path, patch.diff)
+        _git_apply(apply_root, patch.diff)
 
         _advance_to_patch_applied(run)
         patch.approval = ApprovalStatus.APPROVED
@@ -297,7 +301,7 @@ def register(mcp: FastMCP) -> None:
             run.id,
             state=run.status,
             action={"tool": "vc_apply_patch", "patch_id": patch_id},
-            result={"worktree_path": str(worktree_path), "files": patch.files},
+            result={"worktree_path": str(worktree_path), "apply_root": str(apply_root), "files": patch.files},
             next_state=run.status,
         )
         return patch

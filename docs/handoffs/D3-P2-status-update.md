@@ -33,6 +33,16 @@ scoped clean/blocked 결과를 만드는 것이다.
   P2 audit operator가 c2-01을 독립 검증할 수 있도록 선언형 bearer login/resource setup을 추가했다.
   기존 signup-token bearer 흐름은 호환 유지하고, login과 owner/attacker의 disposable resource setup이
   필요한 경우에만 request budget을 8회로 계산한다.
+- `runtime/catalog.py`: `source_relative_path_for()`와 `run_source_root_for()` 추가. target Git repo가
+  monorepo이고 manifest `source_dir`가 `backend`/`main`/`backend/server` 같은 하위 디렉터리여도,
+  run worktree 안의 실제 patch 적용 source root를 P1/P3가 일관되게 조회할 수 있게 했다.
+- `mcp_server/tools_repair.py`, `core/judge.py`: P3가 보고한 apply 경로 접두사 불일치 대응.
+  `vc_apply_patch`, `check_scope`, `check_static`, source-native `check_build`는 이제 worktree repo 루트가
+  아니라 `catalog.run_source_root_for(target_id, run_id)`를 기준으로 동작한다. Compose 기반
+  `check_build`/`check_regression`은 P2 run overlay를 사용해 patched worktree build context를 본다.
+- `tests/test_apply_patch.py`, `tests/test_catalog.py`, `tests/test_judge.py`: source-root-relative diff가
+  manifest 하위 디렉터리(`backend/src/...`) 안에 적용되는 회귀 테스트와 Compose regression overlay
+  호출 테스트를 추가했다.
 
 ## 제공 인터페이스
 
@@ -60,11 +70,17 @@ scoped clean/blocked 결과를 만드는 것이다.
 
 ## 검증
 
-- 최신 main 통합 후 전체 회귀 175건 PASS. 이 중 P2 관련 항목은 checked-in manifests, catalog, overlay,
+- 최신 main 통합 후 전체 회귀 182건 PASS. 이 중 P2 관련 항목은 checked-in manifests, catalog, overlay,
   worktree test runner, target service, portability, lifecycle, readiness, apply-patch 연동을
   포함하며, 새 provisioning registry/MCP tool/fixture approval 경로도 포함한다.
 - `vc_get_verifier_provisioning(26s-w1-c2-04)` 실제 MCP read 호출이
   loopback base URL, `fixture_file`, fixture artifact 상태를 정확히 반환함을 확인했다.
+- P3가 보고한 apply 경로 mismatch를 재현하는 테스트를 추가했다. target repo 루트 아래
+  `backend/src/Foo.java`가 있고 diff 헤더는 source-root-relative `src/Foo.java`인 경우,
+  `vc_apply_patch`가 run worktree의 `backend` 디렉터리에서 patch를 적용하고 원본 repo는 변하지 않음을
+  확인했다.
+- Compose target regression이 static compose path를 직접 실행하지 않고 `run_overlay_for(...).execute()`
+  경로를 타는지 단위 테스트로 확인했다.
 - 22개 checked-in runtime manifest를 read-only audit했다. 16개는 `ready=True`이고,
   6개(`c1-03`, `c1-05`, `c1-06`, `c1-07`, `c2-01`, `c2-02`)는 필요한 role-fixture 환경변수가
   아직 주입되지 않아 `ready=False`다. source/Compose/실행 파일 오류는 없으며, 이 변수는 P3의
@@ -151,6 +167,11 @@ scoped clean/blocked 결과를 만드는 것이다.
 blocked trajectory 기록)을 확인했다. P2는 `c2-02`부터 실제 batch 결과를 남긴다. P1은 이 결과가 report/judge
 단계에서 누락되지 않는지만 통합 시 확인해 달라.
 
+사진으로 공유된 `verify_mutation` MCP 배선은 P1 tool 계층 소유로 본다. P2는 이 커밋에서
+write-IDOR verifier를 새 MCP tool로 노출하지 않았고, 대신 closed-loop을 막던 P2/P1 접점인
+patch apply/repoint 경로를 고쳤다. P1이 `vc_verify_mutation` 또는 기존 `vc_verify_access_control`
+확장을 추가하면 P2 runtime/provisioning은 그 결과를 그대로 소비할 수 있다.
+
 ### P3
 
 P2 첫 두 target은 고정 `{name,email,password}` signup 가정과 다르다. `c2-01`은 signup 뒤
@@ -175,5 +196,11 @@ P3 generic bridge가 들어오면 새 runtime run을 그대로 소비할 수 있
   `login_body_json`, 선택 login×2, owner/attacker resource setup×2, dynamic request budget이다.
   `c1-05`의 signup-token flow는 4 requests로 그대로다. P3는 이 선언형 contract를 공용 verifier
   기준으로 유지하고, nested resource나 mutation candidate는 새 target별 안전 contract 없이는 넓히지 말아 달라.
+- patcher diff 경로는 `catalog.source_root_for(target_id)` 기준 상대 경로로 고정한다.
+  예: `26s-w1-c1-05`는 manifest `source_dir`가 `.../26s-w1-c1-05/backend`이므로 diff 헤더는
+  `+++ b/src/main/.../UserProfileController.java`여야 하며, `+++ b/backend/src/main/...`가 아니다.
+  P2는 `vc_apply_patch`와 judge scope/static/build를 이 기준으로 맞췄다.
+- P3가 공유한 bearer marker nonce 충돌은 P3 verifier 소유 변경으로 본다. P2는 token/password를
+  저장하지 않는 provisioning metadata만 제공하며, verifier가 매 replay마다 fresh marker를 만들면 된다.
 - Semgrep의 Python 3.14 호환 실패는 P2 runtime 문제가 아니다. 팀의 실행 기준을 3.11 또는 3.12로
   통일해야 P4 static gate와 P1 final judge가 안정적으로 동작한다.

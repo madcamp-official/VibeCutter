@@ -88,3 +88,34 @@ class TargetCatalogTests(unittest.TestCase):
                 self.assertEqual(catalog.run_overlay_for("demo-api", "run-1").worktree_path, worktree)
             finally:
                 worktrees.remove("run-1", approved=True)
+
+    def test_run_source_root_tracks_manifest_subdirectory_inside_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest_root = root / "manifests"
+            manifest_root.mkdir()
+            source = root / ".vibecutter" / "targets" / "sources" / "demo-api"
+            backend = source / "backend"
+            backend.mkdir(parents=True)
+            subprocess.run(["git", "-C", str(source), "init"], check=True, capture_output=True, text=True)
+            subprocess.run(["git", "-C", str(source), "config", "user.email", "p2@example.test"], check=True)
+            subprocess.run(["git", "-C", str(source), "config", "user.name", "P2 Test"], check=True)
+            (backend / "app.txt").write_text("target source", encoding="utf-8")
+            subprocess.run(["git", "-C", str(source), "add", "backend/app.txt"], check=True)
+            subprocess.run(["git", "-C", str(source), "commit", "-m", "initial"], check=True, capture_output=True)
+            (manifest_root / "demo.yaml").write_text(
+                manifest_yaml("demo-api").replace(
+                    "source_dir: .", "source_dir: .vibecutter/targets/sources/demo-api/backend"
+                ),
+                encoding="utf-8",
+            )
+            catalog = TargetCatalog(manifest_root=manifest_root, repository_root=root)
+            catalog.load()
+            worktrees = catalog.worktree_manager_for("demo-api")
+            worktree = worktrees.create("run-1")
+            try:
+                self.assertEqual(catalog.source_repository_for("demo-api"), source.resolve())
+                self.assertEqual(catalog.source_relative_path_for("demo-api"), Path("backend"))
+                self.assertEqual(catalog.run_source_root_for("demo-api", "run-1"), worktree / "backend")
+            finally:
+                worktrees.remove("run-1", approved=True)
