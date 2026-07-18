@@ -1,0 +1,81 @@
+from __future__ import annotations
+
+import unittest
+from uuid import uuid4
+
+from contracts.schemas import Candidate, Finding, VerificationResult
+from core.evidence_store import save
+from core.judge import (
+    check_attack,
+    check_build,
+    check_positive_functionality,
+    check_regression,
+    check_scope,
+    check_static,
+)
+
+
+def _finding_with_candidate(run_id: str) -> tuple[Finding, Candidate]:
+    candidate = Candidate(id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-639")
+    save(candidate)
+    finding = Finding(
+        id=f"finding-{uuid4().hex[:12]}", run_id=run_id, candidate_id=candidate.id, title="t"
+    )
+    save(finding)
+    return finding, candidate
+
+
+class CheckAttackTests(unittest.TestCase):
+    """Day2 범위: Attack gate만 실제로 동작해야 한다."""
+
+    def test_passes_when_verifier_reports_no_longer_verified(self) -> None:
+        run_id = f"run-{uuid4().hex[:12]}"
+        finding, _ = _finding_with_candidate(run_id)
+
+        def fake_verifier(run_id, candidate, *, max_requests=10):
+            return VerificationResult(verified=False, evidence_ids=[], reason="patched")
+
+        self.assertTrue(
+            check_attack(run_id, finding.id, verifier=fake_verifier)
+        )
+
+    def test_fails_when_attack_still_succeeds(self) -> None:
+        run_id = f"run-{uuid4().hex[:12]}"
+        finding, _ = _finding_with_candidate(run_id)
+
+        def fake_verifier(run_id, candidate, *, max_requests=10):
+            return VerificationResult(verified=True, evidence_ids=["obs-x"], reason="still broken")
+
+        self.assertFalse(
+            check_attack(run_id, finding.id, verifier=fake_verifier)
+        )
+
+    def test_rejects_unknown_finding(self) -> None:
+        with self.assertRaises(ValueError):
+            check_attack("run-x", "finding-does-not-exist")
+
+    def test_rejects_finding_without_candidate(self) -> None:
+        run_id = f"run-{uuid4().hex[:12]}"
+        finding = Finding(id=f"finding-{uuid4().hex[:12]}", run_id=run_id, title="no candidate")
+        save(finding)
+        with self.assertRaises(ValueError):
+            check_attack(run_id, finding.id)
+
+
+class RemainingGatesAreStubsTests(unittest.TestCase):
+    """Day3 스텁 — 시그니처는 고정, 본문은 아직 미구현임을 명시적으로 확인."""
+
+    def test_all_five_remaining_gates_raise_not_implemented(self) -> None:
+        for gate in (
+            check_build,
+            check_positive_functionality,
+            check_regression,
+            check_static,
+            check_scope,
+        ):
+            with self.assertRaises(NotImplementedError):
+                gate("run-x", "patch-x")
+
+
+if __name__ == "__main__":
+    unittest.main()
