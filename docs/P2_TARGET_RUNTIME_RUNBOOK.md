@@ -15,6 +15,11 @@ evidence 저장, `verified`/`fixed` 판정은 P3/P1 소유다.
 `catalog.readiness_for("26s-w1-c3-09")`로 확인한다. 2026-07-18 기준 readiness는
 `ready=True`이고 실행 파일 누락이 없다.
 
+patched build 전에는 `catalog.worktree_manager_for(target_id).create(run_id)`와
+`catalog.run_overlay_for(target_id, run_id).prepare()`를 호출한 뒤 generated Compose에
+`docker compose config --quiet` 및 overlay isolation 검사를 수행한다. `c3-09`에서 이
+worktree-only static preflight를 통과했고, 검증용 worktree는 즉시 제거했다.
+
 ## 승인된 clean-room 순서
 
 1. P1 policy에서 target과 reset command가 허용됐는지 확인한다.
