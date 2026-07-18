@@ -1,12 +1,15 @@
-# D4 / P2 Handoff
+# D3 / P2 Clean-room Preparation
+
+> 이 문서는 Day3에 독립적으로 끝낸 clean-room 사전 준비 기록이다. Day4 E2E 통합·kill
+> switch·rollback 연결이 완료됐다는 의미가 아니며, Day4 handoff 번호는 실제 통합 작업까지 비워 둔다.
 
 ## 상태
-진행 중 — D4 clean-room/rollback의 P2 준비를 완료했다. P3 live verifier 대상 `26s-w1-c2-04`는
+진행 중 — 이후 Day4 clean-room/rollback에 필요한 P2 사전 준비를 완료했다. P3 live verifier 대상 `26s-w1-c2-04`는
 유지하고, secret 없는 reset/smoke runtime인 `26s-w1-c3-09`를 holdout/demo clean-room 후보로 준비했다.
 
 ## 변경 파일
 - `docs/P2_TARGET_RUNTIME_RUNBOOK.md`: clean-room 대상 구분, explicit reset, patched run rollback 절차를 기록.
-- `docs/handoffs/D4-P2.md`: D4 P2 준비 상태와 다른 역할의 연결점을 기록.
+- `docs/handoffs/D3-P2-clean-room-prep.md`: Day3에 앞당겨 수행한 clean-room 준비와 다른 역할의 연결점을 기록.
 
 ## 제공 인터페이스
 - 입력: policy-allowed `target_id`, explicit approval, 그리고 patched run이면 trusted `run_id`.
@@ -24,9 +27,9 @@
   P1/P3의 live run과 충돌하지 않는 명시 승인 뒤에만 한다.
 
 ## 다른 역할에 필요한 사항
-- P1: Day4 kill switch/rollback은 P2 `reset_run(target_id, run_id, approved=True)`를 호출해
+- P1: 이후 Day4 kill switch/rollback은 P2 `reset_run(target_id, run_id, approved=True)`를 호출해
   generated Compose reset 성공 뒤에만 worktree를 정리하도록 배선할 것.
-- P3: `c2-04` live verifier가 끝났다는 신호 전까지 P2가 해당 target reset을 수행하지 않는다.
+- P3: `c2-04` live verifier는 완료됐지만, 승인된 통합 run 또는 운영자 지시 전에는 P2가 해당 target을 reset하지 않는다.
 - P4: holdout `c3-09`은 runtime clean-room 후보일 뿐, 평가 데이터 편입 전에는 P3 evidence와
   P1 deterministic verdict가 필요하다.
 
