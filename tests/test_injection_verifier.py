@@ -37,6 +37,24 @@ class InjectionOracleTests(unittest.TestCase):
         verified, _ = injection.injection_oracle(200, "a" * 20, 200, "")
         self.assertFalse(verified)
 
+    def test_natural_variance_suppresses_false_positive(self):
+        # 하드닝: 참-거짓 차이 120(옛 임계 48이면 탐지)이라도, 엔드포인트 자연 변동이 120이면
+        # 노이즈 바닥(48 + 2×120)에 못 미쳐 오탐 안 함 — 타임스탬프/nonce/페이지네이션 방어.
+        verified, reason = injection.injection_oracle(200, "a" * 120, 200, "", baseline_variance=120)
+        self.assertFalse(verified)
+        self.assertIn("자연 변동", reason)
+
+    def test_stable_endpoint_still_detects_after_hardening(self):
+        # 대조: 같은 120 차이라도 자연 변동 0(조용한 엔드포인트)이면 그대로 탐지 → 랩 TP 유지.
+        verified, _ = injection.injection_oracle(200, "a" * 120, 200, "", baseline_variance=0)
+        self.assertTrue(verified)
+
+    def test_unstable_baseline_distrusts_status_split(self):
+        # baseline 상태코드가 흔들리면(불안정) 상태 갈림 신호를 노이즈로 보고 신뢰하지 않는다.
+        verified, _ = injection.injection_oracle(
+            200, "x", 500, "err", baseline_status_stable=False)
+        self.assertFalse(verified)
+
 
 class InjectionProbeTests(unittest.TestCase):
     def test_probe_from_candidate_basic(self):

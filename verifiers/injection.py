@@ -101,31 +101,39 @@ _PAYLOAD_PAIRS: list[tuple[str, str]] = [
 
 
 def injection_oracle(
-    true_status: int, true_body: str, false_status: int, false_body: str, *, min_delta: int = _MIN_DELTA
+    true_status: int, true_body: str, false_status: int, false_body: str, *,
+    min_delta: int = _MIN_DELTA, baseline_variance: int = 0, baseline_status_stable: bool = True,
 ) -> tuple[bool, str]:
     """참/거짓 응답 차등으로 SQLi를 판정한다. 두 payload는 한 글자만 다르므로, 유의미한 차이는
     입력이 SQL 불리언으로 해석됐다는 증거다. 살균(리터럴 처리)되면 둘은 같다 → injection 아님.
+
+    **노이즈 바닥(baseline_variance)**: 엔드포인트 응답이 요청마다 자연히 흔들리면(타임스탬프·nonce·
+    페이지네이션) 안전한 앱도 참≠거짓이 되어 오탐한다. 재현부가 benign baseline을 2회 재서 잰 자연
+    변동을 여기로 넘기면, 판정 임계를 `min_delta + 2×변동`으로 올려 노이즈로 설명되는 차이는 무시한다
+    (변동 0인 조용한 엔드포인트는 기존과 동일하게 동작 → 랩 true-positive 유지). baseline_status_stable
+    =False(baseline 상태코드도 흔들림)면 상태코드 갈림 신호도 노이즈로 보고 신뢰하지 않는다.
     """
     tb, fb = (true_body or ""), (false_body or "")
     delta = len(tb) - len(fb)
+    threshold = min_delta + 2 * max(0, baseline_variance)  # 자연 변동 위로 min_delta만큼 여유
 
-    # (1) 참(1=1)이 거짓(1=2)보다 응답이 확연히 큼 = 참 조건이 결과셋을 열었다(불리언 blind SQLi).
-    if delta >= min_delta:
+    # (1) 참(1=1)이 거짓(1=2)보다 노이즈 바닥을 넘어 확연히 큼 = 결과셋이 열림(불리언 blind SQLi).
+    if delta >= threshold:
         return True, (
-            f"참 조건(OR 1=1) 응답이 거짓 조건(OR 1=2)보다 {delta}바이트 큼 — 한 글자 차이 payload가 "
-            f"결과셋 크기를 제어함. 입력이 SQL 불리언으로 해석됨 (SQL Injection, CWE-89)."
+            f"참 조건(OR 1=1) 응답이 거짓 조건(OR 1=2)보다 {delta}바이트 큼(자연 변동 {baseline_variance}"
+            f"바이트 초과, 임계 {threshold}) — 입력이 SQL 불리언으로 해석돼 결과셋을 제어함 (SQL Injection, CWE-89)."
         )
-    # (2) 상태 코드가 5xx 경계에서 갈림(예: 거짓만 500) = 불리언이 쿼리 실행 자체에 영향.
-    if (true_status < 500) != (false_status < 500):
+    # (2) 상태 코드가 5xx 경계에서 갈림 — 단 baseline 상태가 안정적일 때만(불안정하면 노이즈).
+    if baseline_status_stable and (true_status < 500) != (false_status < 500):
         return True, (
             f"참/거짓 조건에서 응답 상태가 갈림(true={true_status}, false={false_status}) — "
             f"입력이 SQL 실행 경로에 영향 (SQL Injection, CWE-89)."
         )
-    # (3) 참 ≈ 거짓 → 입력이 리터럴 문자열로 처리됨(살균).
-    if abs(delta) < min_delta:
+    # (3) 참 ≈ 거짓 (노이즈 범위 내) → 입력이 리터럴로 처리됨(살균/파라미터화).
+    if abs(delta) < threshold:
         return False, (
-            "참/거짓 조건 응답이 거의 같음(차이 {d}바이트) — 입력이 리터럴로 처리됨(살균/파라미터화), "
-            "SQL Injection 아님.".format(d=abs(delta))
+            f"참/거짓 조건 응답 차이({abs(delta)}바이트)가 자연 변동 바닥(임계 {threshold}바이트) 이내 — "
+            f"입력이 리터럴로 처리됨(살균/파라미터화), SQL Injection 아님."
         )
     return False, "판정 신호 부족 — SQL Injection 근거 없음."
 
@@ -140,6 +148,7 @@ class _Attempt(BaseModel):
     false_status: int
     true_len: int
     false_len: int
+    baseline_variance: int = 0
     verified: bool
     reason: str
 
@@ -159,7 +168,11 @@ def _send(client: httpx.Client, probe: InjectionProbe, value: str) -> tuple[int,
 
 
 def _replay_injection(probe: InjectionProbe, max_requests: int) -> list[_Attempt]:
-    """baseline 1회 + 쌍마다 (참, 거짓) 2회. 첫 verified에서 멈춘다. max_requests로 요청 상한."""
+    """baseline **2회**(자연 변동 측정) + 쌍마다 (참, 거짓) 2회. 첫 verified에서 멈춘다. max_requests 상한.
+
+    baseline을 두 번 보내 응답 길이가 요청마다 얼마나 흔들리는지(자연 변동)와 상태코드 안정성을 재고,
+    그 노이즈 바닥을 oracle에 넘겨 오탐을 막는다(타임스탬프·nonce·페이지네이션 대응).
+    """
     if probe.inject_method.upper() != "GET" and not probe.read_query:
         # 비-GET에 불리언 payload를 보내면 DELETE/UPDATE의 WHERE를 넓힐 위험 → 계약 보증 없이는 거부.
         raise NotImplementedError(
@@ -169,14 +182,20 @@ def _replay_injection(probe: InjectionProbe, max_requests: int) -> list[_Attempt
 
     attempts: list[_Attempt] = []
     budget = max_requests
+    baseline_variance = 0
+    baseline_status_stable = True
     with httpx.Client(follow_redirects=True, timeout=10.0) as client:
-        # baseline(benign): 엔드포인트가 정상 응답하는지 확인용(증거 맥락). 실패해도 재현은 계속.
-        if budget > 0:
+        # baseline(benign) 2회: 엔드포인트의 자연 변동(응답 길이·상태) 측정 = 노이즈 바닥.
+        samples: list[tuple[int, str]] = []
+        while len(samples) < 2 and budget > 0:
             budget -= 1
             try:
-                _send(client, probe, probe.baseline_value)
+                samples.append(_send(client, probe, probe.baseline_value))
             except httpx.HTTPError:
-                pass
+                samples.append((0, ""))
+        if len(samples) == 2:
+            baseline_variance = abs(len(samples[0][1]) - len(samples[1][1]))
+            baseline_status_stable = samples[0][0] == samples[1][0]
         for true_pl, false_pl in _PAYLOAD_PAIRS:
             if budget < 2:  # 참 + 거짓 = 2요청
                 break
@@ -186,12 +205,15 @@ def _replay_injection(probe: InjectionProbe, max_requests: int) -> list[_Attempt
                 f_status, f_body = _send(client, probe, false_pl)
             except httpx.HTTPError:
                 continue
-            verified, reason = injection_oracle(t_status, t_body, f_status, f_body)
+            verified, reason = injection_oracle(
+                t_status, t_body, f_status, f_body,
+                baseline_variance=baseline_variance, baseline_status_stable=baseline_status_stable,
+            )
             attempts.append(_Attempt(
                 true_payload=true_pl, false_payload=false_pl,
                 true_status=t_status, false_status=f_status,
                 true_len=len(t_body or ""), false_len=len(f_body or ""),
-                verified=verified, reason=reason,
+                baseline_variance=baseline_variance, verified=verified, reason=reason,
             ))
             if verified:
                 break
@@ -230,6 +252,7 @@ def verify(
                 "true_status": winner.true_status, "false_status": winner.false_status,
                 "true_len": winner.true_len, "false_len": winner.false_len,
                 "delta": winner.true_len - winner.false_len,
+                "baseline_variance": winner.baseline_variance,
                 "verified": winner.verified, "reason": redact(winner.reason), "attempts": len(attempts),
             },
             ensure_ascii=False,
@@ -258,4 +281,10 @@ if __name__ == "__main__":
     # 안전: 둘 다 빈 결과
     v, _ = injection_oracle(200, "", 200, "")
     ok += v is False
-    print(f"injection_oracle self-check: {ok}/4 {'PASS' if ok == 4 else 'FAIL'}")
+    # 하드닝: 참-거짓 차이 100(옛 임계 48이면 오탐)이지만 자연 변동 100이면 노이즈로 억제 → False
+    v, _ = injection_oracle(200, "a" * 100, 200, "", baseline_variance=100)
+    ok += v is False
+    # 대조: 같은 100 차이라도 변동 0(조용한 엔드포인트)이면 그대로 탐지 → True (랩 TP 유지)
+    v, _ = injection_oracle(200, "a" * 100, 200, "", baseline_variance=0)
+    ok += v is True
+    print(f"injection_oracle self-check: {ok}/6 {'PASS' if ok == 6 else 'FAIL'}")
