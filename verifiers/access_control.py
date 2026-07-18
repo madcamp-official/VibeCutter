@@ -115,6 +115,16 @@ class IdorProbe(BaseModel):
     signup_path: str | None = None  # 예: /api/auth/signup ({name,email,password} → data.accessToken/data.user.id)
     path_template: str | None = None  # 예: /api/users/{id}/profile — {id}에 생성된 사용자 id를 넣는다
     token_key: str = "accessToken"  # 회원가입 응답에서 JWT를 찾을 key
+    # 서로 다른 가입/로그인 DTO를 쓰는 앱을 위한 no-secret JSON 템플릿. `{email}`, `{name}`,
+    # `{username}`, `{marker}`, `{password}`만 런타임에 치환하며 후보/evidence에는 비밀번호를 남기지 않는다.
+    signup_body_json: str | None = None
+    login_path: str | None = None
+    login_body_json: str | None = None
+    # 사용자 id가 아니라 별도 소유 리소스 id를 URL에 넣어야 하는 앱용 안전한 setup 단계.
+    # POST 두 번(각 역할의 이름표 리소스 생성)만 허용하고, 반환 id로 GET 교차 조회한다.
+    owner_setup_path: str | None = None
+    owner_setup_body_json: str | None = None
+    resource_id_key: str = "id"
 
 
 def probe_from_candidate(candidate: Candidate) -> IdorProbe:
@@ -267,6 +277,32 @@ def _dig(obj: object, key: str) -> object:
     return None
 
 
+def _render_body(template: str | None, values: dict[str, str], *, default: dict[str, str]) -> dict[str, str]:
+    """저장된 no-secret JSON template을 역할별 일회성 값으로만 렌더한다."""
+    if template is None:
+        return default
+    try:
+        body = json.loads(template)
+    except json.JSONDecodeError as exc:
+        raise ValueError("bearer body template은 JSON object여야 한다") from exc
+    if not isinstance(body, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in body.items()):
+        raise ValueError("bearer body template은 string key/value JSON object여야 한다")
+    try:
+        return {key: value.format(**values) for key, value in body.items()}
+    except KeyError as exc:
+        raise ValueError(f"bearer body template의 허용되지 않은 placeholder: {exc.args[0]}") from exc
+
+
+def _identity_values(marker: str, password: str) -> dict[str, str]:
+    return {
+        "marker": marker,
+        "name": marker,
+        "username": marker,
+        "email": f"{marker}@vc.local",
+        "password": password,
+    }
+
+
 def _replay_bearer(probe: IdorProbe) -> tuple[dict, dict]:
     """JWT bearer 인증 IDOR (예: c1-05 Scrum Helper의 GET /api/users/{id}/profile).
 
@@ -278,27 +314,81 @@ def _replay_bearer(probe: IdorProbe) -> tuple[dict, dict]:
         raise ValueError("bearer 재현엔 signup_path와 path_template이 필요하다")
     base = probe.base_url.rstrip("/")
     pw = "VcLocal123!"  # provision 전용 임시 비번(로컬 격리 대상, evidence 미기록)
+    if probe.owner_marker is None:
+        raise ValueError("bearer 재현엔 owner_marker가 필요하다")
+    owner_values = _identity_values(probe.victim_marker, pw)
+    attacker_values = _identity_values(probe.owner_marker, pw)
     with httpx.Client(follow_redirects=True, timeout=10.0) as client:
         # owner(피해자)와 attacker(공격자)를 회원가입. 이름을 marker로 써서 프로필에 노출되게 한다.
-        owner = client.post(
+        owner_response = client.post(
             f"{base}{probe.signup_path}",
-            json={"name": probe.victim_marker, "email": f"{probe.victim_marker}@vc.local", "password": pw},
-        ).json()
-        attacker = client.post(
+            json=_render_body(
+                probe.signup_body_json,
+                owner_values,
+                default={"name": owner_values["name"], "email": owner_values["email"], "password": pw},
+            ),
+        )
+        attacker_response = client.post(
             f"{base}{probe.signup_path}",
-            json={"name": probe.owner_marker, "email": f"{probe.owner_marker}@vc.local", "password": pw},
-        ).json()
+            json=_render_body(
+                probe.signup_body_json,
+                attacker_values,
+                default={"name": attacker_values["name"], "email": attacker_values["email"], "password": pw},
+            ),
+        )
+        owner = owner_response.json()
+        attacker = attacker_response.json()
         owner_id = _dig(owner, "id")
         attacker_id = _dig(attacker, "id")
-        token = _dig(attacker, probe.token_key)
-        if owner_id is None or attacker_id is None or token is None:
+        owner_token = _dig(owner, probe.token_key)
+        attacker_token = _dig(attacker, probe.token_key)
+        if probe.login_path:
+            owner_login = client.post(
+                f"{base}{probe.login_path}",
+                json=_render_body(
+                    probe.login_body_json,
+                    owner_values,
+                    default={"email": owner_values["email"], "password": pw},
+                ),
+            ).json()
+            attacker_login = client.post(
+                f"{base}{probe.login_path}",
+                json=_render_body(
+                    probe.login_body_json,
+                    attacker_values,
+                    default={"email": attacker_values["email"], "password": pw},
+                ),
+            ).json()
+            owner_token = _dig(owner_login, probe.token_key)
+            attacker_token = _dig(attacker_login, probe.token_key)
+        if owner_id is None or attacker_id is None or owner_token is None or attacker_token is None:
             raise ValueError("bearer provision 실패: 응답에서 id/token을 찾지 못함")
 
-        headers = {"Authorization": f"Bearer {token}"}  # 공격자 세션. 헤더는 evidence에 안 담긴다.
-        baseline_path = probe.path_template.format(id=attacker_id)  # 공격자 자기 자원
-        attack_path = probe.path_template.format(id=owner_id)  # 피해자 자원
-        r_base = client.get(f"{base}{baseline_path}", headers=headers)
-        r_atk = client.get(f"{base}{attack_path}", headers=headers)
+        owner_headers = {"Authorization": f"Bearer {owner_token}"}
+        attacker_headers = {"Authorization": f"Bearer {attacker_token}"}  # evidence에 헤더를 담지 않는다.
+        baseline_id, attack_id = attacker_id, owner_id
+        if probe.owner_setup_path:
+            if probe.owner_setup_body_json is None:
+                raise ValueError("owner_setup_path에는 owner_setup_body_json이 필요하다")
+            owner_resource = client.post(
+                f"{base}{probe.owner_setup_path}",
+                headers=owner_headers,
+                json=_render_body(probe.owner_setup_body_json, owner_values, default={}),
+            ).json()
+            attacker_resource = client.post(
+                f"{base}{probe.owner_setup_path}",
+                headers=attacker_headers,
+                json=_render_body(probe.owner_setup_body_json, attacker_values, default={}),
+            ).json()
+            attack_id = _dig(owner_resource, probe.resource_id_key)
+            baseline_id = _dig(attacker_resource, probe.resource_id_key)
+            if attack_id is None or baseline_id is None:
+                raise ValueError("bearer resource setup 실패: 응답에서 resource id를 찾지 못함")
+
+        baseline_path = probe.path_template.format(id=baseline_id)  # 공격자 자기 자원
+        attack_path = probe.path_template.format(id=attack_id)  # 피해자 자원
+        r_base = client.get(f"{base}{baseline_path}", headers=attacker_headers)
+        r_atk = client.get(f"{base}{attack_path}", headers=attacker_headers)
     return _exchange("GET", baseline_path, r_base), _exchange("GET", attack_path, r_atk)
 
 
@@ -310,6 +400,13 @@ _REPLAY: dict[str, tuple[int, object]] = {
 }
 
 
+def _required_requests(probe: IdorProbe, default: int) -> int:
+    """선언된 bearer login/resource setup에 맞춰 rate-limit 예산을 정확히 계산한다."""
+    if probe.auth_mode != "bearer":
+        return default
+    return default + (2 if probe.login_path else 0) + (2 if probe.owner_setup_path else 0)
+
+
 def _replay_idor(probe: IdorProbe, max_requests: int) -> tuple[dict, dict]:
     """probe.auth_mode에 맞는 재현 전략으로 (baseline, attack) 교환을 만든다.
 
@@ -318,7 +415,8 @@ def _replay_idor(probe: IdorProbe, max_requests: int) -> tuple[dict, dict]:
     entry = _REPLAY.get(probe.auth_mode)
     if entry is None:
         raise ValueError(f"지원하지 않는 auth_mode {probe.auth_mode!r} (지원: {sorted(_REPLAY)})")
-    needed, strategy = entry
+    default_needed, strategy = entry
+    needed = _required_requests(probe, default_needed)
     if needed > max_requests:
         raise ValueError(
             f"{probe.auth_mode} 재현에 {needed}회 필요하지만 max_requests={max_requests}로 제한됨"

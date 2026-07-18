@@ -32,6 +32,19 @@ _ID_PLACEHOLDER = re.compile(r"\{[^}]+\}|:[A-Za-z_]\w*|<[^>]+>")
 # provisioning은 signup_path/token_key를 담지 않으므로 P3가 여기서(또는 인자로) 준다.
 _SELF_SIGNUP_HINTS: dict[str, dict[str, str]] = {
     "26s-w1-c1-05": {"signup_path": "/api/auth/signup", "token_key": "accessToken"},
+    # P2가 실제 FastAPI source와 local runtime에서 확인한 c2-01 계약. tokens/passwords는
+    # 여기나 Candidate에 저장하지 않고 verifier 런타임에서만 생성한다.
+    "26s-w1-c2-01": {
+        "signup_path": "/api/v1/auth/signup",
+        "signup_body_json": '{"email":"{email}","password":"{password}","name":"{name}"}',
+        "login_path": "/api/v1/auth/login",
+        "login_body_json": '{"email":"{email}","password":"{password}"}',
+        "token_key": "access_token",
+        "owner_setup_path": "/api/v1/workspaces",
+        "owner_setup_body_json": '{"name":"{marker}"}',
+        "path_template": "/api/v1/workspaces/{id}",
+        "candidate_handlers": "get_detail",
+    },
 }
 
 
@@ -134,21 +147,31 @@ def _expand_fixture_suspects(run_id, suspects, provisioning, resources) -> list[
     return out
 
 
-def _bearer_candidate(run_id, suspect, provisioning, signup_path, token_key) -> Candidate:
+def _bearer_candidate(run_id, suspect, provisioning, hints: dict[str, str]) -> Candidate:
     n = uuid4().hex[:8]
+    # username validation에도 통과하도록 하이픈 없는 marker를 쓴다.
+    victim_marker = f"vcowner{n}"
+    owner_marker = f"vcattacker{n}"
+    params = {
+        "base_url": provisioning.base_url,
+        "auth_mode": "bearer",
+        "signup_path": hints["signup_path"],
+        "path_template": hints.get("path_template", _to_id_template(suspect.endpoint)),
+        "token_key": hints.get("token_key", "accessToken"),
+        "victim_marker": victim_marker,
+        "owner_marker": owner_marker,
+    }
+    for key in (
+        "signup_body_json", "login_path", "login_body_json", "owner_setup_path",
+        "owner_setup_body_json", "resource_id_key",
+    ):
+        if hints.get(key):
+            params[key] = hints[key]
     return Candidate(
         id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-639", vuln_class="idor",
-        endpoint=suspect.endpoint, source_symbols=[suspect.file] if suspect.file else [],
+        endpoint=hints.get("path_template", suspect.endpoint), source_symbols=[suspect.file] if suspect.file else [],
         confidence=suspect.score,
-        attack_params={
-            "base_url": provisioning.base_url,
-            "auth_mode": "bearer",
-            "signup_path": signup_path,
-            "path_template": _to_id_template(suspect.endpoint),
-            "token_key": token_key,
-            "victim_marker": f"vc-owner-{n}",   # verifier가 이 이름으로 피해자 계정을 만든다
-            "owner_marker": f"vc-attacker-{n}",  # 공격자 계정
-        },
+        attack_params=params,
     )
 
 
@@ -216,11 +239,11 @@ def build_candidates(
                 "self_signup인데 P3의 signup_path/token_key 계약이 없음",
                 f"P3가 {tid}의 signup_path·token_key를 _SELF_SIGNUP_HINTS 또는 인자로 제공",
             )
-        token_key = hints.get("token_key", "accessToken")
+        allowed_handlers = set(hints.get("candidate_handlers", "").split(",")) - {""}
         cands = [
-            _bearer_candidate(run_id, s, provisioning, hints["signup_path"], token_key)
+            _bearer_candidate(run_id, s, provisioning, hints)
             for s in suspects
-            if s.id_signal == "path"
+            if s.id_signal == "path" and (not allowed_handlers or s.handler in allowed_handlers)
         ]
         if not cands:
             return blocked("path-id suspect가 없어 bearer candidate를 만들 수 없음", "프리필터 재확인")

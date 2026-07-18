@@ -75,7 +75,7 @@ P2는 기존 runtime/provisioning 소유권을 유지하면서 아래 5개의 au
 
 | 우선순위 | target_id | prefilter | P2 실행 계획 |
 | ---: | --- | ---: | --- |
-| 1 | `26s-w1-c2-01` | 12 | **runtime 준비 완료(후속 계약 대기)**: `run-abc76bd16b75`는 승인 reset 뒤 build/start/readiness와 Python regression PASS. signup `{email,password,name}` → login `access_token` two-role contract가 verifier에 필요 |
+| 1 | `26s-w1-c2-01` | 12 | **access-control 1건 실제 검증 완료**: `run-abc76bd16b75`에서 two-role self-signup/login과 각자 workspace 생성 뒤 attacker 교차 `GET /api/v1/workspaces/{id}`를 재현했다. baseline `200`, victim `403` evidence 2건으로 CWE-639 candidate는 rejected. 나머지 11개는 read-only candidate로 정규화되지 않았거나 state-change라 별도 안전 계약이 필요 |
 | 2 | `26s-w1-c2-02` | 1 | **실행 완료(후속 계약 대기)**: `run-7ec9f46e4519` build PASS, access-control scan Candidate 0 / `fixture_contract_required` blocked. 현재 후보는 path-id 없는 leaderboard aggregate라 live fixture 뒤 scoped clean 또는 evidence로 확정 |
 | 3 | `26s-w1-c1-06` | 1 | **실행 완료(후속 계약 대기)**: `run-a1498e9a2489` build PASS, Candidate 0 / `fixture_contract_required` blocked. `/api/demo/settle`은 unprotected demo endpoint라 P3가 auth-none 또는 bearer resource verifier 계약을 지정해야 함 |
 | 4 | `26s-w1-c1-07` | 5 | **실행 완료(후속 계약 대기)**: `run-d1cc7c5befa7` build PASS, Candidate 0 / `fixture_contract_required` blocked. Google OAuth + process-local memory session이라 DB seed만으로 재현 불가 |

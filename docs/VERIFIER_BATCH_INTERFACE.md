@@ -30,10 +30,11 @@ P1 또는 P3는 policy-allowed `target_id`로 `vc_get_verifier_provisioning(targ
 | `contract_required` | role fixture도 없는 일반 target | P3/P1이 verifier 가능성부터 계약 |
 
 현재 P2 provisioning 전략이 선언된 경로는 `c2-04`(fixture-file/unauthenticated)와
-`c1-05`·`c2-01`·`c2-02`(self-signup/bearer)다. 후보 생성까지 자동으로 끝난 것은 P3의
-signup/token hint가 이미 있는 `c1-05`뿐이다. `c2-01`/`c2-02`는 P2가 strategy/auth mode만
-선언했으며, P3가 target별 signup payload·선택 login 경로·token key를 generic bridge에 연결하면
-같은 경로로 Candidate/verify를 재개한다.
+`c1-05`·`c2-01`·`c2-02`(self-signup/bearer)다. `c2-01`은 P2가 source-confirmed
+signup/login DTO와 workspace setup을 선언형 bearer probe로 연결했고, 실제 cross-role GET까지
+실행했다. bearer probe는 기존 signup-token 4-request 흐름을 유지하면서, 필요할 때만 no-secret
+JSON template·login×2·owner resource setup×2를 더해 request budget을 계산한다. token/password는
+Candidate/fixture/evidence에 저장하지 않는다.
 
 ## 2. P3 suspect → verifiable Candidate bridge
 
