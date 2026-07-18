@@ -122,25 +122,28 @@ def check_attack(
 def check_build(run_id: str, patch_id: str) -> bool:
     """Build gate: patch가 적용된 worktree가 실제로 build되는지 확인한다.
 
-    `runtime.test_runner.RunScopedTestRunner`(P2)가 test suite에 쓰는 것과 같은 패턴 —
-    manifest의 `source_dir`를 worktree 자신을 가리키는 `"."`로 바꿔(`model_copy`) build
-    command를 worktree 안에서 재실행한다.
+    Compose 기반 target(`manifest.docker_isolation`이 설정된 target)은 `catalog.run_overlay_for()`
+    (P2, D3-P2.md)로 build context가 patched worktree를 가리키는 run-scoped Compose 문서를
+    생성해 그 위에서 `build` command를 실행한다 — checked-in Compose의 build context가 원본
+    source clone을 고정 참조하는 문제를 P2 overlay가 worktree로 재사영해서 우회한다.
 
-    **알려진 한계**: 현재 checked-in manifest의 build command 다수는 `working_dir`로 P2
-    root의 static Compose overlay를 가리키고, 그 overlay의 build context는 아직 원본
-    source clone을 고정 참조한다(D1-P2.md가 예고한 다음 작업: patched worktree를 build
-    context로 쓰는 run-scoped overlay). 그 전까지는 `working_dir` override가 없는
-    target(순수 source-native build, 예: Gradle/npm build)에서만 이 게이트가 실질적으로
-    "패치된 코드"를 검증한다 — Compose 기반 target은 이 게이트가 통과해도 아직 patched
-    build를 증명하지 않는다는 뜻이다. P2 overlay가 도착하면 이 함수는 수정 없이 그대로
-    patched build를 검증하게 된다.
+    source-native target(Gradle/npm처럼 `working_dir` override 없이 그냥 소스 디렉터리에서
+    도는 build)은 여전히 `runtime.test_runner.RunScopedTestRunner`(P2)가 test suite에 쓰는
+    것과 같은 패턴 — manifest의 `source_dir`를 worktree 자신을 가리키는 `"."`로 바꿔서
+    (`model_copy`) build command를 worktree 안에서 직접 재실행한다.
     """
     from runtime.lifecycle import LifecycleManager
 
     _, run, worktree_path = _patch_and_worktree(run_id, patch_id)
-    target = _service().catalog.get(run.target_id)
-    worktree_manifest = target.manifest.model_copy(update={"source_dir": "."})
-    result = LifecycleManager(worktree_manifest, worktree_path).build()
+    catalog = _service().catalog
+    target = catalog.get(run.target_id)
+    if target.manifest.docker_isolation is not None:
+        overlay = catalog.run_overlay_for(run.target_id, run.id)
+        overlay.prepare()
+        result = overlay.execute("build")
+    else:
+        worktree_manifest = target.manifest.model_copy(update={"source_dir": "."})
+        result = LifecycleManager(worktree_manifest, worktree_path).build()
     return result.status == "passed"
 
 
