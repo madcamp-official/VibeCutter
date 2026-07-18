@@ -3,6 +3,7 @@
 vc_localize_root_cause, vc_generate_patch (Repair, P3 소유)
 vc_apply_patch (Mutation, P1 게이트 — 명시적 승인 없이는 호출 불가)
 vc_build_and_test, vc_replay_attack, vc_validate_regression (Judge, P1 배선)
+vc_kill_run (Rollback, P1 소유 — P2 reset_run() 호출, kill switch와 무관하게 항상 가능)
 vc_generate_report, vc_export_sarif (Report, P1/P4 소유)
 
 generate와 apply를 별도 도구로 분리하는 것은 절대 원칙(원본 branch 직접 변경 금지,
@@ -54,6 +55,12 @@ class ReportResult(BaseModel):
     run_id: str
     artifact_uri: str
     format: str
+
+
+class RunResetResult(BaseModel):
+    run_id: str
+    target_id: str
+    ok: bool
 
 
 def _advance_to_patch_proposed(run: Run) -> None:
@@ -376,6 +383,43 @@ def register(mcp: FastMCP) -> None:
             next_state=run.status,
         )
         return validation
+
+    @mcp.tool()
+    @audited
+    def vc_kill_run(run_id: str, approved: bool) -> RunResetResult:
+        """kill switch의 rollback 경로: 이 run의 patched worktree/runtime을 정리한다.
+
+        P2의 `TargetRuntimeService.reset_run(target_id, run_id, approved=True)`(D3-P2.md)를
+        그대로 호출한다 — generated Compose reset이 성공한 뒤에만 target-source worktree를
+        지운다. reset이 실패하면 worktree는 보존되고(P2 계약, 삭제 재시도 없음) 이 tool도
+        `ok=False`를 반환한다.
+
+        **Run 상태는 바꾸지 않는다**: kill/rollback은 인프라 정리이지 verified/fixed 같은
+        보안 판정이 아니고, `core/state_machine.py`의 RunState 그래프에는 kill 전용 상태가
+        없다 — 오늘 이 공통 계약을 새로 확장하지 않기로 결정했다(D4-P1.md 참고, 확장이
+        필요해지면 P2/P3와 먼저 공유). 강제 중단 사실은 `@audited`가 자동 기록하는 audit
+        log와 trajectory에 남는다.
+
+        **kill switch(pause)와 무관하게 항상 호출 가능**: `vc_pause`/`vc_resume`과 같은
+        이유로 `check_not_paused()`를 타지 않는다 — pause 중에도 이미 시작된 run을 정리할
+        수 있어야 한다(정리를 막는 kill switch는 스스로 목적에 반한다).
+        """
+        if not approved:
+            raise PermissionError("vc_kill_run은 approved=True 없이 호출할 수 없습니다")
+
+        run = get(Run, run_id)
+        if run is None:
+            raise ValueError(f"run {run_id} not found")
+
+        ok = _service().reset_run(run.target_id, run.id, approved=True)
+        record_trajectory_step(
+            run.id,
+            state=run.status,
+            action={"tool": "vc_kill_run", "run_id": run_id},
+            result={"ok": ok},
+            next_state=run.status,
+        )
+        return RunResetResult(run_id=run.id, target_id=run.target_id, ok=ok)
 
     @mcp.tool()
     @audited

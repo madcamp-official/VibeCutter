@@ -225,9 +225,12 @@ D2-P4.md도 확인: P4가 GPU 불필요 항목을 전부 끝냈다 — `scanners
 
 ### 2. Rollback 경로 연결
 
-- [ ] P2가 제공한 `TargetRuntimeService.reset_run(target_id, run_id, approved=True)`를 P1 kill switch/상태 머신에서 호출할 수 있게 통합(예: `vc_kill_run(run_id, approved: bool)` 신규 tool, 또는 기존 `vc_reset_target`을 run-scoped로 확장 — 오늘 설계 판단). reset 실패 시 worktree를 보존한다는 P2 계약을 그대로 존중(삭제 재시도하지 않음).
-- [ ] kill 이후 Run 상태를 어떻게 표시할지 결정: 기존 `state_machine.py`에 kill 전용 상태가 없으므로, 현재 상태를 유지한 채 audit log에 강제 중단을 기록하는 쪽으로 갈지 신규 상태를 추가할지 오늘 판단하고 결정 근거를 문서화(공통 계약 변경이라 P2/P3에 공유 필요).
-- [ ] 테스트: kill 호출 시 `reset_run`이 정확한 인자로 호출되는 것(mock), approval 없는 kill 거부, reset 실패 시 worktree 보존 시나리오.
+- [x] P2가 제공한 `TargetRuntimeService.reset_run(target_id, run_id, approved=True)`를 신규 `vc_kill_run(run_id: str, approved: bool) -> RunResetResult` tool(`mcp_server/tools_repair.py`)로 노출. reset 실패 시 worktree를 보존한다는 P2 계약은 그대로 존중(삭제 재시도하지 않음, `ok=False`만 반환).
+- [x] **[결정] kill 이후 Run 상태는 바꾸지 않는다** — `state_machine.py`에 kill 전용 상태가 없고, kill/rollback은 인프라 정리이지 verified/fixed 같은 보안 판정이 아니라서 공통 계약(RunState 그래프)을 오늘 새로 확장하지 않기로 했다. 강제 중단 사실은 `@audited`(자동 audit log)와 `record_trajectory_step()`으로 남긴다. 확장이 필요해지면 P2/P3와 먼저 공유.
+- [x] **[결정] `vc_kill_run`은 kill switch(pause)와 무관하게 항상 호출 가능** — `vc_pause`/`vc_resume`과 같은 이유: pause 중에도 이미 시작된 run은 정리할 수 있어야 한다.
+- [x] 테스트(`tests/test_kill_run.py`, 6건): approval 없는 거부, 존재하지 않는 run 거부, `reset_run`이 정확한 `(target_id, run_id, approved=True)`로 호출되는 것 + Run 상태 불변, reset 실패 시 예외 없이 `ok=False`, trajectory 기록, **pause 중에도 호출되는 것** 확인.
+
+**검증**: 전체 회귀 146개(kill switch 7 + kill_run 6 신규) 통과.
 
 ### 3. `core/planner.py` — `audit_local_target` 오케스트레이션 + 재시도 상한
 
