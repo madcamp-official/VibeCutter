@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from contracts.schemas import Candidate, Finding, FindingStatus, Run, RunState, VerificationResult
 from core.audit_log import audited
 from core.evidence_store import find_or_create_finding, get, save, update_finding_status
+from core.kill_switch import check_not_paused
 from core.policy_engine import require_target_allowed
 from core.state_machine import transition
 from core.trajectory import record_trajectory_step
@@ -67,6 +68,7 @@ def _prepare_verification(
     공격 파라미터가 있어야 하는데 아직 없다(오늘 계약 이견 섹션의 `vuln_class`/`attack_params`
     항목, D1-P3.md 이견 1) — 스키마가 개선되면 여기서 `require_host_allowed`도 추가한다.
     """
+    check_not_paused()
     if not approved:
         raise PermissionError(f"{tool_name}는 run-level 승인(approved=True) 없이 호출할 수 없습니다")
 
@@ -99,6 +101,7 @@ def _prepare_scan(run_id: str, *, tool_name: str) -> Run:
     거부한다(P3 mapping 완료 전까지는 테스트/리허설에서 Run을 직접 CANDIDATE_SCAN으로 만들어야
     한다 — `tests/test_verify_tool_wiring.py`가 이미 이 방식을 쓰고 있다).
     """
+    check_not_paused()
     run = get(Run, run_id)
     if run is None:
         raise ValueError(f"run {run_id} not found")

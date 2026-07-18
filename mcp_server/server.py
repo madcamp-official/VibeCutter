@@ -12,7 +12,14 @@ if str(_REPO_ROOT) not in sys.path:
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 
 from core.audit_log import audited  # noqa: E402
-from mcp_server import resources, tools_analysis, tools_inventory, tools_repair  # noqa: E402
+from mcp_server import (  # noqa: E402
+    prompts,
+    resources,
+    tools_analysis,
+    tools_control,
+    tools_inventory,
+    tools_repair,
+)
 
 mcp = FastMCP("vibecutter")
 
@@ -28,6 +35,8 @@ resources.register(mcp)
 tools_inventory.register(mcp)
 tools_analysis.register(mcp)
 tools_repair.register(mcp)
+tools_control.register(mcp)
+prompts.register(mcp)
 
 if __name__ == "__main__":
     mcp.run(transport="stdio")

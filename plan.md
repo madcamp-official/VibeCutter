@@ -203,24 +203,85 @@ D2-P4.md도 확인: P4가 GPU 불필요 항목을 전부 끝냈다 — `scanners
 
 **Notion 완료 기준**: 명령 한 줄 → 전체 파이프라인.
 
-- [ ] `audit_local_target` MCP Prompt 완성 (6.5절) — 한 번의 요청으로 `register → build → map → scan → verify → localize → patch → validate → report` 전체가 상태 머신을 타고 흐르도록 오케스트레이션(`core/planner.py`).
-- [ ] **Kill switch**: global pause file + supervisor timeout 구현 (10.2절). 아무 때나 실행 중단 가능해야 함.
-- [ ] **Rollback 경로**: git worktree 삭제 + (P2 제공) VM snapshot/volume reset을 P1의 상태 머신에서 호출할 수 있도록 통합.
-- [ ] **SKILL.md 작성** (6.8절 예시 기반): 언제 도구를 호출할지, 승인 시점, 절대 금지 범위, 보고서 형식을 규정. 핵심 규칙 예시:
-   - [ ] `vc_list_authorized_targets`가 반환한 target에만 동작
-   - [ ] 임의 네트워크 목적지 구성 금지
-   - [ ] patch 적용은 explicit user confirmation 없이 금지
-   - [ ] `verified=true`는 오직 judge 결과로만 인정
-   - [ ] 패치 후 반드시 replay_attack + regression_suite 실행
-   - [ ] 3회 연속 수정 실패 시 human review 요청
-- [ ] Host 설정 예시(claude_desktop_config류) 작성.
-- [ ] P4가 밤에 돌리는 LoRA 학습/OWASP Benchmark 배치가 evidence_store의 trajectory 데이터를 읽어갈 수 있도록 **오늘 낮 동안 trajectory export 인터페이스**(4.5절 학습 샘플 구조에 맞는 JSONL export)를 완성해 P4에 넘긴다 — 이게 늦으면 밤샘 학습 배치 자체가 시작을 못 한다.
+**어제 handoff 요약 (D3-P1/P2/P2-status-update/P2-clean-room-prep/P3 기준, D3-P4는 아직 없음)**:
+- **P2가 D3에서 run-scoped worktree + Compose overlay + rollback을 전부 완성**했다: `catalog.run_overlay_for(target_id, run_id).prepare()` → `overlay.execute("build"|"start")`, `catalog.test_runner_for(target_id).run(run_id)`(worktree 전용 regression), `TargetRuntimeService.reset_run(target_id, run_id, approved=True)`(Compose reset 성공 후에만 worktree 정리, 실패 시 worktree 보존). `26s-w1-c2-04`가 live로 떠 있고(`:14017`/`:14018`), `26s-w1-c3-09`는 clean-room/holdout 후보로 준비됨.
+- **P2가 D3-P2-status-update.md에서 P1에게 직접 요청한 두 가지가 아직 반영 안 됨**: ①"Compose 기반 `check_build()`/start 경로에서 static manifest 실행 대신 P2 overlay를 호출해 patched worktree를 build/start하도록 배선할 것", ②"P1의 kill switch에는 `reset_run()`을 연결할 것". 지금 `check_build`/`vc_build_and_test`는 D3-P1.md가 이미 "알려진 한계"로 기록한 대로 `source_dir="."` 치환 패턴만 쓰고 있어 `working_dir` overlay를 쓰는 target에서는 여전히 원본을 빌드한다 — **patched 코드를 실제로 검증하지 못하는 상태**. 이게 Day4에서 P2 몫이 아니라 P1이 오늘 가장 먼저 갚아야 할 빚이다.
+- **P3가 D3에서 c1-05(Spring, JWT)에서 closed-loop 한 바퀴(발견→verified→localize→patch v1/v2→재공격 실패+정상기능 통과)를 실증**했다 — 단, apply→재빌드→재기동은 P2 자동화가 없어 **수동으로 대행**했다. 위 P2 overlay 배선이 끝나야 이걸 `vc_apply_patch`→`vc_build_and_test`→`vc_replay_attack` MCP 경로로 자동 재현할 수 있다. 또한 P3의 `surface/graph.py`(IDOR 프리필터)가 `c2-04`/`c1-05`/`c2-05`/`c3-08` 4개 앱에서 recall·precision 실증까지 끝나 있어, candidate 자동 발견 경로도 이미 쓸 수 있다.
+- 🔴 **팀 공통 블로커, P2와 P3 둘 다 제기**: `semgrep`이 Python 3.14 환경에서 실행 자체가 안 된다(`opentelemetry` import 실패). `check_static` 게이트와 P4의 SAST 배치가 이 위에서 돈다 — 지금 상태로는 Day4 E2E 리허설에서 static gate가 무조건 죽는다. 팀이 실행 Python을 3.11/3.12로 통일하거나 semgrep을 시스템 바이너리(brew)로 분리해야 한다(D1-P3에서 이미 제기됐던 버전 불일치가 실제로 터진 것).
+- **P4의 D3 handoff가 없다.** D2-P4 이후 상태가 갱신됐는지 모른다 — trajectory export 요구사항, severity/owasp vocab 최종 확인, semgrep 블로커 인지 여부를 오늘 아침 직접 확인해야 한다.
+
+### 0. 오전 최우선 — 어제 넘어온 채무 정리 (다른 모든 작업보다 먼저)
+
+- [x] **P2 overlay를 build 경로에 실제 연결** — 확인해보니 이미 완료돼 있었다. `git log`로 확인한 결과 `81c06be feat: judge 게이트 수정` 커밋(main/planner에 이미 병합됨)이 정확히 이 작업을 했다: `check_build`가 `target.manifest.docker_isolation is not None`이면 `catalog.run_overlay_for(target_id, run_id)` → `overlay.prepare()` → `overlay.execute("build")`를 쓰고, source-native target만 기존 `source_dir="."` 패턴을 유지한다. 이 plan을 짤 때 참고한 D3-P1.md(14:17 작성)가 이 수정(16:39 커밋) 이전 시점이라 낡은 정보였다 — **handoff 문서보다 실제 코드/git log를 항상 먼저 확인할 것**. `check_regression`은 원래부터 `catalog.test_runner_for(target_id).run(run_id)`라 손댈 것 없음. baseline container와 run overlay의 포트 충돌 문제는 아직 미해결로 남아 있어 아래 항목으로 이월.
+- [ ] baseline container와 patched run overlay가 같은 loopback port를 쓸 수 있다는 P2 경고(D3-P2-status-update.md) — 포트 할당은 `runtime/compose_isolation.py`/overlay 생성 로직(P2 소유)의 영역이라 P1이 직접 고치지 않는다. 오늘 커뮤니케이션에서 P2에게 실행 순서(예: baseline 먼저 내리고 overlay 실행) 확인만 받는다.
+- [ ] 🔴 **semgrep 블로커 팀 확인**: 오전 중 P2/P3/P4에게 상태 공유하고 팀 결정(버전 통일 vs brew 분리)을 받아온다 — 이 결정이 안 나면 오늘 `check_static` 게이트와 P4 SAST 밤 배치가 못 돈다. 결정이 나면 `scanners.sast.run_semgrep` 호출 경로(P4 소유)에 맞춰 내 `check_static` 게이트 실행 환경도 동일하게 맞춘다.
+- [ ] **P4 상태 직접 확인**: D3-P4.md가 없으므로 오늘 아침 P4에게 직접 물어 (a) severity/owasp vocab·`aggregate.kept` 배선이 기대대로 동작하는지, (b) semgrep 블로커를 이미 인지하고 있는지, (c) trajectory export에 필요한 정확한 필드/포맷(4.5절 학습 샘플 구조)을 확인한다 — 이 답을 받아야 아래 6번(trajectory export)을 P4가 실제로 쓸 수 있는 형태로 만들 수 있다.
+
+### 1. Kill switch 구현 (10.2절)
+
+- [x] global pause file(`.vibecutter/PAUSE`) 존재 여부를 확인하는 공통 가드(`core/kill_switch.py` 신규, `check_not_paused()` → `KillSwitchEngaged`)를 만들고, `_prepare_verification()`/`_prepare_scan()`(`tools_analysis.py`)과 `tools_repair.py`의 `vc_localize_root_cause`/`vc_generate_patch`/`vc_apply_patch`/`vc_build_and_test`/`vc_replay_attack`/`vc_validate_regression` 6곳 진입부에서 공통으로 호출한다. `vc_pause`/`vc_resume`(`mcp_server/tools_control.py` 신규)은 승인 없이 언제든 호출 가능하고 이 가드 자체를 타지 않는다(pause 중에도 resume은 돼야 하므로). `vc_kill_run`도 같은 이유로 가드를 안 탄다(정리는 pause 중에도 가능해야 함).
+- [ ] supervisor timeout: run이 일정 시간 이상 걸리면 강제로 pause 상태로 전이 — **Day4 나머지 작업(planner/SKILL.md/trajectory export)을 먼저 끝내기로 하고 보류**. stdio 단일 프로세스 MCP 서버라 진짜 백그라운드 supervisor는 별도 스레드/프로세스가 필요해 pause file보다 설계 폭이 크다 — Day5 하드닝 때 재검토.
+- [x] 테스트(`tests/test_kill_switch.py`, 7건): pause file 존재 시 `_prepare_verification`/`_prepare_scan`이 `KillSwitchEngaged`로 거부되는 것, `clear_pause()` 후 정상 재개되는 것, `vc_pause`→`vc_resume` MCP round-trip.
+
+**검증**: 전체 회귀 146개(kill switch 7건 포함) 통과.
+
+### 2. Rollback 경로 연결
+
+- [x] P2가 제공한 `TargetRuntimeService.reset_run(target_id, run_id, approved=True)`를 신규 `vc_kill_run(run_id: str, approved: bool) -> RunResetResult` tool(`mcp_server/tools_repair.py`)로 노출. reset 실패 시 worktree를 보존한다는 P2 계약은 그대로 존중(삭제 재시도하지 않음, `ok=False`만 반환).
+- [x] **[결정] kill 이후 Run 상태는 바꾸지 않는다** — `state_machine.py`에 kill 전용 상태가 없고, kill/rollback은 인프라 정리이지 verified/fixed 같은 보안 판정이 아니라서 공통 계약(RunState 그래프)을 오늘 새로 확장하지 않기로 했다. 강제 중단 사실은 `@audited`(자동 audit log)와 `record_trajectory_step()`으로 남긴다. 확장이 필요해지면 P2/P3와 먼저 공유.
+- [x] **[결정] `vc_kill_run`은 kill switch(pause)와 무관하게 항상 호출 가능** — `vc_pause`/`vc_resume`과 같은 이유: pause 중에도 이미 시작된 run은 정리할 수 있어야 한다.
+- [x] 테스트(`tests/test_kill_run.py`, 6건): approval 없는 거부, 존재하지 않는 run 거부, `reset_run`이 정확한 `(target_id, run_id, approved=True)`로 호출되는 것 + Run 상태 불변, reset 실패 시 예외 없이 `ok=False`, trajectory 기록, **pause 중에도 호출되는 것** 확인.
+
+**검증**: 전체 회귀 146개(kill switch 7 + kill_run 6 신규) 통과.
+
+### 3. `core/planner.py` — `audit_local_target` 오케스트레이션 + 재시도 상한
+
+**[설계 변경]** 기획서 6.5절 원문(docx 추출 확인)을 다시 읽어보니 MCP Prompt는 "Host가 어떤 순서로 tool을 부를지" 안내하는 메시지 템플릿이지, 상태 머신을 대신 실행하는 Python 오케스트레이터가 아니었다(6.7절 "한 도구는 한 가지 명확한 상태 전이만 수행", 6.8절 SKILL 예시도 Host가 tool을 순차 호출하는 걸 전제). 그래서 계획을 조정했다: 프롬프트는 안내 텍스트만 반환하고(`mcp_server/prompts.py`), **실제 안전 강제(재시도 상한)는 프롬프트가 아니라 `vc_generate_patch` tool 자체가 코드 레벨로 한다** — Host가 규칙을 잊거나 무시해도 4번째 patch 시도는 tool이 거부한다. 이게 이 프로젝트 전체의 원칙(judge도 LLM 판단이 아니라 evidence로 강제)과 일관된다.
+
+- [x] 6.5절 MCP Prompt로 `audit_local_target`을 `mcp_server/prompts.py`(신규)에 등록(`@mcp.prompt()`). register→build→map→scan→verify→localize→patch(승인)→validate→report 순서와 승인 시점, 재시도 상한, kill switch(`vc_pause`)를 안내하는 텍스트를 반환한다. 실제 tool/resource 이름(예: `vibecutter://policies/scope`)만 참조하고, docx 예시에 있지만 실제로 구현되지 않은 `vc_list_authorized_targets`/`vc_judge_evidence` 같은 이름은 쓰지 않았다(존재하지 않는 tool을 안내하면 Host가 혼란스러워진다).
+- [x] **3회 연속 patch 실패 → `HUMAN_REVIEW` 강제 전이** (`core/planner.py` 신규): `patch_attempt_count(run_id, finding_id)`로 이 finding에 이미 생성된 Patch 수를 세고, `enforce_retry_budget(run, finding, next_attempt_no=...)`가 `MAX_PATCH_ATTEMPTS=3`을 넘으면 evidence artifact를 남기고 Finding을 `HUMAN_REVIEW`로 승격 + `RetryBudgetExhausted` 예외.
+- [x] **`vc_generate_patch`에 배선** (`mcp_server/tools_repair.py`): attempt_no를 항상 1로 고정하던 기존 버그를 고쳐 `patch_attempt_count()+1`로 계산해 `repair.patcher.generate_patch()`에 실제로 전달 — 예전엔 RETRY로 재시도해도 `attempt_no`가 올라가지 않았다(patcher.py 자체 docstring이 이미 "planner가 다음 attempt_no로 재시도"를 전제하고 있었는데 실제 연결이 없었음).
+- [x] **[공통 계약 변경, additive]** `core/state_machine.py`의 `RUN_TRANSITIONS[RunState.RETRY]`에 `RunState.HUMAN_REVIEW`를 추가(기존 `PATCH_PROPOSED` 경로는 유지) — 재시도 소진은 patch/verifier 판정이 아니라 프로세스 종료 사유라 RETRY의 기존 목적지만으로는 표현이 안 됐다. P2/P3에 공유 필요(오늘 커뮤니케이션 항목).
+- [x] 테스트: `tests/test_planner.py`(7건, retry budget 상한 이내/초과, evidence 확인, RETRY→HUMAN_REVIEW 전이 legality), `tests/test_generate_patch_retry.py`(3건, attempt_no 계산·4번째 시도 거부), `tests/test_prompts.py`(2건, prompt 등록·내용 확인).
+- [ ] (원래 계획했던) 전체 register→report mock 기반 happy-path 오케스트레이션 테스트는 하지 않기로 했다 — mapping tool(`vc_map_routes` 등)이 아직 P3 stub(`NotImplementedError`)이라 end-to-end는 애초에 못 돈다. Host가 각 tool을 부르는 구조로 바뀌어서 "P1이 대신 오케스트레이션 함수를 통째로 테스트"할 필요도 없어졌다(테스트 대상은 각 tool의 안전장치).
+
+**검증**: 전체 회귀 158개(planner 7 + generate_patch_retry 3 + prompts 2) 통과.
+
+### 4. build/regression 자동 경로로 c1-05(또는 c2-04) closed-loop 리허설 재현
+
+- [ ] 0번(overlay 배선)과 3번(planner)이 끝난 뒤, P3가 D3에 c1-05에서 수동으로 완주했던 closed loop를 `vc_apply_patch → vc_build_and_test → vc_replay_attack → vc_validate_regression` MCP 경로로 다시 실행해 자동화된 한 바퀴를 증명한다. 이게 Notion Day4 완료 기준("명령 한 줄 → 전체 파이프라인")의 실질적 증거.
+- [ ] `check_static`은 semgrep 블로커가 그날 안에 풀리면 포함, 안 풀리면 알려진 한계로 문서화하고 나머지 5게이트만으로 verdict 확인.
+
+### 5. SKILL.md 작성 (6.8절 예시 기반)
+
+- [x] 저장소 루트 `SKILL.md` 작성. docx 6.8절 원문 예시(`vc_list_authorized_targets`,
+  `vc_judge_evidence` 등)를 그대로 베끼지 않고 **실제 구현된 tool/resource 이름으로
+  다시 썼다** — 그 두 tool은 실제로 존재하지 않는다(문서 초안에만 있었음), 대신
+  `vibecutter://policies/scope` resource와 `vc_verify_*`/`update_finding_status`가 같은
+  역할을 한다. 각 규칙에 **[코드 강제]**(우회 불가)/**[Host 책임]**(서버가 안 막아줌)를
+  라벨링해 Host가 뭘 스스로 지켜야 하는지 명확히 했다:
+   - [x] `policies/scope.yaml`에 등록된 target에만 동작 (코드 강제, `PolicyViolation`)
+   - [x] 임의 네트워크 목적지 구성 금지 (코드 강제, tool 입력이 식별자만 받음)
+   - [x] patch 적용은 explicit user confirmation 없이 금지 (코드 강제 + Host 책임 혼합 — `confirmed=True` 자체는 강제되지만 "진짜 사용자에게 물어봤는지"는 Host 책임)
+   - [x] `verified=true`는 오직 judge 결과(evidence 기반)로만 인정 (코드 강제, `update_finding_status`의 evidence 실존 검사)
+   - [x] 패치 후 반드시 `vc_build_and_test`+`vc_replay_attack`+`vc_validate_regression` 전부 실행 (Host 책임 — 하나라도 빠지면 verdict가 영원히 미확정)
+   - [x] 3회 연속 수정 실패 시 human review 요청 — planner 구현(섹션 3)과 문구 일치, 코드 강제로 격상(`vc_generate_patch`가 4번째 시도 자체를 거부)
+   - [x] pause 시 즉시 중단 — `vc_pause` 호출은 Host 책임, 이후 모든 tool 거부는 코드 강제
+- [x] Host 설정 예시(claude_desktop_config류, `.venv` 인터프리터 경로 지정) 작성.
+- [x] **[신규 발견]** SKILL.md를 실제 tool 배선과 대조하며 쓰다가 발견한 진짜 gap: `vc_map_routes`/`vc_map_roles`/`vc_index_code`가 전부 스텁이고 Run을 `READY`→`MAPPING`으로 옮기는 다른 tool도 없어서, **지금은 Host가 tool 호출만으로 MAPPING 단계를 통과할 방법이 없다**(`vc_run_sast`/`vc_run_sca`는 `MAPPING`/`CANDIDATE_SCAN` 상태를 요구). `surface.graph.find_idor_suspects`(P3, D3 완료)는 이미 있는데 tool로 배선이 안 됐다 — SKILL.md에 알려진 격차로 남겨두고, 아래 커뮤니케이션 항목에서 P3에게 공유.
+
+### 6. Trajectory export 인터페이스 완성 (P4 밤 배치 전제, 오후 최우선)
+
+- [ ] 지금 `core/trajectory.py`는 run 하나당 `.vibecutter/trajectories/<run_id>.jsonl`에 append만 한다 — 여러 run을 모아 학습 샘플 형태로 묶어주는 export가 아직 없다. 0번에서 확인한 P4의 정확한 포맷 요구사항에 맞춰 aggregate export(위치/스키마)를 완성.
+- [ ] 완성 즉시 P4에 전달 — 오후 안에 끝내지 못하면 밤샘 QLoRA 배치가 시작을 못 한다.
 
 ### 오늘 커뮤니케이션
-- [ ] **P4에게 낮 동안 최우선**: trajectory export 포맷/위치를 확정해 전달 — Day4 밤 P4의 7B QLoRA 학습 배치가 이 데이터를 쓴다. 오후 안에 끝내지 못하면 밤샘 배치가 밀린다.
-- [ ] **P2에게**: holdout 앱 clean-room snapshot 및 demo target 준비 상태를 확인하고, 내 kill switch/rollback이 P2의 snapshot 메커니즘과 실제로 맞물리는지 함께 리허설.
-- [ ] **P3에게**: 3개 취약점군(IDOR/XSS/Injection) 전체가 오늘 안에 하드닝되므로, 파이프라인 전체를 한 번 같이 돌려보고 게이트에서 걸리는 케이스 확인.
-- [ ] 저녁 handoff에 "명령 한 줄 파이프라인 완성, kill switch 동작 확인, trajectory export 완료" 상태 기록.
+- [ ] **P4에게 아침 최우선**: D3 상태가 없어 직접 확인 필요(0번) — 답변 받는 대로 trajectory export 포맷 확정.
+- [ ] **P4에게 낮 동안 최우선**: trajectory export 포맷/위치를 확정해 전달 — Day4 밤 P4의 7B QLoRA 학습 배치가 이 데이터를 쓴다.
+- [ ] **P2에게**: (a) overlay를 build/regression 경로에 연결 완료 알림, 포트 충돌 처리 방식 확인 요청. (b) kill switch가 `reset_run()`을 호출하도록 연결했다는 것과 kill 이후 Run 상태 표시 방식(2번 설계 판단) 공유. (c) semgrep 블로커에 대한 팀 결정 참여 요청. (d) `c3-09`(holdout 후보) 준비 상태 확인, Day5 clean-room 리허설에 그대로 쓸 수 있는지 확인.
+- [ ] **P3에게**: (a) overlay 배선 완료로 c1-05 closed-loop를 이제 MCP 경로로 자동 재현할 수 있다는 것 알림, 함께 리허설 요청. (b) semgrep 블로커 팀 결정 공유. (c) `RootCause` 확장/`redact()` 제거는 예정대로 Day5로 유지 확인. (d) `vc_generate_patch`가 이제 `attempt_no`를 실제로 계산해 `repair.patcher.generate_patch()`에 넘긴다는 것 확인 요청 — patcher.py 자체 docstring이 전제하던 연결이라 P3 쪽 코드 변경은 없어야 정상. (e) 🔴 **SKILL.md 작성 중 발견**: `vc_map_routes`/`vc_map_roles`/`vc_index_code`가 전부 스텁이라 Host가 tool 호출만으로는 `READY`→`MAPPING`을 통과할 방법이 없다(지금까지의 모든 테스트가 Run을 직접 `CANDIDATE_SCAN`으로 만들어 우회해왔다는 뜻). `surface.graph.find_idor_suspects`는 이미 완성돼 있으니, 이걸 `vc_map_routes` 본문에 배선하거나(P3) `vc_run_sast`/`vc_run_sca`가 MAPPING을 자동으로 거치게 할지(P1) 조율 필요 — Day4 남은 시간 또는 Day5 초반 처리 대상으로 제안.
+- [ ] **P2·P3 공통**: `core/state_machine.py`의 `RUN_TRANSITIONS[RunState.RETRY]`에 `HUMAN_REVIEW`를 추가한 것(additive, 기존 `PATCH_PROPOSED` 경로 유지) 공유 — 공통 계약 변경이라 "조용히 변경 금지" 규칙에 따라 알림.
+- [ ] 저녁 handoff에 "overlay 배선 완료, kill switch/rollback 동작 확인, planner 오케스트레이션 완성, 3회 실패 HUMAN_REVIEW 전이 확인, trajectory export 완료, semgrep 블로커 상태" 기록.
 
 ---
 
@@ -273,6 +334,7 @@ P1은 밤샘 배치 작업(Dockerize, Semgrep, build/health, audit, LoRA)을 직
 | judge가 LLM 주장을 그대로 승격 | verified 남발, false positive 과다 | evidence 없이는 상태 전이 자체가 불가능하도록 하드 가드 (코드 레벨에서 우회 불가) |
 | patch가 원본 branch를 건드림 | 절대 원칙 위반, 프로젝트 신뢰성 붕괴 | apply 도구는 worktree 경로만 받도록 타입으로 강제, scope gate에서 이중 검증 |
 | MCP stdout 오염 | Host와의 JSON-RPC 파싱 깨짐 | 모든 로그는 stderr/file로만, print() 금지 원칙 코드 리뷰 시 항상 확인 |
+| semgrep이 Python 3.14에서 실행 불가 (D3 발견, P2/P3 공동 제기) | `check_static` 게이트와 P4 SAST 배치가 죽음 | Day4 오전 팀 결정(3.11/3.12 통일 vs brew 시스템 바이너리) 없이는 static gate를 E2E 리허설에서 제외하고 알려진 한계로 문서화 |
 
 ---
 

@@ -3,6 +3,7 @@
 vc_localize_root_cause, vc_generate_patch (Repair, P3 소유)
 vc_apply_patch (Mutation, P1 게이트 — 명시적 승인 없이는 호출 불가)
 vc_build_and_test, vc_replay_attack, vc_validate_regression (Judge, P1 배선)
+vc_kill_run (Rollback, P1 소유 — P2 reset_run() 호출, kill switch와 무관하게 항상 가능)
 vc_generate_report, vc_export_sarif (Report, P1/P4 소유)
 
 generate와 apply를 별도 도구로 분리하는 것은 절대 원칙(원본 branch 직접 변경 금지,
@@ -42,6 +43,8 @@ from core.judge import (
     check_static,
     compute_verdict,
 )
+from core.kill_switch import check_not_paused
+from core.planner import enforce_retry_budget, patch_attempt_count
 from core.state_machine import transition
 from core.trajectory import record_trajectory_step
 from mcp_server.tools_inventory import _service
@@ -53,6 +56,12 @@ class ReportResult(BaseModel):
     run_id: str
     artifact_uri: str
     format: str
+
+
+class RunResetResult(BaseModel):
+    run_id: str
+    target_id: str
+    ok: bool
 
 
 def _advance_to_patch_proposed(run: Run) -> None:
@@ -183,6 +192,7 @@ def register(mcp: FastMCP) -> None:
         검증 실패로 catalog 전체 로드가 죽어 있었으나, P2가 수정해 checked-in manifest 22개가
         전부 `TargetCatalog.load()`를 통과한다 — 이 tool은 이제 실제 target으로 호출 가능하다.
         """
+        check_not_paused()
         finding = get(Finding, finding_id)
         if finding is None:
             raise ValueError(f"finding {finding_id} not found")
@@ -207,7 +217,15 @@ def register(mcp: FastMCP) -> None:
         **실패 처리**: 패치 후보를 하나도 합성 못 하면 `generate_patch()`가 `ValueError`를
         내는데, 이때는 RunState를 전이하지 않는다(패치가 없는데 PATCH_PROPOSED로 넘어가지
         않도록) — 실패해도 run은 원래 상태(예: VERIFIED)에 그대로 남는다.
+
+        **재시도 상한(Day4, `core/planner.py`)**: 이 finding에 이미 생성된 Patch 수로 다음
+        `attempt_no`를 계산해 `generate_patch()`에 그대로 넘긴다(예전엔 항상 1로 고정돼
+        있어 RETRY 재시도가 attempt_no를 올리지 않는 버그가 있었다). `attempt_no`가
+        `core.planner.MAX_PATCH_ATTEMPTS`(3)를 넘으면 patch를 생성하지 않고 Finding을
+        `HUMAN_REVIEW`로 강제 승격한 뒤 `RetryBudgetExhausted`를 던진다 — Host가 재시도를
+        멈추길 기대하는 대신 tool 자체가 4번째 시도를 거부한다.
         """
+        check_not_paused()
         finding = get(Finding, finding_id)
         if finding is None:
             raise ValueError(f"finding {finding_id} not found")
@@ -215,15 +233,20 @@ def register(mcp: FastMCP) -> None:
         if run is None:
             raise ValueError(f"run {finding.run_id} not found")
 
+        attempt_no = patch_attempt_count(run.id, finding.id) + 1
+        enforce_retry_budget(run, finding, next_attempt_no=attempt_no)
+
         source_root = _service().catalog.source_root_for(run.target_id)
         root_cause = localize(finding, source_root=source_root)
-        patch = generate_patch(run.id, finding, root_cause, source_root=source_root)
+        patch = generate_patch(
+            run.id, finding, root_cause, source_root=source_root, attempt_no=attempt_no
+        )
         save(patch)
         _advance_to_patch_proposed(run)
         record_trajectory_step(
             run.id,
             state=run.status,
-            action={"tool": "vc_generate_patch", "finding_id": finding_id},
+            action={"tool": "vc_generate_patch", "finding_id": finding_id, "attempt_no": attempt_no},
             result={"patch_id": patch.id, "files": patch.files, "approval": patch.approval},
             next_state=run.status,
         )
@@ -240,6 +263,7 @@ def register(mcp: FastMCP) -> None:
         뒤 `git apply`로 적용한다. RunState는 PATCH_PROPOSED→WAITING_APPROVAL→PATCH_APPLIED로
         전이(이미 PATCH_APPLIED면 재적용하지 않고 그대로 반환 — 재시도 안전).
         """
+        check_not_paused()
         if not confirmed:
             raise PermissionError("vc_apply_patch는 confirmed=True 없이 호출할 수 없습니다")
 
@@ -287,6 +311,7 @@ def register(mcp: FastMCP) -> None:
         `vc_validate_regression`과 공유한다 — 세 tool이 각자 맡은 게이트만 채우고, 6개가
         모두 채워지는 순간 verdict가 확정된다(`_finalize_validation`).
         """
+        check_not_paused()
         patch = get(Patch, patch_id)
         if patch is None:
             raise ValueError(f"patch {patch_id} not found")
@@ -317,6 +342,7 @@ def register(mcp: FastMCP) -> None:
     @audited
     def vc_replay_attack(patch_id: str) -> Validation:
         """Attack gate: 동일 공격이 더 이상 통하지 않는지 재실행한다. P1 배선, P3 verifier 재사용."""
+        check_not_paused()
         patch = get(Patch, patch_id)
         if patch is None:
             raise ValueError(f"patch {patch_id} not found")
@@ -342,6 +368,7 @@ def register(mcp: FastMCP) -> None:
     @audited
     def vc_validate_regression(patch_id: str) -> Validation:
         """Positive functionality gate + Static/Scope gate를 실행한다."""
+        check_not_paused()
         patch = get(Patch, patch_id)
         if patch is None:
             raise ValueError(f"patch {patch_id} not found")
@@ -369,6 +396,43 @@ def register(mcp: FastMCP) -> None:
             next_state=run.status,
         )
         return validation
+
+    @mcp.tool()
+    @audited
+    def vc_kill_run(run_id: str, approved: bool) -> RunResetResult:
+        """kill switch의 rollback 경로: 이 run의 patched worktree/runtime을 정리한다.
+
+        P2의 `TargetRuntimeService.reset_run(target_id, run_id, approved=True)`(D3-P2.md)를
+        그대로 호출한다 — generated Compose reset이 성공한 뒤에만 target-source worktree를
+        지운다. reset이 실패하면 worktree는 보존되고(P2 계약, 삭제 재시도 없음) 이 tool도
+        `ok=False`를 반환한다.
+
+        **Run 상태는 바꾸지 않는다**: kill/rollback은 인프라 정리이지 verified/fixed 같은
+        보안 판정이 아니고, `core/state_machine.py`의 RunState 그래프에는 kill 전용 상태가
+        없다 — 오늘 이 공통 계약을 새로 확장하지 않기로 결정했다(D4-P1.md 참고, 확장이
+        필요해지면 P2/P3와 먼저 공유). 강제 중단 사실은 `@audited`가 자동 기록하는 audit
+        log와 trajectory에 남는다.
+
+        **kill switch(pause)와 무관하게 항상 호출 가능**: `vc_pause`/`vc_resume`과 같은
+        이유로 `check_not_paused()`를 타지 않는다 — pause 중에도 이미 시작된 run을 정리할
+        수 있어야 한다(정리를 막는 kill switch는 스스로 목적에 반한다).
+        """
+        if not approved:
+            raise PermissionError("vc_kill_run은 approved=True 없이 호출할 수 없습니다")
+
+        run = get(Run, run_id)
+        if run is None:
+            raise ValueError(f"run {run_id} not found")
+
+        ok = _service().reset_run(run.target_id, run.id, approved=True)
+        record_trajectory_step(
+            run.id,
+            state=run.status,
+            action={"tool": "vc_kill_run", "run_id": run_id},
+            result={"ok": ok},
+            next_state=run.status,
+        )
+        return RunResetResult(run_id=run.id, target_id=run.target_id, ok=ok)
 
     @mcp.tool()
     @audited
