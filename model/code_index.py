@@ -235,6 +235,18 @@ class CodeIndex:
         q = name.lower()
         return [s for s in self.symbols if q in s.name.lower()]
 
+    def chunk_at(self, file: str, line: int) -> Optional[CodeChunk]:
+        """주어진 file:line 을 포함하는 chunk 를 찾는다(candidate 위치 → 코드 컨텍스트).
+
+        candidate 의 source_symbols 는 스캔 루트 기준 상대경로라, 정확 일치 우선 후
+        endswith 로 폴백(스캐너/인덱스 루트가 살짝 달라도 붙게)."""
+        exact = [c for c in self.chunks if c.file == file]
+        pool = exact or [c for c in self.chunks if c.file.endswith(file) or file.endswith(c.file)]
+        for c in pool:
+            if c.start_line <= line <= c.end_line:
+                return c
+        return None
+
 
 def _main() -> None:
     parser = argparse.ArgumentParser(description="RAG 코드 인덱스 (P4)")

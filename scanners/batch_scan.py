@@ -162,9 +162,14 @@ def _main() -> None:
     parser.add_argument("--limit", type=int, help="앞 N개만")
     parser.add_argument("--sca", action="store_true", help="SCA(OSV)도 함께")
     parser.add_argument("--dry-run", action="store_true", help="clone 없이 대상만 출력")
+    parser.add_argument(
+        "--benchmark", action="store_true",
+        help="벤치마크 inventory 스캔(B1/B2 정확도 측정용, 정답 있는 앱)",
+    )
     args = parser.parse_args()
 
-    apps = Inventory.load().apps
+    inv_path = Path("datasets/inventory_benchmark.yaml") if args.benchmark else None
+    apps = (Inventory.load(inv_path) if inv_path else Inventory.load()).apps
     if args.limit:
         apps = apps[: args.limit]
 
