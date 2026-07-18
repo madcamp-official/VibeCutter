@@ -2,9 +2,18 @@
 # 실제 command template(어떤 프로세스를 어떻게 실행할지)은 adapter(P2)가 정의한다.
 # 여기 commands.yaml은 "이 command_id로 어떤 타입의 인자를 받을 수 있는가"만 정책으로 고정한다.
 #
-# 형식 예시 (아직 adapter가 없어 비워둔다):
-# commands:
-#   docker-compose-up:
-#     args:
-#       target_id: str
-commands: {}
+# 아래 3개는 runtime/target_service.py의 build()/start()/reset()이 각각 호출하는
+# require_valid_command(command_id, {"target_id": target_id})와 정확히 맞춘 것이다.
+# reset의 explicit approval은 이 typed-args 계층이 아니라 TargetRuntimeService.reset()의
+# `approved` 파라미터(ApprovalRequired 예외)로 별도 강제된다 — 명령 인자가 아니라
+# 도구 시그니처 수준의 승인 게이트라 여기 스키마에는 포함하지 않는다.
+commands:
+  build_target:
+    args:
+      target_id: str
+  start_target:
+    args:
+      target_id: str
+  reset_target:
+    args:
+      target_id: str

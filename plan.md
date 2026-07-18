@@ -67,16 +67,82 @@
 
 **Notion 완료 기준**: 승인 → verifier 호출 경로 완성.
 
-- [ ] **run 승인 게이트** 구현: 공격성 도구(verification 카테고리, 6.6절)는 run-level 승인이 있어야 호출 가능. `WAITING_APPROVAL` 유사 게이트를 verify 이전 단계에도 적용 (Host에서 승인 UI가 뜰 수 있도록 도구를 분리 — 6.7절 "patch 적용, DB reset, destructive test는 별도 도구로 분리").
-- [ ] **verify tool 실배선**: MCP tool 호출 → policy_engine 검사(등록된 target/scope인지) → 상태를 `VERIFYING`으로 전이 → P3가 구현한 verifier 함수 호출 → 결과(evidence_ids, verified: bool)를 evidence_store에 기록 → judge가 `verified`/`rejected`로 Finding 상태 확정.
-- [ ] **judge.py skeleton**: 7.6절 6개 게이트(Build/Attack/Positive functionality/Regression/Static/Scope) 함수 시그니처를 먼저 정의. Day2엔 Attack gate(공격 재현 실패 여부)만 실제로 동작하게 만들고 나머지는 스텁으로 둔다 — Day3에 전체 완성.
-- [ ] `vibecutter://findings/{finding_id}` resource 완성 — 부록 B Finding Report Schema 형태로 반환 (id, CWE, status, evidence, root_cause 등, 아직 없는 필드는 null).
-- [ ] **LLM confidence와 최종 판정 분리**를 코드 레벨에서 강제: verifier가 뭐라고 주장해도 evidence_store에 실제 evidence가 없으면 judge가 `verified`로 승격 못 하게 하드 가드.
+**어제 handoff 요약 (D1-P1/P2/P3/P4, D2-P3 기준)**:
+- Day1 전원 완료. 그런데 **P3가 이미 밤사이 WebGoat로 IDOR verified 1건을 증명**했다(D2-P3.md) — 단, MCP tool 경로를 안 거치고 `verifiers.access_control.verify()`를 직접 호출한 개념 증명이다. 오늘 내 tool 배선이 끝나야 "MCP를 통한" 완주가 된다.
+- P3가 P1 Day1 산출물을 실제로 실행해 **구멍 3개를 재현**했다: ①`update_finding_status()`가 evidence_id 존재 여부를 확인하지 않아 허구 id로도 verified 승격됨(코드 레벨 하드 가드라던 주장이 실제로는 뚫림) ②`write_artifact()`에 secret redaction이 전혀 없어 JWT가 artifact에 평문으로 남음(재현 확인됨) ③`max_requests`에 부록 A의 `ge=1,le=20` 제약이 스키마에 없음.
+- `policies/scope.yaml`/`policies/commands.yaml`이 **여전히 완전히 비어 있다**(`targets: {}`, `commands: {}`). P2가 D1에 실제로 build/health까지 통과시킨 target이 19개나 있는데(D1-P2.md 포트 목록) 하나도 policy_engine을 못 통과한다 — 오늘 verify tool을 실 target에 못 붙이는 직접적 원인.
+
+### 0. 어제 구멍 메우기 (다른 모든 작업보다 먼저)
+
+- [x] **구멍① 허구 evidence_id 승격 차단**: `core/evidence_store.py:update_finding_status()`에서 각 `evidence_id`를 `get(Observation, eid)`로 실존 확인 + `Observation.run_id == finding.run_id` 일치 검사 추가. 존재하지 않거나 다른 run 소속이면 신규 `InvalidEvidenceError`. `transition_finding()`은 순수 함수로 그대로 두고 store 계층에서만 막았다(P3 제안대로).
+  - [x] 회귀 테스트(`tests/test_evidence_store.py`): 존재하지 않는 id로 승격 시도 → 실패. 다른 run의 진짜 id로 승격 시도 → 실패. 같은 run의 진짜 id → 정상 승격.
+- [x] **구멍② secret redaction 소유권 확정 + 구현**: P1이 저장 계층 소유로 확정하고 `core/redaction.py`(신규)를 만들어 `write_artifact()` 저장 직전에 적용. P3의 `verifiers/access_control.py:redact()` 패턴(JSESSIONID/Bearer/password)을 승격했고, Bearer 접두사 없이 body에 그냥 박힌 JWT도 잡는 패턴을 추가했다. hash는 저장되는(redaction 후) bytes 기준으로 계산되도록 수정. UTF-8로 디코딩 안 되는 바이너리는 원본 그대로 저장(현재 텍스트 기반 규칙의 한계, 문서화함).
+  - [x] 회귀 테스트(`tests/test_redaction.py`, `tests/test_evidence_store.py`): JWT/Bearer/JSESSIONID/password 평문 미노출, hash-저장 bytes 일치, 바이너리 무변형, redact 멱등성 확인.
+  - [ ] **P3에게 알려 verifier 쪽 임시 `redact()` 호출 제거 요청** — 아직 안 함(오늘 커뮤니케이션 항목에서 처리). 이중 적용은 idempotent라 지금 당장 깨지진 않는다.
+- [x] **구멍③ max_requests 상한 강제**: `mcp_server/tools_analysis.py`의 `vc_verify_*` 세 함수 시그니처를 `Annotated[int, Field(ge=1, le=20)]`(FastMCP가 실제로 스키마 제약을 뽑아내는 패턴 확인 후 적용)로 변경. 생성된 tool inputSchema에 `minimum: 1, maximum: 20, default: 10`이 실제로 박히는 것과, `max_requests=999` 호출이 tool 본문 도달 전 스키마 검증 단계에서 거부되는 것을 `mcp.call_tool()`로 직접 확인.
+- [x] **`VerifyResult`/`VerifierOutput` 중복 제거**: `contracts/schemas.py`에 `VerificationResult`를 신설해 통합. `verifiers/types.py`는 `VerifierOutput = VerificationResult` 별칭으로 바꿔 `verifiers/access_control.py`(P3 소유, 미수정) 등 기존 코드가 변경 없이 그대로 동작한다. `mcp_server/tools_analysis.py`도 이 타입을 사용하도록 변경.
+
+**검증**: 전체 회귀 테스트(P1 신규 10 + P2 31 + 기존) `python -m unittest discover -s tests` 47 passed. P4의 독립 스위트(`scanners.test_batch_scan`/`eval.test_baseline`/`model.test_code_index`/`datasets.inventory`)도 재실행해 스키마 변경 영향 없음 확인.
+
+### 1. 정책 등록 — target allowlist/command 채우기 (verify tool을 실 target에 붙이기 위한 전제)
+
+- [x] `policies/scope.yaml`에 D1-P2.md가 제시한 실제 통과 target 19개(`26s-w1-c1-02`~`26s-w1-c3-08` 중 build/health 통과분, `26s-w1-c1-01`/`26s-w1-c2-03`/`26s-w1-c3-07`은 의도적으로 제외 — 이유를 파일에 주석으로 남김)의 `allowed_hosts`/`port`를 등록. port는 각 `targets/manifests/<id>.yaml`의 `base_url`에서 직접 추출해 manifest와 어긋나지 않게 함.
+- [x] `policies/commands.yaml`에 `build_target`/`start_target`/`reset_target` command_id를 `{target_id: str}` typed args로 등록. (`reset_target`의 명시적 승인은 typed-args가 아니라 `TargetRuntimeService.reset()`의 `approved` 파라미터로 별도 강제되는 구조라 commands.yaml에는 `approved`를 넣지 않음 — 코드 확인 후 원래 계획 수정.)
+- [x] `core.policy_engine.require_target_allowed`/`require_host_allowed`/`require_valid_command`를 실제 target_id(`26s-w1-c1-03`, `26s-w1-c2-07`)로 직접 호출해 더 이상 `PolicyViolation`이 나지 않는 것, 미등록 target은 여전히 거부되는 것을 확인.
+- [x] ~~`TargetRuntimeService`로 register→build→start→check_readiness 전체 round-trip~~ **21개 전체로는 블로커, 1개 subset으로는 register+readiness까지 실증 완료**:
+  - 🔴 **블로커 원인**: `TargetCatalog.load()`가 `targets/manifests/`의 21개 매니페스트를 전부 즉시 검증하는데, 그중 3개(`26s-w1-c2-05`, `26s-w1-c2-08`, `26s-w1-c3-04`)가 `role_fixtures[].secret_env_names`에 `VIBECUTTER_*` 접두사가 아닌 원본 provider 이름(`GOOGLE_API_KEY`, `GEMINI_API_KEY`, `KIS_APP_KEY` 등)을 그대로 적어 `runtime/manifest.py`의 `environment_names_only` validator에서 `ValidationError`가 난다. 하나라도 깨지면 catalog 전체 로드가 죽어 **어떤 target에 대해서도** `TargetRuntimeService`가 동작하지 않는다.
+  - **우회 검증**: 정상 manifest 1개(`26s-w1-c1-03`)만 담은 임시 manifest 디렉터리로 `TargetCatalog`를 별도 구성해(P2 파일은 전혀 안 건드림) 실제 프로덕션 코드 경로(`TargetRuntimeService.register()`/`.check_readiness()`)를 끝까지 통과시켰다. `register()`는 정상적으로 `Target`을 반환했고, `check_readiness()`는 `ready=False`(사유: 이 머신에 P2의 로컬 source clone과 role fixture 환경변수가 없음 — 코드 문제 아님)까지 정확히 보고했다. **정책 등록 자체는 문제 없다는 것을 이 subset 테스트로 확정.**
+  - 🟡 **새로 발견한 버그(P2 소유, 수정 안 함)**: 같은 subset으로 `build()`까지 시도하니 `runtime/target_service.py`의 실패 경로가 `target.id`(`RegisteredRuntimeTarget`엔 없는 속성 — `target.manifest.id`여야 함)를 참조해 `TargetOperationError` 대신 `AttributeError`가 터진다. build가 실패할 때마다(지금처럼 소스 없음이든 실제 빌드 에러든) 원인 메시지가 가려지는 버그. **P2에게 알리기만 하고 직접 고치지 않기로 결정**(runtime/은 P2 소유 — 사용자 확인).
+- [x] **P2에게 커뮤니케이션 항목 확정** (오늘 커뮤니케이션 섹션에 반영): ① 3개 manifest의 `secret_env_names`를 `VIBECUTTER_` 접두사로 바꾸거나 validator를 완화해달라 — 지금 상태로는 Day2 전체가 실 target에 못 붙는다. ② `runtime/target_service.py` build 실패 경로의 `target.id` → `target.manifest.id` 버그 수정 요청. ③ IDOR 검증 가능한 target(사용자 2명 + 각자 소유 seed 자원) 하나 지정 요청(D2-P3.md가 이미 요청했는데 아직 응답 없음).
+
+### 2. verify tool 실배선 (원래 Day2 핵심 목표)
+
+- [x] **run 승인 게이트**: `vc_verify_*` 세 tool에 `approved: bool = False` 파라미터 추가(기존 `vc_apply_patch`/`vc_reset_target` 패턴과 동일). `mcp_server/tools_analysis.py`의 `_prepare_verification()` 공통 헬퍼가 제일 먼저 이 게이트를 확인 — 미승인이면 verifier 호출 전에 `PermissionError`.
+- [x] **`vc_verify_access_control` 본문 실제 구현** — 계획한 5단계를 `_prepare_verification()`(공통) + tool 본문(verifier별) 두 층으로 배선:
+  1. 승인 게이트 → 2. `require_target_allowed(run.target_id)` policy 검사 → 3. `Run.status`를 `VERIFYING`으로 전이(이미 VERIFYING이면 재전이 생략 — 여러 candidate를 같은 run에서 검증 가능) → 4. `candidate_id` 조회 + `find_or_create_finding()`로 Finding 지연 생성(신규 — 지금까지 Candidate→Finding을 만드는 코드가 어디에도 없었다) → 5. `verifiers.access_control.verify()` 호출 → 6. `update_finding_status(finding.id, VERIFIED/REJECTED, evidence_ids=...)`.
+  - **알려진 한계 문서화**: policy 검사가 `target_id`까지만 확인하고 verifier가 실제로 때리는 host/port는 검사하지 못한다(Candidate에 typed 공격 파라미터가 없어서 — 섹션 5 계약 이견과 연결됨). 스키마 개선 후 `require_host_allowed`까지 추가할 것.
+- [x] `vc_verify_injection`/`vc_verify_xss`는 `_prepare_verification()`까지 동일하게 타지만 verifier 호출부는 `NotImplementedError`로 남김(P3 verifier 미구현).
+- [x] **테스트로 배선 검증**(`tests/test_verify_tool_wiring.py`, 10건): 미승인 거부, 미등록 target 거부, 존재하지 않는 run/candidate 거부, VERIFYING 전이(1회만, 재호출해도 안 바뀜), Finding 지연 생성/재사용, `verifiers.access_control.verify`를 mock으로 대체해 실제 `mcp.call_tool()` 경로로 verified→Finding 승격/rejected→미승격/evidence 기록까지 확인, injection stub도 동일하게 정책·상태 전이는 타고 verifier 직전에서 멈추는 것 확인.
+- [ ] ~~WebGoat가 아닌 실제 몰입캠프 target에 MCP tool 경로로 실제 호출~~ **P2 블로커로 보류** — `TargetCatalog` 전체 로드가 3개 깨진 manifest 때문에 죽어 있어(섹션 1 참고) 아직 실제 target으로 candidate를 만들 방법 자체가 없다(SAST/mapping도 전부 스텁). 지금 검증은 실제 policy 등록(`26s-w1-c1-03`) + mock verifier 조합으로 배선 로직만 증명한 상태 — verifier 자체가 실 앱에서도 되는지는 P2 블로커 해소 + P3의 role fixture 확보 후에 마저 확인해야 한다.
+
+### 3. judge.py skeleton + Attack gate 실동작
+
+- [x] 7.6절 6개 게이트 함수 시그니처 정의(`core/judge.py`): `check_build`, `check_attack`, `check_positive_functionality`, `check_regression`, `check_static`, `check_scope`(전부 `(run_id, patch_id) -> bool`, `Validation`의 필드 하나씩을 채우는 형태).
+- [x] **Attack gate만 실제 동작**: `check_attack(run_id, finding_id, *, verifier=verify_access_control)` — finding의 원본 `candidate_id`로 verifier를 재호출해 `verified=False`(더 이상 공격이 안 통함)면 gate 통과. `verifier`를 주입 가능하게 열어둬서 Day3에 injection/xss verifier가 생기거나 patched worktree 대상으로 바뀌어도 시그니처는 그대로 재사용 가능. 오늘은 실제 patch가 없으므로 "지금 코드베이스를 다시 찌른다"는 의미로 문서화.
+- [x] 나머지 5개 게이트는 스텁(`NotImplementedError`, 각자 Day3에 뭘 붙일지 docstring에 명시: build→P2 adapter, positive→role fixture, regression→P2 test runner, static→P4 Semgrep 재실행, scope→worktree 경로 diff 검사).
+- [x] **테스트**(`tests/test_judge.py`, 5건): attack gate가 mock verifier로 pass/fail 양쪽 다 정확히 판정하는 것, 존재하지 않는 finding/candidate-less finding 거부, 나머지 5게이트가 전부 `NotImplementedError`인 것 확인.
+- [x] **judge가 LLM 주장을 그대로 승격 못 하도록 하드 가드 재확인**: `grep -rn "verification_state\s*="`으로 전체 검색 — `core/evidence_store.py`의 `update_finding_status()` 내부 1곳과 `mcp_server/resources.py`의 더미 데이터 생성자 1곳(영속화 안 되는 예시 응답) 외엔 없음을 확인. 우회 경로 없음.
+
+**검증**: 전체 회귀 62개(P1 신규 15 추가) 통과.
+
+**추가(P3 Notion "Plan B" handoff 반영)**: P3가 `repair/validators.py`를 오늘 직접 구현하기로 하면서(judge 완성을 안 기다리고 attack·positive gate 실행기를 단독 동작하게 만드는 설계 — `verifiers.access_control.verify()`를 judge가 소비하는 것과 같은 패턴) `check_positive_functionality()`가 `validators.validate_patch()`를 호출하도록 미리 배선해달라고 요청. 위 6개 게이트 표에 반영 완료(Positive functionality gate 항목 참고). `verifiers/access_control.py`에 `IdorProbe.owner_marker` 필드를 추가하는 것(정상기능 게이트가 "주인이 자기 자원을 여전히 본다"를 판정하는 데 필요)은 P3 소유 파일 소폭 수정이라 P1은 손대지 않음.
+
+### 4. findings resource 완성
+
+- [x] `vibecutter://findings/{finding_id}`가 더미 대신 `evidence_store.get(Finding, finding_id)`를 실제로 조회하도록 `mcp_server/resources.py` 수정. 없는 finding_id는 `ValueError`. 더 이상 안 쓰는 `_dummy_finding()`/`FindingStatus` import 제거.
+- [x] `mcp_server/resources.py`의 stale docstring("evidence_store가 아직 없으므로 더미 응답") 갱신 — findings/policies 두 resource는 실제 데이터, 나머지(targets/manifest/run/evidence)는 아직 더미라고 명확히 구분해 적었다.
+- [x] **테스트**(`tests/test_resources.py`): 실제 `mcp.read_resource()` 프로토콜 경로로 저장된 Finding(verified 상태 + evidence_ids 포함)이 그대로 반환되는 것, 없는 finding_id는 에러 나는 것 확인.
+
+**검증**: 전체 회귀 64개 통과.
+
+### 5. 공통 계약 이견 정리 (P3가 "오늘이 사실상 마지막 무료 변경 창구"라고 지목)
+
+- [x] `Observation.type`을 자유 문자열 대신 고정 값 집합으로: 신규 `ObservationType` StrEnum(`http_exchange | db_diff | browser_trace | log | route_map | role_map`). `verifiers/access_control.py`가 이미 쓰는 `"http_exchange"` 문자열 리터럴은 pydantic이 enum 값으로 그대로 coerce하므로 **P3 파일은 한 글자도 안 바뀌어도 계속 동작**함을 확인.
+- [x] `Candidate`에 `vuln_class: Optional[str]` + `attack_params: dict[str, str]` 추가 — **기존 `signals` 필드는 그대로 유지**(additive만). P3의 `verifiers/access_control.py:probe_from_candidate()`가 여전히 `signals`를 파싱하고, P4의 SAST/SCA candidate도 `signals`의 `focus:`/`severity:` 태그를 그대로 쓴다(grep으로 두 역할의 `.signals` 사용처를 전부 확인 후 결정) — `signals` 우회를 실제로 걷어내는 건 verifier 재작성이 필요해 P3와 조율 후 별도 진행.
+- [x] `Finding.affected_role`(단수) → `affected_roles: list[str]`로 변경. grep으로 이 필드가 스키마 정의 외에는 **아무 데서도 참조되지 않음**을 먼저 확인했고(사용처 0건), 그래서 마이그레이션 걱정 없이 바로 리네임.
+- [x] `core/evidence_store.py`의 SQLModel Row 클래스(`CandidateRow`/`FindingRow`)를 동일하게 동기화, `write_artifact()`의 `observation_type` 타입도 `ObservationType`로.
+- [x] 전체 회귀 테스트 재실행 → **`.vibecutter/evidence.db`가 예전 컬럼 스키마로 이미 존재해 `no such column: candidate.vuln_class`로 19개 실패**. `SQLModel.create_all()`은 기존 테이블에 컬럼을 추가하지 않는다(마이그레이션 도구 없음, D1-P1.md에서 이미 인지한 한계) — `.vibecutter/`는 gitignored 로컬 스크래치라 안전하게 삭제 후 재생성, 64개 전체 + P4 독립 스위트(SAST/SCA/batch/baseline) 재확인 통과.
+- [x] 신규 `tests/test_schema_contract_changes.py`(7건) 추가: `ObservationType`이 알려진 6개 값은 받고 미지 값은 `ValidationError`로 거부하는 것, `write_artifact(observation_type="http_exchange")`처럼 P3가 이미 쓰는 평문 문자열 호출이 여전히 동작하는 것, `Candidate`가 `signals`만 채운 기존 생성 패턴 그대로 동작하는 것 + 새 typed 필드 round-trip, `Finding.affected_roles`(list) round-trip과 예전 `affected_role`(단수) 키워드가 에러 없이 조용히 무시되는 것(extra="forbid" 미설정이 알려진 한계) 확인. 전체 회귀 71개 통과.
+  - 🟡 **팀 전체에 알릴 것**: 지금처럼 스키마를 자유롭게 바꿀 수 있는 건 로컬 DB가 비어 있기 때문이다. **실제 target으로 run이 쌓이기 시작하면(P2 블로커 해소 후) 이후의 스키마 변경은 전원이 각자 로컬 `.vibecutter/evidence.db`를 지워야 하거나 마이그레이션이 필요**해진다 — 이번이 사실상 마지막 무료 변경 창구라는 P3의 지적이 코드로도 확인됨.
+- [ ] `RootCause` 필드 확장(reachability/ownership/최소 수정 범위/유사 과거 패치, 수정 위치 계층)은 Day3 착수 전 준비로 남기고 오늘은 손대지 않음(로직은 Day3).
 
 ### 오늘 커뮤니케이션
-- [ ] **P3와 아침 첫 동기화(최우선)**: evidence_store 쓰기 API가 어제 나온 대로 맞는지, IDOR verifier가 evidence를 넘기는 정확한 포맷(요청/응답, DB diff 등)을 맞춘다. 이게 Notion 리스크 표의 최대 병목 지점(P3 D3~D4)을 막는 핵심 동기화다.
-- [ ] **P2에게**: judge의 Regression/Build gate가 P2의 worktree/테스트 러너를 호출해야 하므로, P2가 Day2에 만드는 테스트 러너 인터페이스(입력: worktree path, 출력: pass/fail + 로그)를 확인해 judge.py 스텁 시그니처에 미리 반영.
-- [ ] **저녁 handoff**: `docs/handoffs/D2-P1.md`에 "verify 경로 완성, judge는 attack gate만 실동작, 나머지 5게이트는 인터페이스만" 명시하고 P3/P2에 필요한 다음 정보 요청 남기기.
+
+- [ ] **P3에게**: (a) 구멍①②③ 수정 완료 + `VerifyResult`/`VerifierOutput`을 `contracts.schemas.VerificationResult`로 통합 완료(별칭으로 `verifiers/types.py`도 갱신했지만 `verifiers/access_control.py`는 무수정) 공유. (b) `verifiers/access_control.py`의 임시 `redact()`는 저장 계층(`core/redaction.py`)에서도 동일 규칙으로 다시 걸리니 지금 당장 지우지 않아도 안전(idempotent) — 다만 중복 유지보수 피하려면 제거 시점 확인 요청. (c) `Candidate.vuln_class`/`attack_params` 필드를 추가했다(기존 `signals` 파싱은 그대로 둠) — 새 필드로 옮겨 갈지, 언제 옮길지는 P3 판단에 맡기고 강제하지 않았다는 것 공유. (d) verify tool 본문(P1 소유) 실배선 완료, `vc_verify_access_control`이 `verifiers.access_control.verify()`를 그대로 호출한다는 것 확인 요청. (e) Plan B handoff 요청대로 `check_positive_functionality()` → `repair.validators.validate_patch(run_id, patch_id) -> bool` 위임 배선 완료 — **`validate_patch()`는 positive functionality 결과만 bool로 반환해야 한다**는 계약을 확인 요청(attack 결과까지 합쳐서 반환하는 형태면 judge 쪽에서 못 받는다).
+- [ ] **P2에게**: (a) 🔴 `targets/manifests/{26s-w1-c2-05,26s-w1-c2-08,26s-w1-c3-04}.yaml`의 `role_fixtures[].secret_env_names`가 `VIBECUTTER_*` 규칙을 어겨 `TargetCatalog.load()`가 전체 실패하는 것 최우선 수정 요청(지금은 어떤 target도 `vc_register_target`/`build`/`start`/`check_readiness`가 안 됨). (b) 🟡 `runtime/target_service.py` build 실패 경로의 `target.id`(존재 안 함) → `target.manifest.id` 오타 수정 요청. (c) `policies/scope.yaml`/`commands.yaml` 등록 내용(host/port) 최종 확인. (d) IDOR 검증 가능한 target(2 사용자 + 각자 소유 자원) 1개 지정 요청, role fixture(로그인 endpoint + 자격증명 + seed 자원 id) 요청.
+- [ ] **P4에게**: `Observation.type`을 `ObservationType` enum으로 고정 완료(`http_exchange` 포함이라 기존 코드 영향 없음) 공유, batch scan JSONL(`candidates/<app>.candidates.jsonl` + `summary.json`) 산출물을 evidence/candidate store가 흡수할 포맷 확정, inventory(41개) vs `targets/`(21개 manifest) 단일 진실 소스 합의(P2/P4 상충 지점 중재).
+- [ ] **전원에게**: 스키마 변경 시 로컬 `.vibecutter/evidence.db`를 지워야 한다는 것 공유(오늘 섹션 5에서 실제로 겪음 — `SQLModel.create_all()`은 기존 테이블에 컬럼을 추가하지 않아 컬럼 추가/리네임 후엔 `no such column` 에러가 남). 마이그레이션 도구 도입 여부는 Day3 이후 논의.
+- [ ] **저녁 handoff**: `docs/handoffs/D2-P1.md`에 "구멍①②③ 수정 완료, scope/commands 등록 완료(P2 manifest 블로커로 실제 round-trip은 subset 검증까지), verify 경로 실배선 완료(access_control만, injection/xss는 배선만), judge는 attack gate만 실동작·나머지 5게이트는 인터페이스만, 계약 변경 3건(Observation.type/Candidate.vuln_class·attack_params/Finding.affected_roles) 전부 additive/무해 확인, findings resource 실데이터 연동" 명시. P3/P2/P4에 필요한 다음 정보 요청 남기기.
 
 ---
 
@@ -87,7 +153,7 @@
 - [ ] **6개 judge 게이트 전체 구현**:
    - [ ] Build gate: P2 adapter의 build 결과 확인
    - [ ] Attack gate: 기존 재현 시퀀스가 더 이상 보안 영향 없음
-   - [ ] Positive functionality gate: 정상 권한 사용자 기능 성공
+   - [x] ~~Positive functionality gate: 정상 권한 사용자 기능 성공~~ **Day2에 앞당겨 배선 완료** — P3의 Notion "Plan B" handoff 요청에 따라 `core/judge.py:check_positive_functionality()`가 `repair.validators.validate_patch(run_id, patch_id) -> bool`에 위임하도록 미리 고정했다(지연 import, `repair/validators.py`가 아직 docstring뿐이라 지금 호출하면 `AttributeError` — 다른 스텁과 동등한 "미구현" 신호). **계약**: `validate_patch()`는 positive functionality 결과만 bool로 반환해야 한다(attack gate 결과는 이미 `check_attack()`이 별도로 담당). P3가 실제로 구현하면(오늘 예정) 이 위임은 코드 변경 없이 바로 동작한다 — `tests/test_judge.py`에 mock으로 배선만 미리 검증해둠(3건).
    - [ ] Regression gate: 기존 test suite 통과 (P2 test runner 호출)
    - [ ] Static gate: 새 high severity finding/secret 없음 (P4의 Semgrep 결과 재확인)
    - [ ] Scope gate: **패치가 target worktree 밖 파일을 변경하지 않음** — 이건 절대 원칙(10.1절)과 직결되므로 가장 엄격하게 구현.

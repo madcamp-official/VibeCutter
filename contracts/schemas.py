@@ -65,6 +65,22 @@ class ApprovalStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class ObservationType(StrEnum):
+    """Observation.type의 고정 값 집합 (D1-P3.md 계약 이견 3).
+
+    자유 문자열로 두면 P4의 D4 밤 trajectory 조인이 값 표기 드리프트로 깨질 수 있어
+    Day2에 고정했다. `http_exchange`는 `verifiers/access_control.py`가 이미 쓰고 있는
+    값이라 그대로 포함했다 — 기존 코드는 변경 없이 계속 동작한다.
+    """
+
+    HTTP_EXCHANGE = "http_exchange"
+    DB_DIFF = "db_diff"
+    BROWSER_TRACE = "browser_trace"
+    LOG = "log"
+    ROUTE_MAP = "route_map"
+    ROLE_MAP = "role_map"
+
+
 # --- Entity 모델 (기획서 11.3절) -------------------------------------------------------
 
 
@@ -97,7 +113,7 @@ class Observation(BaseModel):
 
     id: str
     run_id: str
-    type: str
+    type: ObservationType
     artifact_uri: str
     hash: str
     producer: str
@@ -105,7 +121,16 @@ class Observation(BaseModel):
 
 
 class Candidate(BaseModel):
-    """CANDIDATE_SCAN 단계에서 나온, 아직 검증되지 않은 취약점 가설."""
+    """CANDIDATE_SCAN 단계에서 나온, 아직 검증되지 않은 취약점 가설.
+
+    `vuln_class`/`attack_params`는 Day2에 추가했다(D1-P3.md 계약 이견 1) — IDOR 검증에
+    필요한 HTTP method/역할/대상 자원 같은 정보를 지금은 `signals`에 `"key=value"` 문자열로
+    욱여넣어 파싱하는 우회가 있어서다(`verifiers/access_control.py:probe_from_candidate`).
+    **기존 `signals` 필드는 그대로 둔다** — P3/P4가 이미 이 필드로 동작하는 코드를 갖고
+    있어(verifier 파싱, SAST/SCA candidate의 `focus:`/`severity:` 태그) 제거하면 깨진다.
+    새 typed 필드는 추가적(additive)이며, `signals` 우회를 실제로 걷어내는 건 verifier를
+    다시 쓰는 작업이라 P3와 조율 후 별도로 진행한다.
+    """
 
     id: str
     run_id: str
@@ -114,7 +139,29 @@ class Candidate(BaseModel):
     source_symbols: list[str] = Field(default_factory=list)
     confidence: Optional[float] = None
     signals: list[str] = Field(default_factory=list)
+    vuln_class: Optional[str] = None
+    attack_params: dict[str, str] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
+
+
+class VerificationResult(BaseModel):
+    """Verification 카테고리 tool(`vc_verify_access_control` 등)의 outputSchema이자,
+    verifier(`verifiers/*.py`)가 P1의 tool 배선에 돌려주는 결과 타입.
+
+    부록 A outputSchema와 동일한 3필드. `evidence_ids`에 기본값을 두지 않는다 —
+    verified=false인 경우에도 부록 A는 이 필드를 required로 명시하므로(빈 배열이라도
+    명시적으로), 구현부가 항상 채우도록 강제한다.
+
+    **evidence_ids는 반드시 evidence_store에 실제로 기록된 Observation의 id여야 한다**
+    (D1-P3.md 구멍 ① — 존재하지 않는 id는 `evidence_store.update_finding_status()`가
+    `InvalidEvidenceError`로 거부한다). 이전에는 `mcp_server/tools_analysis.py`의
+    `VerifyResult`와 `verifiers/types.py`의 `VerifierOutput`이 필드가 완전히 같은 채로
+    중복 정의돼 있었다(D1-P3.md 지적) — 여기 공통 계약으로 통합했다.
+    """
+
+    verified: bool
+    evidence_ids: list[str]
+    reason: str
 
 
 class RootCause(BaseModel):
@@ -157,7 +204,12 @@ class Patch(BaseModel):
 
 
 class Finding(BaseModel):
-    """부록 B Finding Report Schema 기준. 11.3절 표의 verification_state 필드명을 그대로 쓴다."""
+    """부록 B Finding Report Schema 기준. 11.3절 표의 verification_state 필드명을 그대로 쓴다.
+
+    `affected_roles`는 Day2에 단수 `affected_role`에서 복수로 바꿨다(D1-P3.md 계약 이견 2)
+    — IDOR은 본질적으로 victim/attacker 최소 2개 역할이 관여해 단수로는 표현이 안 됐다.
+    이전 필드는 어디서도 쓰인 적이 없어(schema 정의 외 참조 0건) 마이그레이션 없이 바로 바꿨다.
+    """
 
     id: str
     run_id: str
@@ -172,7 +224,7 @@ class Finding(BaseModel):
     verification_state: FindingStatus = FindingStatus.CANDIDATE
 
     affected_endpoint: Optional[str] = None
-    affected_role: Optional[str] = None
+    affected_roles: list[str] = Field(default_factory=list)
     source_symbols: list[str] = Field(default_factory=list)
     preconditions: list[str] = Field(default_factory=list)
     reproduction_steps: list[str] = Field(default_factory=list)
