@@ -78,6 +78,11 @@ run 종료는 `TargetRuntimeService.reset_run(target_id, run_id, approved=True)`
 - manifest의 Python helper는 `"{vibecutter_python}"` token을 사용한다. 이는 VibeCutter를
   실행 중인 interpreter로만 해석되며 Windows `py` launcher에 의존하지 않는다.
 - secret/token/password는 manifest, fixture metadata, handoff, audit artifact에 저장하지 않는다.
+- fixture-file artifact는 reset/run-bound metadata다. 스크립트 또는 target reset 뒤에는 기존
+  `.vibecutter/fixtures/*.json`을 완료 근거로 쓰지 말고, 승인된
+  `vc_prepare_verifier_fixture(target_id, approved=True)`로 다시 생성한다.
+- 새 fixture consumer는 `auth.mode`와 `resources.<kind>.attacker_id/victim_id/...` 정규화 필드를
+  우선 사용한다. 기존 `authentication` 및 victim/attacker 분리 필드는 하위호환 목적으로 유지한다.
 - GPU 서버 접근 가능 여부는 P4의 model-serving/학습 준비 조건이다. 서버 접속 정보나 자격 증명은
   이 runbook에 기록하지 않으며, Python 3.11 또는 3.12 기반의 Semgrep·모델 환경을 P4가 한 서버에서
   먼저 통일한 뒤 다른 GPU로 확장한다.

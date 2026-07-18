@@ -103,9 +103,26 @@ def _to_id_template(path: str) -> str:
 
 
 def _fixture_resources(fixture: dict | str | Path) -> dict:
-    """P2 fixture에서 victim(victim_marker)·attacker(marker) 자원을 {종류:{ids,markers}}로."""
+    """P2 fixture에서 victim/attacker 자원을 {종류:{ids,markers}}로.
+
+    새 fixture는 `resources.<kind>.attacker_id/victim_id/...` 형태를 우선 사용한다.
+    D1/D2 c2-04 fixture의 legacy `victim_*`/`attacker_*` 분리 형태도 계속 지원한다.
+    """
     data = fixture if isinstance(fixture, dict) else json.loads(Path(fixture).read_text(encoding="utf-8"))
     res = data.get("resources", {})
+    for key, val in res.items():
+        if not isinstance(val, dict):
+            continue
+        if {"attacker_id", "victim_id", "victim_marker", "owner_marker"} <= set(val):
+            return {
+                str(val.get("kind") or key): {
+                    "attacker_id": val["attacker_id"],
+                    "victim_id": val["victim_id"],
+                    "victim_marker": val["victim_marker"],
+                    "owner_marker": val["owner_marker"],
+                }
+            }
+
     victim = next((r for r in res.values() if isinstance(r, dict) and "victim_marker" in r), None)
     attacker = next(
         (r for r in res.values() if isinstance(r, dict) and "victim_marker" not in r and ("marker" in r or "baseline_path" in r)),

@@ -109,6 +109,7 @@ def main() -> None:
         "target_id": TARGET_ID,
         "base_url": API_BASE,
         "reset": {"command_id": "reset", "removes_fixture": True},
+        "auth": {"mode": "none"},
         "authentication": {
             "mode": "none",
             "login_path": "/login/",
@@ -129,6 +130,7 @@ def main() -> None:
                 "safe_mutation": {
                     "method": "PUT",
                     "path": f"/vocabs/{victim_vocab['id']}/description/",
+                    "observe_path": f"/vocabs/?owner_id={owner_id}",
                     "json": {"description": "P3 fixture mutation", "tags": "p2,p3"},
                 },
             },
@@ -138,6 +140,21 @@ def main() -> None:
                 "word_id": attacker_word.get("id"),
                 "baseline_path": f"/vocabs/{attacker_vocab['id']}/words/",
                 "marker": attacker_marker,
+            },
+            "vocabulary": {
+                "kind": "vocabulary",
+                "attacker_id": attacker_vocab["id"],
+                "victim_id": victim_vocab["id"],
+                "victim_marker": victim_marker,
+                "owner_marker": attacker_marker,
+                "baseline_path": f"/vocabs/{attacker_vocab['id']}/words/",
+                "read_path": f"/vocabs/{victim_vocab['id']}/words/",
+                "safe_mutation": {
+                    "method": "PUT",
+                    "path": f"/vocabs/{victim_vocab['id']}/description/",
+                    "observe_path": f"/vocabs/?owner_id={owner_id}",
+                    "json": {"description": "P3 fixture mutation", "tags": "p2,p3"},
+                },
             },
         },
     }
