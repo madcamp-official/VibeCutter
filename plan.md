@@ -272,12 +272,17 @@ D2-P4.md도 확인: P4가 GPU 불필요 항목을 전부 끝냈다 — `scanners
 
 ### 6. Trajectory export 인터페이스 완성 (P4 밤 배치 전제, 오후 최우선)
 
-- [ ] 지금 `core/trajectory.py`는 run 하나당 `.vibecutter/trajectories/<run_id>.jsonl`에 append만 한다 — 여러 run을 모아 학습 샘플 형태로 묶어주는 export가 아직 없다. 0번에서 확인한 P4의 정확한 포맷 요구사항에 맞춰 aggregate export(위치/스키마)를 완성.
-- [ ] 완성 즉시 P4에 전달 — 오후 안에 끝내지 못하면 밤샘 QLoRA 배치가 시작을 못 한다.
+**[계획 조정]** 0번에서 P4에게 직접 물어 정확한 포맷을 확인하기로 했었는데, D3-P4.md가 여전히 없어 실제로 물어볼 방법이 없었다(팀원 상태 확인은 사람 간 커뮤니케이션이라 대행 불가). 대신 `model/trajectory.py`(P4가 이미 D2에 구현해 둔 것)를 직접 읽어보니 학습 샘플 포맷(`to_sft_sample()`)과 필터링 규칙(`training_samples()`, evidence/validation 연결된 것만)이 이미 코드로 정의돼 있었다 — 그래서 새 포맷을 지어내지 않고 **P4가 이미 정한 포맷을 그대로 재사용**했다. 이게 "물어봐서 확정"보다 더 안전하다(코드가 곧 계약).
+
+- [x] `core/trajectory.py`에 `export_training_dataset(output_path=None, *, run_ids=None)` 추가. `.vibecutter/trajectories/*.jsonl`(모든 run, 또는 지정한 run만)을 순회해 `model.trajectory.training_samples()`로 label 없는(evidence/validation 미연결) 스텝을 제외하고, `model.trajectory.to_sft_sample()`로 그 run의 Observation을 evidence로 조인해 `.vibecutter/trajectories/export/training_samples.jsonl` 하나로 합친다. 새 필터링/변환 로직은 만들지 않았다 — P4 함수를 그대로 호출하는 접착 코드만 추가.
+- [x] 테스트(`tests/test_trajectory_export.py`, 5건): label 없는 스텝 제외, run의 evidence 조인 확인, 여러 run이 한 파일로 합쳐지는 것, 존재하지 않는 run_id는 에러 없이 건너뛰는 것, 기본 출력 경로가 `TRAJECTORY_DIR` 하위인 것.
+- [ ] **P4에게 전달은 아직 못 함** — D3-P4.md 부재로 P4의 현재 작업 상태(이 함수 시그니처가 실제로 필요한 형태와 일치하는지)를 확인 못 했다. 아래 커뮤니케이션 항목에서 전달.
+
+**검증**: 전체 회귀 169개(trajectory export 5건 포함) 통과.
 
 ### 오늘 커뮤니케이션
-- [ ] **P4에게 아침 최우선**: D3 상태가 없어 직접 확인 필요(0번) — 답변 받는 대로 trajectory export 포맷 확정.
-- [ ] **P4에게 낮 동안 최우선**: trajectory export 포맷/위치를 확정해 전달 — Day4 밤 P4의 7B QLoRA 학습 배치가 이 데이터를 쓴다.
+- [ ] **P4에게 아침 최우선**: D3 상태가 없어 직접 확인 필요(0번) — severity/owasp vocab·semgrep 블로커 인지 여부 확인.
+- [ ] **P4에게 낮 동안 최우선**: `core.trajectory.export_training_dataset()` 완성 알림 — `.vibecutter/trajectories/export/training_samples.jsonl`에 모든 run의 학습 샘플이 P4 자신의 `model.trajectory.to_sft_sample()` 포맷 그대로 모여 있다. **P4의 실제 요구사항과 다르면(예: run 전체 evidence를 통째로 조인하는 지금 방식이 너무 거칠다면) 오늘 안에 알려달라** — `to_sft_sample()`/`training_samples()` 자체는 손대지 않았으니 P4가 그 두 함수만 바꾸면 이 export도 자동으로 따라간다.
 - [ ] **P2에게**: (a) overlay를 build/regression 경로에 연결 완료 알림, 포트 충돌 처리 방식 확인 요청. (b) kill switch가 `reset_run()`을 호출하도록 연결했다는 것과 kill 이후 Run 상태 표시 방식(2번 설계 판단) 공유. (c) semgrep 블로커에 대한 팀 결정 참여 요청. (d) `c3-09`(holdout 후보) 준비 상태 확인, Day5 clean-room 리허설에 그대로 쓸 수 있는지 확인.
 - [ ] **P3에게**: (a) overlay 배선 완료로 c1-05 closed-loop를 이제 MCP 경로로 자동 재현할 수 있다는 것 알림, 함께 리허설 요청. (b) semgrep 블로커 팀 결정 공유. (c) `RootCause` 확장/`redact()` 제거는 예정대로 Day5로 유지 확인. (d) `vc_generate_patch`가 이제 `attempt_no`를 실제로 계산해 `repair.patcher.generate_patch()`에 넘긴다는 것 확인 요청 — patcher.py 자체 docstring이 전제하던 연결이라 P3 쪽 코드 변경은 없어야 정상. (e) 🔴 **SKILL.md 작성 중 발견**: `vc_map_routes`/`vc_map_roles`/`vc_index_code`가 전부 스텁이라 Host가 tool 호출만으로는 `READY`→`MAPPING`을 통과할 방법이 없다(지금까지의 모든 테스트가 Run을 직접 `CANDIDATE_SCAN`으로 만들어 우회해왔다는 뜻). `surface.graph.find_idor_suspects`는 이미 완성돼 있으니, 이걸 `vc_map_routes` 본문에 배선하거나(P3) `vc_run_sast`/`vc_run_sca`가 MAPPING을 자동으로 거치게 할지(P1) 조율 필요 — Day4 남은 시간 또는 Day5 초반 처리 대상으로 제안.
 - [ ] **P2·P3 공통**: `core/state_machine.py`의 `RUN_TRANSITIONS[RunState.RETRY]`에 `HUMAN_REVIEW`를 추가한 것(additive, 기존 `PATCH_PROPOSED` 경로 유지) 공유 — 공통 계약 변경이라 "조용히 변경 금지" 규칙에 따라 알림.
