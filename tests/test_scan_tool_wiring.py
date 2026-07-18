@@ -50,8 +50,15 @@ class PrepareScanTests(unittest.TestCase):
         _prepare_scan(run.id, tool_name="t")
         self.assertEqual(get(Run, run.id).status, RunState.CANDIDATE_SCAN)
 
-    def test_rejects_run_not_yet_mapped(self) -> None:
+    def test_ready_cascades_through_mapping_to_candidate_scan(self) -> None:
+        # Day4: mapping tool(vc_map_routes 등)이 아직 스텁이라, READY에서 곧장 들어와도
+        # MAPPING을 거쳐 CANDIDATE_SCAN까지 이 함수가 대신 전이시킨다.
         run = _run(status=RunState.READY)
+        _prepare_scan(run.id, tool_name="t")
+        self.assertEqual(get(Run, run.id).status, RunState.CANDIDATE_SCAN)
+
+    def test_rejects_run_in_unrelated_state(self) -> None:
+        run = _run(status=RunState.BUILDING)
         with self.assertRaises(ValueError):
             _prepare_scan(run.id, tool_name="t")
 
