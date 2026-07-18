@@ -33,7 +33,10 @@ class PolicyViolation(PermissionError):
 def _load_yaml(path: Path) -> dict:
     if not path.exists():
         return {}
-    return yaml.safe_load(path.read_text()) or {}
+    # Policies are versioned UTF-8 YAML and include Korean documentation.
+    # Relying on Windows' active code page (often cp949) makes the policy gate
+    # fail before it can decide allow/deny, despite valid checked-in files.
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
 def load_scope(path: Path = _DEFAULT_SCOPE_PATH) -> dict[str, dict]:
