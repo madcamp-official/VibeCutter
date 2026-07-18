@@ -27,6 +27,7 @@ from scanners.aggregate import aggregate
 from scanners.sast import run_semgrep
 from scanners.vocab import candidate_severity
 from verifiers.access_control import verify as verify_access_control
+from verifiers.access_control import verify_mutation_access_control
 from verifiers.types import MAX_REQUESTS_DEFAULT
 
 # `+++ b/<path>` 헤더에서 diff가 실제로 건드리는 파일 경로를 뽑는다. `repair.patcher`가
@@ -82,28 +83,42 @@ def _patch_and_worktree(run_id: str, patch_id: str) -> tuple[Patch, Run, Path]:
     return patch, run, worktree_path
 
 
+def _is_mutation_candidate(candidate: Candidate) -> bool:
+    """`verify_mutation_access_control`(write-oracle)이 필요한 candidate인지 판별한다.
+
+    read-oracle candidate는 `victim_marker`/`baseline_path`/`attack_path` 같은
+    `IdorProbe` 필드를 쓰고, write-oracle candidate는 `mutation_probe_from_candidate()`
+    계약대로 `mutation_marker`+`observe_path`를 쓴다(`verifiers/access_control.py`).
+    """
+    params = candidate.attack_params
+    return "mutation_marker" in params and "observe_path" in params
+
+
 def check_attack(
     run_id: str,
     finding_id: str,
     *,
     max_requests: int = MAX_REQUESTS_DEFAULT,
-    verifier: Callable[..., VerificationResult] = verify_access_control,
+    verifier: Callable[..., VerificationResult] | None = None,
 ) -> bool:
-    """Attack gate: 기존 재현 시퀀스가 더 이상 보안 영향으로 이어지지 않으면 통과(True)한다.
+    """Attack gate: 기존 공격이 더 이상 보안 영향으로 이어지지 않으면 통과(True)한다.
 
     finding이 참조하는 원본 Candidate로 verifier를 다시 호출해 `verified=False`가
     나오는지 확인한다 — verifier가 실제로 요청을 다시 보내고 evidence를 다시 남기므로,
     "패치가 통했다"는 판단도 judge의 다른 게이트와 마찬가지로 evidence 기반이다.
 
-    Day2엔 실제 patch/worktree가 없어 "패치된 코드"가 아니라 "지금 코드베이스"를 다시
-    찌른다 — 그래서 지금은 아직 취약한 코드에 대해 호출하면 gate가 정확히 실패(False)해야
-    한다(패치 전이니 여전히 뚫려야 정상). Day3에 실제 patch loop가 붙으면 verifier가
-    patched worktree의 실행 인스턴스를 대상으로 하도록 호출부(judge 사용처)에서 바꾼다 —
-    이 함수 시그니처 자체는 바뀌지 않는다.
+    `verifier`가 None이면 candidate 모양으로 read-oracle(`verify_access_control`)과
+    write-oracle(`verify_mutation_access_control`)을 자동 선택한다(`_is_mutation_candidate`)
+    — `vc_replay_attack`처럼 자동 재검증 루프에서는 사람이 tool을 골라줄 수 없으므로
+    필요하다. 명시적으로 넘기면(테스트 등) 그 값을 그대로 쓴다.
 
-    verifier는 candidate.cwe에 따라 access_control 외에 injection/xss verifier로도
-    바뀌어야 하지만(Day2엔 access_control만 구현됨), 그건 `verifier` 파라미터로 주입
-    가능하게 열어뒀다 — 기본값만 access_control이다.
+    이 함수가 재현하는 인스턴스는 `verifier`가 candidate의 `base_url`로 찌르는 그대로다 —
+    patch 적용 후 이 gate를 호출하기 전에 호출부(`check_build`/`_repoint_to_patched_runtime`)가
+    같은 포트에서 patched worktree 인스턴스가 응답하도록 원본을 stop하고 overlay를
+    start해 둬야 한다(그렇지 않으면 원본을 재공격하는 셈이라 "패치가 막았나"를 볼 수 없다).
+
+    injection/xss verifier로도 바뀌어야 하지만(아직 access_control만 구현됨), `verifier`
+    파라미터로 주입 가능하게 열어뒀다.
     """
     finding = get(Finding, finding_id)
     if finding is None:
@@ -114,6 +129,9 @@ def check_attack(
     candidate = get(Candidate, finding.candidate_id)
     if candidate is None:
         raise ValueError(f"candidate {finding.candidate_id} not found")
+
+    if verifier is None:
+        verifier = verify_mutation_access_control if _is_mutation_candidate(candidate) else verify_access_control
 
     result = verifier(run_id, candidate, max_requests=max_requests)
     return not result.verified
@@ -127,10 +145,19 @@ def check_build(run_id: str, patch_id: str) -> bool:
     생성해 그 위에서 `build` command를 실행한다 — checked-in Compose의 build context가 원본
     source clone을 고정 참조하는 문제를 P2 overlay가 worktree로 재사영해서 우회한다.
 
+    build 성공 뒤에는 원본 인스턴스를 내리고 patched overlay를 그 자리(같은 승인된 loopback
+    포트)에 띄워 health가 날 때까지 기다린다(`_repoint_to_patched_runtime`) — 이게 안 되어
+    있으면 뒤이은 `check_attack`/`check_positive_functionality`가 patched worktree가 아니라
+    여전히 원본 인스턴스를 재공격해 "패치가 막았나"를 구조적으로 확인할 수 없다(candidate의
+    base_url은 그대로 두고, 그 포트에서 응답하는 프로세스만 바꾸는 방식이라 verifier 쪽은
+    수정할 필요가 없다).
+
     source-native target(Gradle/npm처럼 `working_dir` override 없이 그냥 소스 디렉터리에서
     도는 build)은 여전히 `runtime.test_runner.RunScopedTestRunner`(P2)가 test suite에 쓰는
     것과 같은 패턴 — manifest의 `source_dir`를 worktree 자신을 가리키는 `"."`로 바꿔서
-    (`model_copy`) build command를 worktree 안에서 직접 재실행한다.
+    (`model_copy`) build command를 worktree 안에서 직접 재실행한다. 현재 checked-in manifest
+    22개가 전부 `docker_isolation`을 선언하므로 이 분기에는 아직 repoint가 없다 — 그런
+    target이 생기면 같은 패턴(원본 stop → worktree 기준 start → health)을 추가해야 한다.
     """
     from runtime.lifecycle import LifecycleManager
 
@@ -141,10 +168,28 @@ def check_build(run_id: str, patch_id: str) -> bool:
         overlay = catalog.run_overlay_for(run.target_id, run.id)
         overlay.prepare()
         result = overlay.execute("build")
-    else:
-        worktree_manifest = target.manifest.model_copy(update={"source_dir": "."})
-        result = LifecycleManager(worktree_manifest, worktree_path).build()
+        if result.status != "passed":
+            return False
+        return _repoint_to_patched_runtime(catalog, target, overlay)
+    worktree_manifest = target.manifest.model_copy(update={"source_dir": "."})
+    result = LifecycleManager(worktree_manifest, worktree_path).build()
     return result.status == "passed"
+
+
+def _repoint_to_patched_runtime(catalog, target, overlay) -> bool:
+    """원본 인스턴스를 내리고 patched overlay를 승인된 loopback 포트에 띄운다.
+
+    두 인스턴스가 같은 host port를 두고 경합할 수 없으므로(targets/README.md
+    "Run-scoped patched runtime") 원본을 먼저 stop해야 overlay start가 그 포트를 받을 수
+    있다. 원본이 이미 내려가 있어도 `docker compose down`은 안전하게 no-op이다.
+    """
+    from runtime.lifecycle import LifecycleManager
+
+    LifecycleManager(target.manifest, catalog.repository_root).stop()
+    start_result = overlay.execute("start")
+    if start_result.status != "passed":
+        return False
+    return overlay.check_health().status == "ready"
 
 
 def check_positive_functionality(run_id: str, patch_id: str) -> bool:

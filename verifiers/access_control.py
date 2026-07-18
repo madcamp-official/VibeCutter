@@ -397,6 +397,28 @@ class MutationProbe(BaseModel):
     extra_body: dict = {}  # 변경 바디의 나머지 필수 필드(예: tags)
 
 
+def mutation_probe_from_candidate(candidate: Candidate) -> MutationProbe:
+    """candidate.attack_params → MutationProbe (write-oracle candidate 계약, P1↔P3).
+
+    `Candidate.attack_params`는 `dict[str, str]`라 `MutationProbe.extra_body`(중첩 dict)를
+    직접 담을 수 없다 — `build_candidates()`가 write-oracle candidate를 만들 때
+    `extra_body`를 `extra_body_json` 키에 JSON 문자열로 인코딩해 넣으면 여기서 복원한다.
+    필수 키: `base_url`, `observe_path`, `mutation_method`, `mutation_path`, `mutation_marker`.
+    선택 키: `marker_field`(기본 "description"), `extra_body_json`(기본 `{}`).
+    """
+    params = candidate.attack_params
+    extra_body_json = params.get("extra_body_json")
+    return MutationProbe(
+        base_url=params["base_url"],
+        observe_path=params["observe_path"],
+        mutation_method=params["mutation_method"],
+        mutation_path=params["mutation_path"],
+        mutation_marker=params["mutation_marker"],
+        marker_field=params.get("marker_field", "description"),
+        extra_body=json.loads(extra_body_json) if extra_body_json else {},
+    )
+
+
 def mutation_probe_from_fixture(fixture: dict | str | Path) -> MutationProbe:
     """P2 fixture의 `safe_mutation`(안전·되돌릴 수 있는 변경)으로 MutationProbe를 만든다."""
     data = (
@@ -461,3 +483,14 @@ def verify_mutation(
         )
         evidence_ids.append(obs.id)
     return VerifierOutput(verified=verified, evidence_ids=evidence_ids, reason=reason)
+
+
+def verify_mutation_access_control(
+    run_id: str, candidate: Candidate, *, max_requests: int = MAX_REQUESTS_DEFAULT
+) -> VerifierOutput:
+    """`verify_mutation()`을 `verifiers.types.Verifier` 프로토콜(`(run_id, candidate, *,
+    max_requests)`) 모양으로 감싼다 — `verify_access_control`과 같은 시그니처라 P1의
+    `vc_verify_mutation_access_control` tool과 `core.judge.check_attack`(재현 verifier를
+    교체 가능한 자리) 양쪽에서 그대로 주입할 수 있다.
+    """
+    return verify_mutation(run_id, mutation_probe_from_candidate(candidate), max_requests=max_requests)

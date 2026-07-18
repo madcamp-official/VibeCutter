@@ -144,7 +144,9 @@ class CheckBuildTests(unittest.TestCase):
         """docker_isolation이 설정된 target은 P2 run_overlay_for()를 build context로 써야 한다 —
         직접 LifecycleManager를 worktree에 대고 돌리면 checked-in Compose의 build context가
         여전히 원본 source clone을 가리켜 patched 코드를 검증하지 못한다(D3-P2.md가 이 문제를
-        풀려고 만든 run-scoped overlay)."""
+        풀려고 만든 run-scoped overlay). build 성공 뒤에는 원본을 stop하고 overlay를
+        start+health까지 확인해야 한다 — 안 그러면 attack/positive 게이트가 여전히 원본
+        인스턴스를 재공격한다(repoint)."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as td:
@@ -158,14 +160,26 @@ class CheckBuildTests(unittest.TestCase):
 
             fake_overlay = MagicMock()
             fake_overlay.execute.return_value = MagicMock(status="passed")
+            fake_overlay.check_health.return_value = MagicMock(status="ready")
             fake_service.catalog.run_overlay_for.return_value = fake_overlay
 
-            with patch("core.judge._service", return_value=fake_service):
+            fake_lifecycle_instance = MagicMock()
+            fake_lifecycle_cls = MagicMock(return_value=fake_lifecycle_instance)
+
+            with (
+                patch("core.judge._service", return_value=fake_service),
+                patch("runtime.lifecycle.LifecycleManager", fake_lifecycle_cls),
+            ):
                 self.assertTrue(check_build(run.id, p.id))
 
             fake_service.catalog.run_overlay_for.assert_called_once_with(run.target_id, run.id)
             fake_overlay.prepare.assert_called_once_with()
-            fake_overlay.execute.assert_called_once_with("build")
+            fake_overlay.execute.assert_any_call("build")
+            fake_overlay.execute.assert_any_call("start")
+            # 원본 인스턴스가 patched overlay start보다 먼저 내려가야 같은 포트를 넘겨받는다.
+            fake_lifecycle_cls.assert_called_once_with(fake_manifest, fake_service.catalog.repository_root)
+            fake_lifecycle_instance.stop.assert_called_once_with()
+            fake_overlay.check_health.assert_called_once_with()
 
     def test_compose_target_build_failure_fails_gate(self) -> None:
         import tempfile
@@ -184,6 +198,58 @@ class CheckBuildTests(unittest.TestCase):
             fake_service.catalog.run_overlay_for.return_value = fake_overlay
 
             with patch("core.judge._service", return_value=fake_service):
+                self.assertFalse(check_build(run.id, p.id))
+            # build 자체가 실패하면 원본을 내리거나 overlay를 띄우려 시도하면 안 된다.
+            fake_overlay.execute.assert_called_once_with("build")
+
+    def test_compose_target_build_passes_but_patched_start_fails_gate(self) -> None:
+        """build는 통과했지만 patched overlay가 뜨지 않으면(포트 경합, 크래시 등) build
+        게이트 자체를 실패로 처리한다 — 그래야 attack/positive 게이트가 죽어있는 patched
+        인스턴스나 여전히 원본을 조용히 재공격하는 대신 명확히 멈춘다."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td)
+            run, p = _run_and_patch_with_worktree(worktree)
+
+            fake_manifest = MagicMock()
+            fake_manifest.docker_isolation = MagicMock()
+            fake_service = _fake_service_with_worktree(worktree)
+            fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest)
+
+            fake_overlay = MagicMock()
+            fake_overlay.execute.side_effect = lambda command_id: MagicMock(
+                status="passed" if command_id == "build" else "failed"
+            )
+            fake_service.catalog.run_overlay_for.return_value = fake_overlay
+
+            with (
+                patch("core.judge._service", return_value=fake_service),
+                patch("runtime.lifecycle.LifecycleManager", return_value=MagicMock()),
+            ):
+                self.assertFalse(check_build(run.id, p.id))
+
+    def test_compose_target_build_passes_but_patched_health_fails_gate(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td)
+            run, p = _run_and_patch_with_worktree(worktree)
+
+            fake_manifest = MagicMock()
+            fake_manifest.docker_isolation = MagicMock()
+            fake_service = _fake_service_with_worktree(worktree)
+            fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest)
+
+            fake_overlay = MagicMock()
+            fake_overlay.execute.return_value = MagicMock(status="passed")
+            fake_overlay.check_health.return_value = MagicMock(status="not_ready")
+            fake_service.catalog.run_overlay_for.return_value = fake_overlay
+
+            with (
+                patch("core.judge._service", return_value=fake_service),
+                patch("runtime.lifecycle.LifecycleManager", return_value=MagicMock()),
+            ):
                 self.assertFalse(check_build(run.id, p.id))
 
 
