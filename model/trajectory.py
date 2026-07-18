@@ -25,18 +25,15 @@ from typing import Iterable, Optional, Sequence
 
 from typing import Sequence
 
-from contracts.schemas import Observation, RunState, Trajectory
+from contracts.schemas import Observation, ObservationType, RunState, Trajectory
 
 # 학습에 쓸 수 있는 label(=evidence/validation 으로 판정된 것). cowork_rule 3절 Finding 상태.
 LEARNABLE_LABELS = {"verified", "fixed", "rejected", "human_review"}
 
-# Observation.type 고정 값 집합 (D1-P3.md 이견 3 제안 채택). Observation.type 은
-# contracts 에서 자유 문자열이지만, **P4 trajectory 조인이 이 값에 걸리므로** P3·P4 가
-# 이 집합으로 합의한다: verifier=http_exchange/db_diff/browser_trace, mapper=route_map/
-# role_map, 기타=log. P1 이 스키마에 반영하면 공통 계약이 된다.
-OBSERVATION_TYPES = (
-    "http_exchange", "db_diff", "browser_trace", "log", "route_map", "role_map",
-)
+# Observation.type 값 집합. D1-P3 이견 3(P3 제안) → P4 채택 → **P1 이 contracts 의
+# `ObservationType` enum 으로 정식 채택**(rebase 반영). 이제 스키마가 강제하므로 여기서는
+# 계약 enum 에서 파생해 drift 를 원천 차단한다.
+OBSERVATION_TYPES = tuple(t.value for t in ObservationType)
 
 
 def is_evidence_type(t: str) -> bool:
@@ -46,14 +43,15 @@ def is_evidence_type(t: str) -> bool:
 def valid_evidence(
     observations: Sequence[Observation],
 ) -> tuple[list[Observation], list[str]]:
-    """(합의된 type 인 Observation, 알 수 없는 type 목록). 학습 조인 전 검증용."""
+    """(합의된 type 인 Observation, 알 수 없는 type 목록). Observation.type 이 이제 enum 이라
+    정상 생성된 것은 항상 valid — unknown 은 방어적으로만 남긴다(예: 외부 dict 우회 대비)."""
     ok: list[Observation] = []
     unknown: list[str] = []
     for o in observations:
         if is_evidence_type(o.type):
             ok.append(o)
         else:
-            unknown.append(o.type)
+            unknown.append(str(o.type))
     return ok, unknown
 
 

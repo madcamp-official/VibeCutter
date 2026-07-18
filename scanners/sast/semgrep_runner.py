@@ -168,6 +168,7 @@ def parse_semgrep_output(
                 id=_candidate_id(run_id, rule_id, path, start_line),
                 run_id=run_id,
                 cwe=_normalize_cwe(metadata.get("cwe")),
+                vuln_class=focus,  # P3 verifier 가 vuln_class 로 검증 모듈을 분기(verifiers/types.py)
                 endpoint=None,
                 source_symbols=[f"{path}:{start_line}"],
                 confidence=_confidence(severity, metadata),

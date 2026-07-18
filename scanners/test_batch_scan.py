@@ -16,6 +16,7 @@ from scanners.batch_scan import (
     ERROR,
     SCAN_UNAVAILABLE,
     SCANNED,
+    SOURCE_MISSING,
     run_batch,
 )
 
@@ -86,6 +87,38 @@ def test_scan_exception_recorded_as_error_and_continues() -> None:
         assert results[0].status == ERROR and "boom" in results[0].detail
         assert results[1].status == SCANNED       # 다음 앱은 계속 진행
         assert calls == ["a", "b"]
+
+
+def test_p2_source_reuse_scans_without_clone() -> None:
+    """source_root_fn 제공 시 clone 없이 그 경로를 스캔한다(P2 소스 재사용)."""
+    scanned_paths = []
+
+    def scan(app, root, run_id):
+        scanned_paths.append(Path(root))
+        return [Candidate(id="c", run_id=run_id, signals=["semgrep:x"])]
+
+    def no_clone(app, dest):
+        raise AssertionError("clone 이 호출되면 안 됨")
+
+    with tempfile.TemporaryDirectory() as td:
+        p2src = Path(td) / "p2" / "a"
+        p2src.mkdir(parents=True)          # P2 가 clone 해둔 소스가 존재
+        results = run_batch([_app("a")], Path(td) / "wd",
+                            clone_fn=no_clone, scan_fn=scan,
+                            source_root_fn=lambda app: Path(td) / "p2" / app.id)
+        assert results[0].status == SCANNED
+        assert scanned_paths == [p2src]     # P2 경로를 직접 스캔
+
+
+def test_p2_source_missing_marked() -> None:
+    def scan(app, root, run_id):
+        raise AssertionError("소스 없으면 scan 안 됨")
+
+    with tempfile.TemporaryDirectory() as td:
+        results = run_batch([_app("a")], Path(td) / "wd",
+                            scan_fn=scan,
+                            source_root_fn=lambda app: Path(td) / "nope" / app.id)
+        assert results[0].status == SOURCE_MISSING
 
 
 def _run() -> None:

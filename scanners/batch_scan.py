@@ -30,12 +30,24 @@ from datasets.inventory import AppEntry, Inventory
 
 CloneFn = Callable[[AppEntry, Path], None]
 ScanFn = Callable[[AppEntry, Path, str], Optional[list[Candidate]]]
+SourceRootFn = Callable[[AppEntry], Path]
 
 # 상태 상수.
 SCANNED = "scanned"
 CLONE_FAILED = "clone_failed"
 SCAN_UNAVAILABLE = "scan_unavailable"
+SOURCE_MISSING = "source_missing"
 ERROR = "error"
+
+# P2 가 관리하는 target 소스 체크아웃 위치(D1-P2 handoff). 여기를 스캔하면 재-clone 불필요.
+# 더 견고하게는 runtime.catalog.TargetCatalog.source_root_for(id) 를 쓸 수 있으나,
+# 그건 P2 runtime 초기화가 필요해 여기서는 문서화된 경로 관례를 기본으로 둔다.
+P2_SOURCE_BASE = Path(".vibecutter/targets/sources")
+
+
+def p2_source_root(app: AppEntry, *, base: Path | None = None) -> Path:
+    """P2 가 clone 해둔 target 소스 경로. `--use-p2-sources` 에서 clone 대신 이걸 스캔."""
+    return (base or P2_SOURCE_BASE) / app.id
 
 
 @dataclass
@@ -89,9 +101,14 @@ def run_batch(
     *,
     clone_fn: CloneFn = default_clone_fn,
     scan_fn: Optional[ScanFn] = None,
+    source_root_fn: Optional[SourceRootFn] = None,
     write: bool = True,
 ) -> list[BatchItemResult]:
-    """앱들을 순회하며 clone→scan→candidate 저장. 한 앱 실패가 배치를 멈추지 않는다."""
+    """앱들을 순회하며 (clone 또는 P2 소스)→scan→candidate 저장. 앱 단위 실패 격리.
+
+    source_root_fn 을 주면 clone 대신 그 경로를 직접 스캔한다(P2 가 이미 clone 한 소스
+    재사용 — `p2_source_root`). 경로가 없으면 SOURCE_MISSING 으로 기록하고 계속.
+    """
     if scan_fn is None:
         scan_fn = make_default_scan_fn()
     workdir = Path(workdir)
@@ -103,12 +120,18 @@ def run_batch(
     results: list[BatchItemResult] = []
     for app in apps:
         run_id = f"batch-{app.id}"
-        dest = clones / app.id
-        try:
-            clone_fn(app, dest)
-        except Exception as e:  # noqa: BLE001 — 앱 단위 격리
-            results.append(BatchItemResult(app.id, CLONE_FAILED, detail=str(e)[:200]))
-            continue
+        if source_root_fn is not None:
+            dest = source_root_fn(app)
+            if not dest.exists():
+                results.append(BatchItemResult(app.id, SOURCE_MISSING, detail=str(dest)))
+                continue
+        else:
+            dest = clones / app.id
+            try:
+                clone_fn(app, dest)
+            except Exception as e:  # noqa: BLE001 — 앱 단위 격리
+                results.append(BatchItemResult(app.id, CLONE_FAILED, detail=str(e)[:200]))
+                continue
         try:
             cands = scan_fn(app, dest, run_id)
         except Exception as e:  # noqa: BLE001
@@ -137,7 +160,7 @@ def _write_summary(workdir: Path, results: list[BatchItemResult]) -> None:
         "n_candidates": sum(r.n_candidates for r in results),
         "by_status": {
             s: sum(r.status == s for r in results)
-            for s in (SCANNED, CLONE_FAILED, SCAN_UNAVAILABLE, ERROR)
+            for s in (SCANNED, CLONE_FAILED, SCAN_UNAVAILABLE, SOURCE_MISSING, ERROR)
         },
         "items": [asdict(r) for r in results],
     }
@@ -166,6 +189,10 @@ def _main() -> None:
         "--benchmark", action="store_true",
         help="벤치마크 inventory 스캔(B1/B2 정확도 측정용, 정답 있는 앱)",
     )
+    parser.add_argument(
+        "--use-p2-sources", action="store_true",
+        help="clone 대신 P2 소스(.vibecutter/targets/sources/<id>)를 스캔(재-clone 방지)",
+    )
     args = parser.parse_args()
 
     inv_path = Path("datasets/inventory_benchmark.yaml") if args.benchmark else None
@@ -180,7 +207,8 @@ def _main() -> None:
         return
 
     scan_fn = make_default_scan_fn(include_sca=args.sca)
-    results = run_batch(apps, args.workdir, scan_fn=scan_fn)
+    src_fn = p2_source_root if args.use_p2_sources else None
+    results = run_batch(apps, args.workdir, scan_fn=scan_fn, source_root_fn=src_fn)
     _print_results(results)
 
 

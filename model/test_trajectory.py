@@ -79,30 +79,38 @@ def test_to_sft_sample_shape() -> None:
     assert "evidence" not in s   # observations 미제공 시 evidence 키 없음
 
 
-def test_observation_type_value_set() -> None:
-    # D1-P3 이견 3 에서 합의한 집합 그대로여야 한다.
-    assert set(OBSERVATION_TYPES) == {
-        "http_exchange", "db_diff", "browser_trace", "log", "route_map", "role_map",
-    }
+def test_observation_type_value_set_matches_contract_enum() -> None:
+    # P1 이 contracts.ObservationType enum 으로 정식 채택 → 우리 집합은 거기서 파생.
+    from contracts.schemas import ObservationType
+    assert set(OBSERVATION_TYPES) == {t.value for t in ObservationType}
     assert is_evidence_type("http_exchange") and not is_evidence_type("bogus")
 
 
-def test_valid_evidence_splits_known_unknown() -> None:
-    obs = [_obs("1", "http_exchange"), _obs("2", "db_diff"), _obs("3", "weird_type")]
+def test_invalid_observation_type_rejected_by_schema() -> None:
+    # 이제 스키마(enum)가 잘못된 type 을 생성 단계에서 막는다.
+    try:
+        _obs("x", "bad_type")
+    except Exception:
+        return
+    raise AssertionError("잘못된 Observation.type 은 pydantic 이 거부해야 함")
+
+
+def test_valid_evidence_passes_all_valid() -> None:
+    obs = [_obs("1", "http_exchange"), _obs("2", "db_diff")]
     ok, unknown = valid_evidence(obs)
     assert {o.id for o in ok} == {"1", "2"}
-    assert unknown == ["weird_type"]
+    assert unknown == []                       # enum 강제라 unknown 없음
 
 
 def test_to_sft_sample_joins_evidence() -> None:
     t = Trajectory(id="1", run_id="r", state=RunState.VERIFYING, action={}, result={},
                    next_state=RunState.VERIFIED, label="verified")
-    obs = [_obs("e1", "http_exchange"), _obs("e2", "bad_type")]
+    obs = [_obs("e1", "http_exchange"), _obs("e2", "db_diff")]
     s = to_sft_sample(t, observations=obs)
-    assert len(s["evidence"]) == 1
+    assert len(s["evidence"]) == 2
     assert s["evidence"][0]["type"] == "http_exchange"
     assert s["evidence"][0]["hash"] == "deadbeef"
-    assert s["evidence_warnings"] == ["bad_type"]   # 알 수 없는 type 은 버리지 않고 경고
+    assert "evidence_warnings" not in s          # 전부 valid
 
 
 def test_stats() -> None:

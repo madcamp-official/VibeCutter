@@ -43,6 +43,16 @@ def test_focus_inferred_from_metadata() -> None:
     assert "focus:xss" in by_path["src/routes/profile.js"].signals
 
 
+def test_vuln_class_set_from_focus_for_p3_dispatch() -> None:
+    # P3 verifier 가 candidate.vuln_class 로 검증 모듈을 분기한다(verifiers/types.py).
+    cands = parse_semgrep_output(_load(), run_id="r1")
+    by_path = {c.source_symbols[0].split(":")[0]: c for c in cands}
+    assert by_path["app/db/users.py"].vuln_class == "injection"
+    assert by_path["src/routes/profile.js"].vuln_class == "xss"
+    # 3군 밖(secret)은 vuln_class None
+    assert by_path["config/settings.py"].vuln_class is None
+
+
 def test_ruleset_focus_overrides_inference() -> None:
     cands = parse_semgrep_output(_load(), run_id="r1", ruleset_focus="idor")
     assert all("focus:idor" in c.signals for c in cands)
