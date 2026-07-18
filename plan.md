@@ -86,10 +86,13 @@
 
 ### 1. 정책 등록 — target allowlist/command 채우기 (verify tool을 실 target에 붙이기 위한 전제)
 
-- [ ] `policies/scope.yaml`에 D1-P2.md가 제시한 실제 통과 target(예: `26s-w1-c1-02`~`26s-w1-c3-08` 중 build/health 통과분)의 `allowed_hosts`/`port`를 등록.
-- [ ] `policies/commands.yaml`에 `build_target`/`start_target`/`reset_target` command_id를 `{target_id: str}` typed args로 등록 (`reset_target`은 `approved: bool` 포함) — `runtime/target_service.py`가 이미 이 정책을 전제로 구현돼 있다.
-- [ ] `TargetRuntimeService`를 통해 target 1개로 register→build→start→check_readiness round-trip이 실제로 통과하는지 검증(현재는 정책이 비어 있어 전부 `PolicyViolation`으로 죽는 상태).
-- [ ] **P2에게 IDOR 검증 가능한 target(사용자 2명 + 각자 소유 seed 자원) 하나 지정 요청** — D2-P3.md가 이미 요청했는데 아직 응답이 없다. 오늘 아침 동기화 최우선 안건.
+- [x] `policies/scope.yaml`에 D1-P2.md가 제시한 실제 통과 target 19개(`26s-w1-c1-02`~`26s-w1-c3-08` 중 build/health 통과분, `26s-w1-c1-01`/`26s-w1-c2-03`/`26s-w1-c3-07`은 의도적으로 제외 — 이유를 파일에 주석으로 남김)의 `allowed_hosts`/`port`를 등록. port는 각 `targets/manifests/<id>.yaml`의 `base_url`에서 직접 추출해 manifest와 어긋나지 않게 함.
+- [x] `policies/commands.yaml`에 `build_target`/`start_target`/`reset_target` command_id를 `{target_id: str}` typed args로 등록. (`reset_target`의 명시적 승인은 typed-args가 아니라 `TargetRuntimeService.reset()`의 `approved` 파라미터로 별도 강제되는 구조라 commands.yaml에는 `approved`를 넣지 않음 — 코드 확인 후 원래 계획 수정.)
+- [x] `core.policy_engine.require_target_allowed`/`require_host_allowed`/`require_valid_command`를 실제 target_id(`26s-w1-c1-03`, `26s-w1-c2-07`)로 직접 호출해 더 이상 `PolicyViolation`이 나지 않는 것, 미등록 target은 여전히 거부되는 것을 확인.
+- [ ] ~~`TargetRuntimeService`로 register→build→start→check_readiness 전체 round-trip~~ **블로커 발견으로 중단**:
+  - 🔴 **`TargetCatalog.load()`가 `targets/manifests/`의 21개 매니페스트를 전부 즉시 검증하는데, 그중 3개(`26s-w1-c2-05`, `26s-w1-c2-08`, `26s-w1-c3-04`)가 `role_fixtures[].secret_env_names`에 `VIBECUTTER_*` 접두사가 아닌 원본 provider 이름(`GOOGLE_API_KEY`, `GEMINI_API_KEY`, `KIS_APP_KEY` 등)을 그대로 적어 `runtime/manifest.py`의 `environment_names_only` validator에서 `ValidationError`가 난다.** 이 때문에 **지금은 target_id가 정책에 등록돼 있어도 `TargetRuntimeService`(따라서 `vc_register_target`/`vc_build_target`/`vc_start_target`/`vc_check_readiness` 전부)가 어떤 target에 대해서도 동작하지 않는다** — catalog가 전체 로드 시점에 죽기 때문. `targets/manifests/`는 P2 소유라 직접 고치지 않았고, `policies/`(내 소유) 파일만으로 재현·격리해 원인을 확정했다.
+  - `core/policy_engine.py` 단위로는 정상 동작을 확인했으므로(위 항목), **이 블로커는 내 정책 등록 문제가 아니라 P2 manifest 데이터 문제**임을 명확히 구분해둔다.
+- [x] **P2에게 두 가지 요청** (오늘 커뮤니케이션 항목에 반영): ① 위 🔴 블로커(3개 manifest의 `secret_env_names`를 `VIBECUTTER_` 접두사로 바꾸거나 validator를 완화)를 오늘 최우선으로 고쳐달라 — 지금 상태로는 Day2 전체(verify tool 실배선 포함)가 실 target에 못 붙는다. ② IDOR 검증 가능한 target(사용자 2명 + 각자 소유 seed 자원) 하나 지정 요청(D2-P3.md가 이미 요청했는데 아직 응답 없음).
 
 ### 2. verify tool 실배선 (원래 Day2 핵심 목표)
 

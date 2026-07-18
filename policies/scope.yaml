@@ -1,9 +1,76 @@
 # target allowlist: target_id -> 고정 IP/port/container ID 매핑.
 # 여기 없는 target_id/IP/URL은 정책 계층에서 무조건 거부한다 (core/policy_engine.py).
 #
-# 형식 예시 (아직 실제 target은 없어 비워둔다):
+# 형식 예시:
 # targets:
 #   scrum-helper:
 #     allowed_hosts: [127.0.0.1, target-db]
 #     port: 8080
-targets: {}
+#
+# 아래 19개는 P2가 D1에 실제로 build/start/health(+대부분 정상 기능 regression)까지
+# 통과시킨 target이다(docs/handoffs/D1-P2.md "실제 통과 target의 allowlist 후보" +
+# targets/manifests/<id>.yaml의 base_url). port는 target_service._require_authorized()가
+# manifest.base_url의 port와 정확히 일치하는지 검사하는 값이라 manifest와 동기화 필수.
+#
+# 의도적으로 제외한 것 (D1-P2.md 근거):
+#   26s-w1-c1-01 — health까지만 통과, 원본 요구 Supabase schema 부재로 기능 regression 미완
+#   26s-w1-c2-03 — 로컬 Supabase/외부 OAuth 의존으로 정상 기능 검증 보류
+#   26s-w1-c3-07 — hosted Supabase/Edge Function 의존, 로컬 재현 불가로 보류
+targets:
+  26s-w1-c1-02:
+    allowed_hosts: [127.0.0.1]
+    port: 14003
+  26s-w1-c1-03:
+    allowed_hosts: [127.0.0.1]
+    port: 14005
+  26s-w1-c1-04:
+    allowed_hosts: [127.0.0.1]
+    port: 14004
+  26s-w1-c1-05:
+    allowed_hosts: [127.0.0.1]
+    port: 14006
+  26s-w1-c1-06:
+    allowed_hosts: [127.0.0.1]
+    port: 14008
+  26s-w1-c1-07:
+    allowed_hosts: [127.0.0.1]
+    port: 14010
+  26s-w1-c2-01:
+    allowed_hosts: [127.0.0.1]
+    port: 14011
+  26s-w1-c2-02:
+    allowed_hosts: [127.0.0.1]
+    port: 14013
+  26s-w1-c2-04:
+    allowed_hosts: [127.0.0.1]
+    port: 14017
+  26s-w1-c2-05:
+    allowed_hosts: [127.0.0.1]
+    port: 14019
+  26s-w1-c2-06:
+    allowed_hosts: [127.0.0.1]
+    port: 14021
+  26s-w1-c2-07:
+    allowed_hosts: [127.0.0.1]
+    port: 14022
+  26s-w1-c2-08:
+    allowed_hosts: [127.0.0.1]
+    port: 14023
+  26s-w1-c3-02:
+    allowed_hosts: [127.0.0.1]
+    port: 14025
+  26s-w1-c3-03:
+    allowed_hosts: [127.0.0.1]
+    port: 14027
+  26s-w1-c3-04:
+    allowed_hosts: [127.0.0.1]
+    port: 14028
+  26s-w1-c3-05:
+    allowed_hosts: [127.0.0.1]
+    port: 14030
+  26s-w1-c3-06:
+    allowed_hosts: [127.0.0.1]
+    port: 14032
+  26s-w1-c3-08:
+    allowed_hosts: [127.0.0.1]
+    port: 14034
