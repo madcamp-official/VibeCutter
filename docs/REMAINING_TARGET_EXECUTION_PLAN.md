@@ -75,7 +75,7 @@ P2는 기존 runtime/provisioning 소유권을 유지하면서 아래 5개의 au
 
 | 우선순위 | target_id | prefilter | P2 실행 계획 |
 | ---: | --- | ---: | --- |
-| 1 | `26s-w1-c2-01` | 12 | ephemeral DB password로 기동 후 signup→login two-role 계약 확인. 현재 bearer verifier는 가입 응답 토큰형만 지원하므로 login-path 확장 또는 fixture contract 뒤 Candidate/verify |
+| 1 | `26s-w1-c2-01` | 12 | **runtime 준비 완료(후속 계약 대기)**: `run-abc76bd16b75`는 승인 reset 뒤 build/start/readiness와 Python regression PASS. signup `{email,password,name}` → login `access_token` two-role contract가 verifier에 필요 |
 | 2 | `26s-w1-c2-02` | 1 | **실행 완료(후속 계약 대기)**: `run-7ec9f46e4519` build PASS, access-control scan Candidate 0 / `fixture_contract_required` blocked. 현재 후보는 path-id 없는 leaderboard aggregate라 live fixture 뒤 scoped clean 또는 evidence로 확정 |
 | 3 | `26s-w1-c1-06` | 1 | **실행 완료(후속 계약 대기)**: `run-a1498e9a2489` build PASS, Candidate 0 / `fixture_contract_required` blocked. `/api/demo/settle`은 unprotected demo endpoint라 P3가 auth-none 또는 bearer resource verifier 계약을 지정해야 함 |
 | 4 | `26s-w1-c1-07` | 5 | **실행 완료(후속 계약 대기)**: `run-d1cc7c5befa7` build PASS, Candidate 0 / `fixture_contract_required` blocked. Google OAuth + process-local memory session이라 DB seed만으로 재현 불가 |
@@ -121,9 +121,9 @@ tool 호출 진행, 결과·blocker 기록을 맡는다.
 
 1. P2는 `c2-02`/`c1-06`의 `fixture_contract_required`를 보존한다. P3의 선언형 bearer 계약이 들어오면
    self-signup provisioning override를 추가해 live scope 확인을 재개한다.
-2. P2는 `c2-01`에 process-local DB password를 주입해 build/start하고, `/api/v1/auth/signup`
-   → `/api/v1/auth/login`의 two-role 계약과 resource 생성 경로를 확인한다. 값·token은 파일·evidence에
-   저장하지 않는다. 기존 Docker volume을 비우는 reset은 별도 승인 뒤에만 실행한다.
+2. P2는 승인된 `c2-01` reset 뒤 새 process-local DB password로 build/start/readiness와 baseline
+   regression을 완료했다. `/api/v1/auth/signup` → `/api/v1/auth/login`의 two-role contract는 확인했고,
+   값·token은 파일·evidence에 저장하지 않는다.
 3. P3 bearer bridge에 선언형 signup payload와 선택 login(`login_path` 등) 계약이 추가되면
    `c2-01`을 첫 P2 audit target으로 실행하고 Candidate/evidence/blocked 결과를 handoff에 기록한다.
 4. 같은 계약으로 `c2-02`와 `c1-06`을 재개한다. `c1-07`은 trusted test-login/session fixture,

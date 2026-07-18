@@ -102,6 +102,11 @@ scoped clean/blocked 결과를 만드는 것이다.
 - `c2-01` MCP register/build는 통과했지만 기존 Docker database volume이 이전 비밀번호로 초기화되어
   schema migration이 `InvalidPasswordError`로 실패했다. 새 process-local 비밀번호로 재현하려면
   `vc_reset_target(..., approved=True)`가 필요하며, 승인 전에는 해당 local volume을 보존한다.
+- 사용자 승인 후 `c2-01`의 전용 Compose database/redis volume을 `vc_reset_target(..., approved=True)`로
+  초기화했다. 새 process-local DB password로 `run-abc76bd16b75` build PASS, start healthy,
+  `vc_check_readiness` ready, `python_regression` PASS를 확인했다. 현재 API는 loopback
+  `http://127.0.0.1:14011`에서 실행 중이다. access-control scan은 아직 P3 fixture contract가 없어
+  Candidate 0 / `fixture_contract_required` blocked를 정상 기록했다.
 - `c2-02` source preflight: `/api/auth/signup`은 `{username,password}`와 `accessToken`을 반환한다.
   프리필터 1건은 path-id가 없는 authenticated leaderboard aggregate(`GET /`)라 현재는 false positive
   후보로 분류했다. runtime reset/기동 뒤 scoped clean 또는 evidence로 확정한다.
@@ -145,5 +150,11 @@ P2 첫 두 target은 고정 `{name,email,password}` signup 가정과 다르다. 
 추가로 `c1-06`은 signup payload `{email,password,nickname}`, token key `token`이며 `/api/demo/settle`
 후보는 인증 없이 `promiseId`를 받는다. 이 endpoint의 intended verifier mode(auth-none state change vs
 two-role resource replay)를 contract로 지정해 달라.
+
+`c2-01`은 이제 loopback runtime이 실제 준비됐다(`run-abc76bd16b75`, health/readiness/regression PASS).
+선언형 bearer bridge에는 `signup_path=/api/v1/auth/signup`, signup body fields
+`email,password,name`, `login_path=/api/v1/auth/login`, token key `access_token`을 넣으면 된다.
+P2는 endpoint의 ID 기반 workspace/map/block/comment resource 생성 경로를 확인했으며, verifier가
+요청할 typed candidate/fixture schema에 맞춰 두 역할 provisioning을 이어서 제공한다.
 - Semgrep의 Python 3.14 호환 실패는 P2 runtime 문제가 아니다. 팀의 실행 기준을 3.11 또는 3.12로
   통일해야 P4 static gate와 P1 final judge가 안정적으로 동작한다.
