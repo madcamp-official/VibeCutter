@@ -357,3 +357,107 @@ def verify(
         evidence_ids.append(obs.id)
 
     return VerifierOutput(verified=verified, evidence_ids=evidence_ids, reason=reason)
+
+
+# ══ Write-IDOR (상태변화 oracle) ══════════════════════════════════════════════════════
+# 읽기 IDOR("남의 걸 봤나")를 넘어 쓰기 IDOR("남의 걸 바꿨나")를 판정한다. 7.3절 oracle의
+# 진짜 의도인 "DB/API 상태 비교" — 공격 응답 200이 아니라, 피해자 자원을 독립적으로 before/after로
+# 읽어 실제 상태가 바뀌었는지로 verified를 만든다.
+
+
+def mutation_idor_oracle(
+    before_body: str, after_body: str, mutation_marker: str
+) -> tuple[bool, str]:
+    """공격자의 변경이 피해자 자원에 실제로 반영됐는지 판정한다(상태 비교).
+
+    verified 조건: 변경 marker가 before(변경 전 피해자 자원)엔 없고 after(변경 후)엔 있다 —
+    공격자가 남의 자원을 실제로 바꿨다는 뜻. before에도 있으면 상태 변화가 아님.
+    """
+    in_before = mutation_marker in before_body
+    in_after = mutation_marker in after_body
+    if not in_before and in_after:
+        return True, (
+            f"공격자가 피해자 자원을 변경함 — 변경 marker {mutation_marker!r}가 공격 후 피해자 자원에"
+            f" 나타남(변경 전엔 없음). 수평 쓰기 권한 통제 부재 (CWE-639)."
+        )
+    if in_before:
+        return False, f"marker {mutation_marker!r}가 변경 전에도 있어 상태 변화로 볼 수 없음"
+    return False, f"변경 marker {mutation_marker!r}가 피해자 자원에 반영 안 됨 — 쓰기가 차단된 듯"
+
+
+class MutationProbe(BaseModel):
+    """write-IDOR 재현 입력. observe_path로 피해자 자원을 before/after 읽고, mutation_*로 변경한다."""
+
+    base_url: str
+    observe_path: str  # GET으로 피해자 자원(변경 대상 필드 포함)을 읽는 경로
+    mutation_method: str  # PUT/PATCH/POST/DELETE
+    mutation_path: str  # 피해자 자원 변경 경로
+    mutation_marker: str  # 변경 후 피해자 자원에 나타나야 하는 값
+    marker_field: str = "description"  # 변경 바디에서 marker를 넣을 필드
+    extra_body: dict = {}  # 변경 바디의 나머지 필수 필드(예: tags)
+
+
+def mutation_probe_from_fixture(fixture: dict | str | Path) -> MutationProbe:
+    """P2 fixture의 `safe_mutation`(안전·되돌릴 수 있는 변경)으로 MutationProbe를 만든다."""
+    data = (
+        fixture
+        if isinstance(fixture, dict)
+        else json.loads(Path(fixture).read_text(encoding="utf-8"))
+    )
+    victim = _pick_resource(data.get("resources", {}), "safe_mutation")
+    sm = victim["safe_mutation"]
+    owner_id = data["roles"][victim.get("owner_role", "user_a")]["id"]
+    body = dict(sm.get("json", {}))
+    marker_field = "description" if "description" in body else next(iter(body), "description")
+    body.pop(marker_field, None)
+    return MutationProbe(
+        base_url=data["base_url"],
+        observe_path=f"/vocabs/?owner_id={owner_id}",  # c2-04: 피해자 vocab(설명 포함) 되읽기
+        mutation_method=sm["method"],
+        mutation_path=sm["path"],
+        mutation_marker=f"vc-write-idor-{uuid4().hex[:8]}",
+        marker_field=marker_field,
+        extra_body=body,
+    )
+
+
+def _replay_mutation_none(probe: MutationProbe, max_requests: int) -> tuple[dict, dict, dict]:
+    """무인증 write-IDOR 재현: 피해자 자원 읽기(before) → 공격자 변경 → 다시 읽기(after)."""
+    needed = 3
+    if needed > max_requests:
+        raise ValueError(f"write-IDOR 재현에 {needed}회 필요하지만 max_requests={max_requests}로 제한됨")
+    base = probe.base_url.rstrip("/")
+    body = {**probe.extra_body, probe.marker_field: probe.mutation_marker}
+    with httpx.Client(follow_redirects=True, timeout=10.0) as client:
+        r_before = client.get(f"{base}{probe.observe_path}")
+        r_mut = client.request(probe.mutation_method, f"{base}{probe.mutation_path}", json=body)
+        r_after = client.get(f"{base}{probe.observe_path}")
+    before = _exchange("GET", probe.observe_path, r_before)
+    mutation = {
+        "request": {"method": probe.mutation_method, "path": probe.mutation_path},
+        "response": {"status": r_mut.status_code, "body": r_mut.text},
+    }
+    after = _exchange("GET", probe.observe_path, r_after)
+    return before, mutation, after
+
+
+def verify_mutation(
+    run_id: str, probe: MutationProbe, *, max_requests: int = MAX_REQUESTS_DEFAULT
+) -> VerifierOutput:
+    """write-IDOR을 재현·판정하고 before/mutation/after 3건을 evidence로 남긴다.
+
+    read-IDOR verify()의 write 버전. verified는 오라클이 before↔after 상태 비교로 판정하며,
+    변경은 fixture의 `safe_mutation`(되돌릴 수 있는 안전 변경)만 사용한다(파괴적 변경 금지, 10.4절).
+    """
+    before, mutation, after = _replay_mutation_none(probe, max_requests)
+    verified, reason = mutation_idor_oracle(
+        before["response"]["body"], after["response"]["body"], probe.mutation_marker
+    )
+    evidence_ids: list[str] = []
+    for label, exchange in (("write_before", before), ("write_mutation", mutation), ("write_after", after)):
+        data = redact(json.dumps(exchange, ensure_ascii=False)).encode()
+        obs = evidence_store.write_artifact(
+            run_id, observation_type="http_exchange", producer=f"{PRODUCER}:{label}", data=data
+        )
+        evidence_ids.append(obs.id)
+    return VerifierOutput(verified=verified, evidence_ids=evidence_ids, reason=reason)
