@@ -160,13 +160,40 @@
 - [ ] **`vc_generate_patch`와 `vc_apply_patch`를 별도 도구로 명확히 분리**. generate는 원본 미변경, apply는 **explicit user confirmation 필수** + **git worktree에만 적용** (원본 branch 직접 변경 금지 — 절대 원칙). 이 분리 자체가 Definition of Done 핵심 항목이다.
 - [ ] 모든 게이트 통과 시 Finding 상태를 `fixed`로, 하나라도 실패 시 `RETRY`/`HUMAN_REVIEW`로 전이하는 로직 완성.
 - [ ] Report 인프라 착수: `vc_generate_report`용 데이터 조합 로직 (P4가 Day3에 HTML/SARIF export를 만들 예정이므로, 그 전에 report가 참조할 데이터 소스(finding+evidence+patch+validation 조인)를 오늘 준비).
-- [x] **`vc_localize_root_cause` 배선 완료** (D3-P3.md 요청, 원래 계획엔 없던 항목인데 P3가 `repair/locator.py`를 오늘 실제 구현하면서 요청): `mcp_server/tools_repair.py`가 `finding_id → Finding → Run → target(catalog) → source_root(manifest.source_dir)`를 조회해 `repair.locator.localize(finding, source_root=...)`를 호출. **Day2 섹션 1의 P2 manifest 블로커가 여기도 그대로 전파**된다 — `_service()`가 catalog 전체를 로드하다 3개 깨진 manifest에서 죽으므로, 그 블로커가 안 풀리면 이 tool도 어떤 target으로도 못 돈다. 테스트(`tests/test_localize_root_cause.py`, 3건)는 `_service()`를 mock으로 대체해 배선 로직만 검증.
-- [ ] **P3 제안(설계 판단, 아직 미결)**: judge가 6게이트를 다 돌리면 `check_attack`(verify 1회) + `check_positive_functionality`(validators 내부 재현 1회) = 사실상 같은 IDOR 시퀀스를 2번 재현한다. P3는 `repair.validators.run_security_validation()` 하나로 attack+positive를 한 번에 뽑을 수 있다고 제안(D3-P3.md). **보류 이유**: 이걸 제대로 하려면 "패치된 인스턴스를 누가 어떤 base_url로 띄우는가"(P2 worktree 전제, 아직 미확정)가 먼저 정해져야 한다 — 지금 손대면 추측으로 설계하게 된다. `check_build`/`check_regression`과 함께 worktree 통합 시점에 재검토.
+- [x] **`vc_localize_root_cause` 배선 완료** (D3-P3.md 요청, 원래 계획엔 없던 항목인데 P3가 `repair/locator.py`를 오늘 실제 구현하면서 요청): `mcp_server/tools_repair.py`가 `finding_id → Finding → Run → target(catalog) → source_root(manifest.source_dir)`를 조회해 `repair.locator.localize(finding, source_root=...)`를 호출. ~~**Day2 섹션 1의 P2 manifest 블로커가 여기도 그대로 전파**된다~~ **[갱신 — D1-P2.md 12:14본에서 해소 확인]**: P2가 8개 manifest의 `secret_env_names`를 `VIBECUTTER_*` 규칙으로 고치고 `generic` adapter alias도 `generic-docker`로 정정해, checked-in manifest 22개 전부 `TargetCatalog.load()`를 통과한다. `TargetRuntimeService.build()`의 `target.id` AttributeError 버그도 함께 수정됨. **즉 이 tool은 이제 실제 target으로 호출 가능한 상태** — 남은 건 아래 "D1-P2 반영" 섹션의 후속 정리(코드가 아직 `manifest.source_dir`를 직접 조합 중이라 P2가 새로 노출한 `catalog.source_root_for()`로 교체 필요). 테스트(`tests/test_localize_root_cause.py`, 3건)는 `_service()`를 mock으로 대체해 배선 로직만 검증.
+- [ ] **P3 제안(설계 판단)**: judge가 6게이트를 다 돌리면 `check_attack`(verify 1회) + `check_positive_functionality`(validators 내부 재현 1회) = 사실상 같은 IDOR 시퀀스를 2번 재현한다. P3는 `repair.validators.run_security_validation()` 하나로 attack+positive를 한 번에 뽑을 수 있다고 제안(D3-P3.md). **[갱신]** 보류 사유였던 "패치된 인스턴스를 누가 어떤 base_url로 띄우는가"(P2 worktree 전제)가 D1-P2.md 12:14본 기준 `catalog.worktree_manager_for(target_id)`/`catalog.source_repository_for(target_id)`로 이미 확정·노출됐다 — `vc_apply_patch` 구현 시점에 통합 여부를 최종 결정한다.
+
+### D1-P2.md(12:14 갱신본) + D2-P4.md 반영 — 오늘 실행 순서
+
+D1-P2.md를 다시 읽고 확인한 결과, Day2 때 걸었던 P2 manifest 블로커 2건(catalog 전체 로드 실패, build 실패 경로 AttributeError)이 모두 해소됐고 P2가 다음 API를 새로 노출했다: `catalog.source_root_for(target_id)`(경로 탈출 검사 포함, MCP가 임의 경로를 못 주도록 강제), `catalog.source_repository_for(target_id)`, `catalog.worktree_manager_for(target_id).create(run_id)`, `catalog.test_runner_for(target_id).run(run_id)`.
+
+D2-P4.md도 확인: P4가 GPU 불필요 항목을 전부 끝냈다 — `scanners.sast.run_semgrep`/`scanners.sca.run_osv`(candidate 생성), `scanners.aggregate.aggregate(...).kept`(중복제거+FP reject+우선순위, P3는 이걸 verify해야 함), `scanners.vocab.candidate_severity/candidate_owasp`(Finding.severity/owasp_category 채울 매핑 함수, 이미 스키마엔 필드가 있지만 `find_or_create_finding()`이 아직 안 채움), `model.trajectory.TrajectoryRecorder`(학습 샘플용 상태 전이 기록기). 그리고 P1에게 구체적으로 4가지를 물었다: (a) trajectory 기록을 P1이 상태 전이 시 직접 호출할지 vs P4가 evidence_store에서 사후 조립할지, (b) `aggregate.kept`를 CANDIDATE_SCAN→VERIFYING 사이 어디서 부를지, (c) Day3 리포트 조인 데이터 형태, (d) severity/owasp 값 집합 채택 여부, (e) `vc_run_sast`/`vc_run_sca` 배선(현재 `mcp_server/tools_analysis.py`에 아직 "P4 통합 대기" stub로 남아 있음 — 이미 다 나왔으니 stale).
+
+아래는 이 두 handoff를 합쳐서 다시 짠 실행 순서다(의존성 기준, 위쪽일수록 선행):
+
+1. [ ] **(병행 착수) P2에게 선통보**: patch worktree를 build context로 쓰는 run-scoped Compose overlay가 필요하다는 것 — 뒷단(11번) build/regression gate가 이게 있어야 실제 target으로 검증된다. 내가 1~10번을 처리하는 동안 P2가 병렬로 준비하도록 지금 알린다.
+2. [ ] **`policies/scope.yaml`에 `26s-w1-c3-09` 등록** — 의존성 없는 가장 작은 작업.
+3. [ ] **설계 판단 4건을 몰아서 결정** (오늘 배선할 모든 tool의 형태를 좌우하므로 구현 전에 정리):
+   - trajectory 기록 주체 — P1이 상태 전이 지점(`core/state_machine.py:transition`, verify/build/apply 등 각 tool)에서 직접 `TrajectoryRecorder.record_step()`을 호출하는 쪽으로 결정(사후 조립은 evidence_store 스키마 변경 없이도 되지만 label 시점 판단이 P4 쪽에 다시 필요해져 이원화됨).
+   - severity/owasp vocab 채택 — `scanners.vocab.SEVERITY`/`OWASP_2021` 값 집합을 그대로 채택하고 `find_or_create_finding()`에서 `candidate_severity(candidate)`/`candidate_owasp(candidate)`로 `Finding.severity`/`Finding.owasp_category`를 채우기로 결정(스키마 필드는 이미 있고 지금까지 비어 있었을 뿐이라 additive).
+   - `aggregate.kept` 위치 — `vc_run_sast`/`vc_run_sca` tool 본문에서 각 스캐너 호출 직후 결과를 모아 `aggregate()`를 호출하고 `.kept`만 저장하는 것으로 결정(스캔 두 개를 각각 부르는 기존 tool 분리 구조를 유지하되, 후처리 단계에서 병합).
+   - `check_attack`/`check_positive_functionality` 통합 여부 — 10번(`vc_apply_patch`)에서 확정.
+4. [ ] **`find_or_create_finding()`에 severity/owasp 반영** (`core/evidence_store.py`) — 3번 결정 적용, 소폭 수정.
+5. [ ] **`vc_run_sast`/`vc_run_sca` 배선**: `scanners.sast.run_semgrep`/`scanners.sca.run_osv` 호출 → `scanners.aggregate.aggregate(...).kept`로 정리 → `Candidate` 저장(+trajectory 기록 훅). CANDIDATE_SCAN 단계가 실제로 동작하게 되는 지점 — patch 루프보다 상태 머신상 선행 단계라 먼저 처리.
+6. [ ] **`vc_localize_root_cause` 정리**: `_REPO_ROOT / target.manifest.source_dir` 수작업 조합을 `_service().catalog.source_root_for(run.target_id)` 호출로 교체하고, 이제 사실이 아닌 "3개 manifest 블로커" docstring 문구 제거.
+7. [ ] **`vc_generate_patch` 배선**: `finding_id → Finding`, `repair.locator.localize()`로 `root_cause`, `catalog.source_root_for(run.target_id)`로 `source_root`를 넘겨 `repair.patcher.generate_patch(run_id, finding, root_cause, source_root=...)` 호출 → `Patch(approval=PENDING)` 반환(+trajectory 기록). P3가 D3-P3.md에서 구현 완료·배선 요청한 상태.
+8. [ ] **`vc_apply_patch` 구현**: `confirmed=True` 게이트(이미 있음) 통과 후 `catalog.worktree_manager_for(target_id).create(run_id)`로 대상 소스 worktree 생성 → patch diff 적용(+trajectory 기록). **scope gate**(원본 branch 미변경, worktree 경로 밖 파일 변경 금지, 10.1절 절대 원칙)를 여기서 사전 강제.
+9. [ ] **judge `check_scope` 게이트 구현** — 8번의 사전 강제와 짝을 이루는 사후 검증(패치 diff가 worktree 경로 밖 파일을 안 건드렸는지).
+10. [ ] **judge `check_build`/`check_regression`/`check_static` 게이트 구현 + `vc_build_and_test`/`vc_replay_attack`/`vc_validate_regression` 배선**: `check_build`(P2 adapter build 결과), `check_regression`(`catalog.test_runner_for(target_id).run(run_id)`, 1번의 P2 overlay가 여기 걸림), `check_static`(P4 semgrep 재실행). 이 시점에 `check_attack`+`check_positive_functionality` 통합 여부도 확정해 세 tool의 내부 호출 구조를 정리.
+11. [ ] **Finding `fixed`/`RETRY`/`HUMAN_REVIEW` 전이 로직 완성**.
+12. [ ] **`vc_generate_report`용 데이터 조인 준비**(finding+evidence+patch+validation) — P4의 HTML/SARIF export가 이 형태를 그대로 소비(D2-P4 요청 c).
+13. [ ] **`26s-w1-c2-04`로 첫 실제 closed-loop 리허설**: register→build→start→map→scan→verify→localize→generate_patch→apply(confirmed)→build_and_test→replay_attack까지 실 target으로 완주.
+14. [ ] **커뮤니케이션 정리 + 저녁 `D3-P1.md` handoff 작성**.
 
 ### 오늘 커뮤니케이션
 - [ ] **P3에게**: (a) `check_positive_functionality`가 top-level import로 정리됐고 계약(bool, positive만) 그대로 잘 붙는 것 확인 요청. (b) `vc_localize_root_cause` 배선 완료 알림 — 단, P2 manifest 블로커가 풀려야 실제 target으로 호출 가능하다는 것 공유. (c) 2회 재현 최적화(`run_security_validation()` 통합)는 worktree/패치 인스턴스 전제가 정해질 때까지 보류하기로 결정했다고 회신. (d) 그 외 헤드업 3건(RootCause 얇음/`redact()` 제거 시점 Day5/`attack_params` 마이그레이션은 patcher 이후) 전부 확인, 지금은 대응 불필요.
 - [ ] **P3에게**: 첫 IDOR closed-loop 완주 시점에 맞춰 judge가 실제로 verdict를 내는지 함께 확인 (P3 완료 기준 "IDOR closed-loop 완주"와 내 게이트 완성이 같은 날 맞물림 — 반드시 오후에 한 번 실제 target으로 end-to-end 리허설). **patcher.py만 남았으므로 그게 나오는 대로 바로 리허설 가능.**
-- [ ] **P2에게**: regression suite 배선(P2 오늘 작업)과 내 Regression gate 연동 확인. snapshot rollback이 patch apply 실패 시 정상 복구되는지 함께 테스트. `WorktreeManager.create(run_id)`가 대상 앱 repo 기준인지(P3가 D3-P3.md에서 재확인 요청) 답변 요청.
+- [ ] **P2에게**: regression suite 배선(P2 오늘 작업)과 내 Regression gate 연동 확인. snapshot rollback이 patch apply 실패 시 정상 복구되는지 함께 테스트. `WorktreeManager.create(run_id)`가 대상 앱 repo 기준인지(P3가 D3-P3.md에서 재확인 요청) 답변 요청. **[신규]** manifest 블로커 2건 수정 확인·감사, `catalog.source_root_for()`/`worktree_manager_for()` 노출 확인 — 그대로 쓰겠다고 회신. `26s-w1-c3-09`를 `policies/scope.yaml`에 등록 완료했다고 알림(D1-P2.md 12:14본 요청 반영).
 - [ ] **P4에게**: report가 참조할 evidence/finding 스키마가 안정화됐음을 알리고, P4의 report 생성 코드가 이 스키마를 그대로 소비하도록 조정.
 - [ ] 교차 리뷰 원칙(Notion 리스크 표): Infra(P2)와 Judge(P1이 배선하지만 실질 판정 로직은 P3와 공동)는 서로 다른 사람이 리뷰 — 내 judge 게이트 구현을 P3 또는 P2에게 리뷰 요청해 self-confirmation 오류를 줄인다.
 
