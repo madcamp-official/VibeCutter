@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from contracts.schemas import Candidate
 from runtime.provisioning import ProvisioningStrategy, VerifierProvisioning
-from surface.graph import IdorSuspect
+from surface.graph import IdorSuspect, find_idor_suspects
 from verifiers.access_control import candidate_from_fixture
 
 _ID_PLACEHOLDER = re.compile(r"\{[^}]+\}|:[A-Za-z_]\w*|<[^>]+>")
@@ -153,6 +153,22 @@ def _bearer_candidate(run_id, suspect, provisioning, signup_path, token_key) -> 
 
 
 # ── 계약 진입점 ────────────────────────────────────────────────────────────────────
+
+
+def candidates_for_target(
+    run_id: str,
+    provisioning: VerifierProvisioning,
+    source_root: str | Path,
+    *,
+    self_signup_hints: dict | None = None,
+) -> BridgeResult:
+    """target 하나 → IDOR candidates(또는 blocked). MCP map/scan tool·배치가 부를 단일 진입점.
+
+    `find_idor_suspects(source_root)` + `build_candidates(...)`를 한 번에 묶는다. P1 tool 배선은
+    `catalog.source_root_for(target_id)`와 `vc_get_verifier_provisioning(target_id)`만 넘기면 된다.
+    """
+    suspects = find_idor_suspects(source_root)
+    return build_candidates(run_id, provisioning, suspects, self_signup_hints=self_signup_hints)
 
 
 def build_candidates(
