@@ -10,10 +10,19 @@ vc_verify_access_control, vc_verify_injection, vc_verify_xss (Verification)
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from contracts.schemas import VerificationResult
 from core.audit_log import audited
+from verifiers.types import MAX_REQUESTS_DEFAULT, MAX_REQUESTS_MAX, MAX_REQUESTS_MIN
+
+# 부록 A `max_requests` 입력 제약(`{"type":"integer","minimum":1,"maximum":20}`)을 실제
+# 생성 inputSchema에 반영한다. D1-P3.md 구멍 ③: 예전에는 `max_requests: int = 10`뿐이라
+# 스키마에 min/max가 없어 `max_requests=100000`도 통과했다.
+MaxRequests = Annotated[int, Field(ge=MAX_REQUESTS_MIN, le=MAX_REQUESTS_MAX)]
 
 
 class MapResult(BaseModel):
@@ -26,19 +35,6 @@ class ScanResult(BaseModel):
     run_id: str
     tool: str
     candidate_ids: list[str] = Field(default_factory=list)
-
-
-class VerifyResult(BaseModel):
-    """부록 A `vc_verify_access_control` 예시 outputSchema를 그대로 따른다.
-
-    evidence_ids는 기본값을 두지 않는다 — 부록 A는 verified=false인 경우에도
-    evidence_ids를 required로 명시하므로(빈 배열이라도 명시적으로 반환), 구현부가
-    항상 값을 채워 넣도록 강제한다.
-    """
-
-    verified: bool
-    evidence_ids: list[str]
-    reason: str
 
 
 def register(mcp: FastMCP) -> None:
@@ -87,23 +83,23 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     @audited
     def vc_verify_access_control(
-        run_id: str, candidate_id: str, max_requests: int = 10
-    ) -> VerifyResult:
+        run_id: str, candidate_id: str, max_requests: MaxRequests = MAX_REQUESTS_DEFAULT
+    ) -> VerificationResult:
         """Broken Access Control/IDOR 후보를 실제 재현으로 검증한다. P3 소유."""
         raise NotImplementedError("P3 verifier 구현 대기, Day2에 승인 게이트 배선")
 
     @mcp.tool()
     @audited
     def vc_verify_injection(
-        run_id: str, candidate_id: str, max_requests: int = 10
-    ) -> VerifyResult:
+        run_id: str, candidate_id: str, max_requests: MaxRequests = MAX_REQUESTS_DEFAULT
+    ) -> VerificationResult:
         """SQL/Command Injection 후보를 제한된 fixture에서 검증한다. P3 소유."""
         raise NotImplementedError("P3 verifier 구현 대기, Day2에 승인 게이트 배선")
 
     @mcp.tool()
     @audited
     def vc_verify_xss(
-        run_id: str, candidate_id: str, max_requests: int = 10
-    ) -> VerifyResult:
+        run_id: str, candidate_id: str, max_requests: MaxRequests = MAX_REQUESTS_DEFAULT
+    ) -> VerificationResult:
         """XSS 후보를 격리 브라우저의 benign marker로 검증한다. P3 소유."""
         raise NotImplementedError("P3 verifier 구현 대기, Day2에 승인 게이트 배선")

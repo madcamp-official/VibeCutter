@@ -32,12 +32,26 @@ from contracts.schemas import (
     Validation,
 )
 from core.db import DATA_DIR, get_engine
+from core.redaction import redact
 from core.state_machine import transition_finding
 
 
 def sha256_of(data: bytes) -> str:
     """artifact 저장 전 hash를 계산한다 (5.3절 재현성 요구사항)."""
     return hashlib.sha256(data).hexdigest()
+
+
+def _redact_bytes(data: bytes) -> bytes:
+    """UTF-8 텍스트로 디코딩되는 artifact에만 redaction을 적용한다.
+
+    디코딩되지 않는 바이너리(스크린샷 등)는 원본 그대로 저장한다 — 현재 redaction 규칙은
+    텍스트 패턴(JSESSIONID/Bearer/password/JWT) 기준이라 바이너리에는 적용할 방법이 없다.
+    """
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data
+    return redact(text).encode("utf-8")
 
 
 # --- 내부 SQLModel 테이블 (구현 세부사항, 외부에 노출하지 않는다) -----------------------
@@ -206,8 +220,14 @@ def write_artifact(
     observation_id: str | None = None,
 ) -> Observation:
     """artifact 파일을 `.vibecutter/runs/{run_id}/artifacts/`에 쓰고 SHA-256 hash와 함께
-    Observation으로 기록한다. 재현성 확보를 위해 hash와 producer(생성 tool)를 항상 남긴다."""
+    Observation으로 기록한다. 재현성 확보를 위해 hash와 producer(생성 tool)를 항상 남긴다.
+
+    저장 직전에 `core.redaction.redact()`를 거쳐 secret/token을 지운다(구멍 ② 방어,
+    cowork_rule.md 4절). hash는 실제로 저장되는(redaction 적용 후) bytes 기준이다 —
+    재현성 검증 시 저장된 파일과 hash가 항상 일치해야 하므로.
+    """
     obs_id = observation_id or f"obs-{uuid4().hex[:12]}"
+    data = _redact_bytes(data)
     digest = sha256_of(data)
     artifact_dir = DATA_DIR / "runs" / run_id / "artifacts"
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -226,6 +246,24 @@ def write_artifact(
     return observation
 
 
+class InvalidEvidenceError(ValueError):
+    """evidence_ids 중 evidence_store에 실제로 존재하지 않거나 다른 run 소속인 id가 있을 때 발생한다.
+
+    D1-P3.md 구멍 ①: `transition_finding()`은 evidence_ids가 "비어 있지 않은지"만 검사하고
+    실존 여부는 보지 않아, 존재하지 않는 id로도 verified 승격이 통과했다(재현 확인됨).
+    이 검사는 store 계층(여기)에서만 하고 `transition_finding()`은 순수 함수로 그대로 둔다.
+    """
+
+    def __init__(self, finding_id: str, run_id: str, bad_ids: Sequence[str]):
+        super().__init__(
+            f"finding {finding_id}(run={run_id})의 evidence_ids 중 존재하지 않거나 다른"
+            f" run 소속인 id: {list(bad_ids)}"
+        )
+        self.finding_id = finding_id
+        self.run_id = run_id
+        self.bad_ids = list(bad_ids)
+
+
 def update_finding_status(
     finding_id: str,
     target_status: FindingStatus,
@@ -234,15 +272,28 @@ def update_finding_status(
 ) -> Finding:
     """evidence 없이는 Finding.verification_state를 바꿀 수 없다.
 
-    `core.state_machine.transition_finding`에 위임하므로, 이 함수를 거치지 않고
-    Finding row를 직접 고쳐서 verified/fixed를 만드는 것 외에는 우회 경로가 없다.
+    `core.state_machine.transition_finding`에 위임해 evidence_ids가 비어 있지 않은지,
+    상태 전이 자체가 허용되는지 먼저 검사한다. 그 다음 각 evidence_id가 evidence_store에
+    실제로 존재하고 이 finding과 같은 run 소속인지 확인한다(구멍 ① 방어) — 그렇지 않으면
+    `InvalidEvidenceError`. 이 함수를 거치지 않고 Finding row를 직접 고쳐서 verified/fixed를
+    만드는 것 외에는 우회 경로가 없다.
     """
     finding = get(Finding, finding_id)
     if finding is None:
         raise ValueError(f"finding {finding_id} not found")
+
     new_status = transition_finding(
         finding.verification_state, target_status, evidence_ids=evidence_ids
     )
+
+    bad_ids = [
+        eid
+        for eid in evidence_ids
+        if (obs := get(Observation, eid)) is None or obs.run_id != finding.run_id
+    ]
+    if bad_ids:
+        raise InvalidEvidenceError(finding_id, finding.run_id, bad_ids)
+
     finding.verification_state = new_status
     finding.evidence_ids = list(dict.fromkeys([*finding.evidence_ids, *evidence_ids]))
     finding.updated_at = datetime.utcnow()

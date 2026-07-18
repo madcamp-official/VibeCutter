@@ -13,9 +13,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from pydantic import BaseModel, Field
-
-from contracts.schemas import Candidate
+from contracts.schemas import Candidate, VerificationResult
 
 # 부록 A `vc_verify_access_control` inputSchema가 명시한 상한.
 # 10.2절 "Rate/impact limit: 요청 수, concurrency, body size" 통제에 해당한다.
@@ -23,21 +21,12 @@ MAX_REQUESTS_MIN = 1
 MAX_REQUESTS_MAX = 20
 MAX_REQUESTS_DEFAULT = 10
 
-
-class VerifierOutput(BaseModel):
-    """부록 A outputSchema와 동일한 3필드.
-
-    `evidence_ids`에 기본값을 두지 않는다 — verified=false인 경우에도 부록 A는 이 필드를
-    required로 명시하므로(빈 배열이라도 명시적으로), 구현부가 항상 채우도록 강제한다.
-
-    **evidence_ids는 반드시 evidence_store에 실제로 기록된 Observation의 id여야 한다.**
-    verifier가 먼저 `evidence_store.write_artifact(...)`로 Observation을 만들고, 그
-    `.id`만 여기에 담는다. 문자열을 지어내면 안 된다 (D1-P3.md 구멍 ① 참고).
-    """
-
-    verified: bool
-    evidence_ids: list[str]
-    reason: str
+# `VerifierOutput`은 `contracts.schemas.VerificationResult`의 별칭이다. 예전에는 여기서
+# 별도 클래스로 정의했는데, `mcp_server/tools_analysis.py`의 `VerifyResult`와 필드가
+# 완전히 같은 채로 중복돼 있었다(D1-P3.md 지적, "결정은 P1이 해달라"). P1이 공통 계약으로
+# 올렸고, 이 별칭 덕분에 `verifiers/access_control.py`를 포함한 기존 코드는 변경 없이
+# `VerifierOutput` 이름 그대로 쓸 수 있다.
+VerifierOutput = VerificationResult
 
 
 class Verifier(Protocol):

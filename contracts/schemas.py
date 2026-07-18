@@ -117,6 +117,26 @@ class Candidate(BaseModel):
     created_at: datetime = Field(default_factory=_now)
 
 
+class VerificationResult(BaseModel):
+    """Verification 카테고리 tool(`vc_verify_access_control` 등)의 outputSchema이자,
+    verifier(`verifiers/*.py`)가 P1의 tool 배선에 돌려주는 결과 타입.
+
+    부록 A outputSchema와 동일한 3필드. `evidence_ids`에 기본값을 두지 않는다 —
+    verified=false인 경우에도 부록 A는 이 필드를 required로 명시하므로(빈 배열이라도
+    명시적으로), 구현부가 항상 채우도록 강제한다.
+
+    **evidence_ids는 반드시 evidence_store에 실제로 기록된 Observation의 id여야 한다**
+    (D1-P3.md 구멍 ① — 존재하지 않는 id는 `evidence_store.update_finding_status()`가
+    `InvalidEvidenceError`로 거부한다). 이전에는 `mcp_server/tools_analysis.py`의
+    `VerifyResult`와 `verifiers/types.py`의 `VerifierOutput`이 필드가 완전히 같은 채로
+    중복 정의돼 있었다(D1-P3.md 지적) — 여기 공통 계약으로 통합했다.
+    """
+
+    verified: bool
+    evidence_ids: list[str]
+    reason: str
+
+
 class RootCause(BaseModel):
     """Finding.root_cause — root-cause locator(7.4절) 산출물."""
 
