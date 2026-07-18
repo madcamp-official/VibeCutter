@@ -18,8 +18,11 @@ from contracts.schemas import FindingStatus, RunState
 
 # 5.2절 화살표를 그대로 옮긴 허용 전이 그래프.
 # RETRY는 문서에 되돌아갈 상태가 명시되어 있지 않아, patch 후보를 다시 만들어 재시도한다고
-# 해석해 PATCH_PROPOSED로 되돌린다. 재시도 횟수 상한(예: 3회 실패 시 human review)은 이
-# 그래프가 아니라 core/planner.py(Day4)가 별도로 강제한다.
+# 해석해 PATCH_PROPOSED로 되돌린다. 재시도 횟수 상한(3회 실패 시 human review)은
+# core/planner.py(Day4)가 강제한다 — RETRY → HUMAN_REVIEW는 그 강제가 쓰는 유일한 목적지다
+# (patch/verifier 판정이 아니라 재시도 소진이라는 프로세스 종료 사유라 RETRY의 기존
+# 목적지 PATCH_PROPOSED만으로는 표현할 수 없었다. additive 변경 — 기존 RETRY→PATCH_PROPOSED
+# 경로는 그대로 유지).
 RUN_TRANSITIONS: dict[RunState, frozenset[RunState]] = {
     RunState.REGISTERED: frozenset({RunState.BUILDING}),
     RunState.BUILDING: frozenset({RunState.READY}),
@@ -34,7 +37,7 @@ RUN_TRANSITIONS: dict[RunState, frozenset[RunState]] = {
     RunState.WAITING_APPROVAL: frozenset({RunState.PATCH_APPLIED}),
     RunState.PATCH_APPLIED: frozenset({RunState.VALIDATING}),
     RunState.VALIDATING: frozenset({RunState.FIXED, RunState.RETRY, RunState.HUMAN_REVIEW}),
-    RunState.RETRY: frozenset({RunState.PATCH_PROPOSED}),
+    RunState.RETRY: frozenset({RunState.PATCH_PROPOSED, RunState.HUMAN_REVIEW}),
     RunState.FIXED: frozenset(),
     RunState.HUMAN_REVIEW: frozenset(),
 }

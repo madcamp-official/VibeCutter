@@ -234,11 +234,16 @@ D2-P4.md도 확인: P4가 GPU 불필요 항목을 전부 끝냈다 — `scanners
 
 ### 3. `core/planner.py` — `audit_local_target` 오케스트레이션 + 재시도 상한
 
-- [ ] 6.5절 MCP Prompt로 `audit_local_target`을 `mcp_server/server.py`에 실제 등록(`@mcp.prompt()` 또는 FastMCP의 동등 API) — 지금은 stub 문서화만 있고 서버에 노출된 prompt가 하나도 없다.
-- [ ] `register → build → map → scan → verify → localize → patch → validate → report` 전체를 상태 머신을 타고 순서대로 호출하는 오케스트레이션 함수 작성. 각 단계는 이미 존재하는 tool 함수를 그대로 호출(중복 구현 금지).
-- [ ] **3회 연속 patch 실패 → `HUMAN_REVIEW` 강제 전이**: D3-P1.md가 이미 "이 코드가 아니라 `core/planner.py`(Day4)가 강제하기로 한 기존 설계"라고 못박아 둔 항목 — `RETRY` 카운터를 planner가 추적해 attempt_no가 상한을 넘으면 Finding을 `HUMAN_REVIEW`로 보낸다(`patcher.generate_patch`의 `attempt_no` 파라미터와 연결).
-- [ ] kill switch 가드를 오케스트레이션 루프 안에서도 각 단계 진입 전에 확인.
-- [ ] 테스트: 전체 흐름 mock 기반 happy path, 3연속 실패 시 HUMAN_REVIEW 전이, 중간에 pause되면 즉시 중단.
+**[설계 변경]** 기획서 6.5절 원문(docx 추출 확인)을 다시 읽어보니 MCP Prompt는 "Host가 어떤 순서로 tool을 부를지" 안내하는 메시지 템플릿이지, 상태 머신을 대신 실행하는 Python 오케스트레이터가 아니었다(6.7절 "한 도구는 한 가지 명확한 상태 전이만 수행", 6.8절 SKILL 예시도 Host가 tool을 순차 호출하는 걸 전제). 그래서 계획을 조정했다: 프롬프트는 안내 텍스트만 반환하고(`mcp_server/prompts.py`), **실제 안전 강제(재시도 상한)는 프롬프트가 아니라 `vc_generate_patch` tool 자체가 코드 레벨로 한다** — Host가 규칙을 잊거나 무시해도 4번째 patch 시도는 tool이 거부한다. 이게 이 프로젝트 전체의 원칙(judge도 LLM 판단이 아니라 evidence로 강제)과 일관된다.
+
+- [x] 6.5절 MCP Prompt로 `audit_local_target`을 `mcp_server/prompts.py`(신규)에 등록(`@mcp.prompt()`). register→build→map→scan→verify→localize→patch(승인)→validate→report 순서와 승인 시점, 재시도 상한, kill switch(`vc_pause`)를 안내하는 텍스트를 반환한다. 실제 tool/resource 이름(예: `vibecutter://policies/scope`)만 참조하고, docx 예시에 있지만 실제로 구현되지 않은 `vc_list_authorized_targets`/`vc_judge_evidence` 같은 이름은 쓰지 않았다(존재하지 않는 tool을 안내하면 Host가 혼란스러워진다).
+- [x] **3회 연속 patch 실패 → `HUMAN_REVIEW` 강제 전이** (`core/planner.py` 신규): `patch_attempt_count(run_id, finding_id)`로 이 finding에 이미 생성된 Patch 수를 세고, `enforce_retry_budget(run, finding, next_attempt_no=...)`가 `MAX_PATCH_ATTEMPTS=3`을 넘으면 evidence artifact를 남기고 Finding을 `HUMAN_REVIEW`로 승격 + `RetryBudgetExhausted` 예외.
+- [x] **`vc_generate_patch`에 배선** (`mcp_server/tools_repair.py`): attempt_no를 항상 1로 고정하던 기존 버그를 고쳐 `patch_attempt_count()+1`로 계산해 `repair.patcher.generate_patch()`에 실제로 전달 — 예전엔 RETRY로 재시도해도 `attempt_no`가 올라가지 않았다(patcher.py 자체 docstring이 이미 "planner가 다음 attempt_no로 재시도"를 전제하고 있었는데 실제 연결이 없었음).
+- [x] **[공통 계약 변경, additive]** `core/state_machine.py`의 `RUN_TRANSITIONS[RunState.RETRY]`에 `RunState.HUMAN_REVIEW`를 추가(기존 `PATCH_PROPOSED` 경로는 유지) — 재시도 소진은 patch/verifier 판정이 아니라 프로세스 종료 사유라 RETRY의 기존 목적지만으로는 표현이 안 됐다. P2/P3에 공유 필요(오늘 커뮤니케이션 항목).
+- [x] 테스트: `tests/test_planner.py`(7건, retry budget 상한 이내/초과, evidence 확인, RETRY→HUMAN_REVIEW 전이 legality), `tests/test_generate_patch_retry.py`(3건, attempt_no 계산·4번째 시도 거부), `tests/test_prompts.py`(2건, prompt 등록·내용 확인).
+- [ ] (원래 계획했던) 전체 register→report mock 기반 happy-path 오케스트레이션 테스트는 하지 않기로 했다 — mapping tool(`vc_map_routes` 등)이 아직 P3 stub(`NotImplementedError`)이라 end-to-end는 애초에 못 돈다. Host가 각 tool을 부르는 구조로 바뀌어서 "P1이 대신 오케스트레이션 함수를 통째로 테스트"할 필요도 없어졌다(테스트 대상은 각 tool의 안전장치).
+
+**검증**: 전체 회귀 158개(planner 7 + generate_patch_retry 3 + prompts 2) 통과.
 
 ### 4. build/regression 자동 경로로 c1-05(또는 c2-04) closed-loop 리허설 재현
 

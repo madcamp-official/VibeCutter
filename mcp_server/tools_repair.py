@@ -44,6 +44,7 @@ from core.judge import (
     compute_verdict,
 )
 from core.kill_switch import check_not_paused
+from core.planner import enforce_retry_budget, patch_attempt_count
 from core.state_machine import transition
 from core.trajectory import record_trajectory_step
 from mcp_server.tools_inventory import _service
@@ -216,6 +217,13 @@ def register(mcp: FastMCP) -> None:
         **실패 처리**: 패치 후보를 하나도 합성 못 하면 `generate_patch()`가 `ValueError`를
         내는데, 이때는 RunState를 전이하지 않는다(패치가 없는데 PATCH_PROPOSED로 넘어가지
         않도록) — 실패해도 run은 원래 상태(예: VERIFIED)에 그대로 남는다.
+
+        **재시도 상한(Day4, `core/planner.py`)**: 이 finding에 이미 생성된 Patch 수로 다음
+        `attempt_no`를 계산해 `generate_patch()`에 그대로 넘긴다(예전엔 항상 1로 고정돼
+        있어 RETRY 재시도가 attempt_no를 올리지 않는 버그가 있었다). `attempt_no`가
+        `core.planner.MAX_PATCH_ATTEMPTS`(3)를 넘으면 patch를 생성하지 않고 Finding을
+        `HUMAN_REVIEW`로 강제 승격한 뒤 `RetryBudgetExhausted`를 던진다 — Host가 재시도를
+        멈추길 기대하는 대신 tool 자체가 4번째 시도를 거부한다.
         """
         check_not_paused()
         finding = get(Finding, finding_id)
@@ -225,15 +233,20 @@ def register(mcp: FastMCP) -> None:
         if run is None:
             raise ValueError(f"run {finding.run_id} not found")
 
+        attempt_no = patch_attempt_count(run.id, finding.id) + 1
+        enforce_retry_budget(run, finding, next_attempt_no=attempt_no)
+
         source_root = _service().catalog.source_root_for(run.target_id)
         root_cause = localize(finding, source_root=source_root)
-        patch = generate_patch(run.id, finding, root_cause, source_root=source_root)
+        patch = generate_patch(
+            run.id, finding, root_cause, source_root=source_root, attempt_no=attempt_no
+        )
         save(patch)
         _advance_to_patch_proposed(run)
         record_trajectory_step(
             run.id,
             state=run.status,
-            action={"tool": "vc_generate_patch", "finding_id": finding_id},
+            action={"tool": "vc_generate_patch", "finding_id": finding_id, "attempt_no": attempt_no},
             result={"patch_id": patch.id, "files": patch.files, "approval": patch.approval},
             next_state=run.status,
         )
