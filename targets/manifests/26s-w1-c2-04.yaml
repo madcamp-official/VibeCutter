@@ -9,7 +9,7 @@ commands:
   start: {argv: [docker, compose, -f, targets/compose/26s-w1-c2-04.yaml, up, -d, --wait], working_dir: ., timeout_seconds: 360}
   stop: {argv: [docker, compose, -f, targets/compose/26s-w1-c2-04.yaml, down, --remove-orphans], working_dir: ., timeout_seconds: 180}
   reset: {argv: [docker, compose, -f, targets/compose/26s-w1-c2-04.yaml, down, --volumes, --remove-orphans], working_dir: ., timeout_seconds: 180}
-  prepare_idor_fixture: {argv: [py, "-3.13", targets/scripts/26s-w1-c2-04-idor-fixture.py], working_dir: ., timeout_seconds: 60}
+  prepare_idor_fixture: {argv: ["{vibecutter_python}", targets/scripts/26s-w1-c2-04-idor-fixture.py], working_dir: ., timeout_seconds: 60}
 tool_versions: {docker: "29.6.1", docker-compose: "v5.3.0", python: "3.13", node: "22", sqlite: "3"}
 healthcheck: {path: /api/data, expected_status: 200, timeout_seconds: 90}
 reset: {command_id: reset, snapshot_name: local-sqlite-ephemeral-v1}

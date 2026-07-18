@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Literal
@@ -13,6 +14,12 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from pydantic import BaseModel, ConfigDict, Field
 
 from .manifest import CommandSpec, TargetManifest
+
+
+# A repository-controlled manifest token, not caller-provided interpolation.
+# It keeps helper scripts on the same Python interpreter that runs VibeCutter
+# instead of assuming Windows' ``py`` launcher or a particular PATH alias.
+VIBECUTTER_PYTHON = "{vibecutter_python}"
 
 
 class ApprovalRequired(PermissionError):
@@ -121,7 +128,7 @@ class LifecycleManager:
         started = time.monotonic()
         try:
             completed = subprocess.run(
-                spec.argv,
+                _resolve_command_argv(spec.argv),
                 cwd=working_dir,
                 env=environment,
                 capture_output=True,
@@ -154,6 +161,11 @@ def _resolve_within_root(root: Path, relative_path: str) -> Path:
     if resolved != root and root not in resolved.parents:
         raise ValueError("manifest source_dir escapes repository root")
     return resolved
+
+
+def _resolve_command_argv(argv: list[str]) -> list[str]:
+    """Resolve only the fixed manifest interpreter token; preserve all other argv."""
+    return [sys.executable if value == VIBECUTTER_PYTHON else value for value in argv]
 
 
 def _duration_ms(started: float) -> int:

@@ -10,7 +10,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from .compose_isolation import ComposeIsolationInspector, ComposeIsolationReport
-from .lifecycle import _resolve_within_root
+from .lifecycle import VIBECUTTER_PYTHON, _resolve_within_root
 from .manifest import TargetManifest
 
 
@@ -127,6 +127,8 @@ class TargetRuntimeInspector:
 
 
 def _is_executable_available(executable: str) -> bool:
+    if executable == VIBECUTTER_PYTHON:
+        return True
     path = Path(executable)
     if path.is_absolute():
         return path.is_file()

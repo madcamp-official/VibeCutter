@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from runtime.manifest import TargetManifest
+from runtime.lifecycle import VIBECUTTER_PYTHON
 from runtime.readiness import TargetRuntimeInspector
 
 
@@ -64,3 +65,16 @@ class TargetReadinessTests(unittest.TestCase):
             report = TargetRuntimeInspector(manifest, Path(temp_dir)).check_readiness()
         self.assertFalse(report.ready)
         self.assertEqual(report.unavailable_executables, ["vibecutter-command-that-does-not-exist"])
+
+    def test_recognizes_the_trusted_runtime_python_token(self) -> None:
+        manifest = readiness_manifest().model_copy(deep=True)
+        manifest.commands["build"].argv[0] = VIBECUTTER_PYTHON
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"VIBECUTTER_ROLE_A_TOKEN": "configured"}, clear=True
+        ):
+            log_path = Path(temp_dir) / "logs" / "app.log"
+            log_path.parent.mkdir()
+            log_path.write_text("safe", encoding="utf-8")
+            report = TargetRuntimeInspector(manifest, Path(temp_dir)).check_readiness()
+        self.assertTrue(report.ready)
+        self.assertEqual(report.unavailable_executables, [])

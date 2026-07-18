@@ -7,7 +7,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from runtime.lifecycle import ApprovalRequired, LifecycleManager
+from runtime.lifecycle import ApprovalRequired, LifecycleManager, VIBECUTTER_PYTHON
 from runtime.manifest import TargetManifest
 from runtime.worktree import WorktreeManager
 
@@ -42,6 +42,14 @@ class LifecycleTests(unittest.TestCase):
             result = manager.build()
         self.assertEqual(result.status, "passed")
         self.assertEqual(result.stdout.strip(), "ok")
+
+    def test_runtime_python_token_uses_the_vibecutter_interpreter(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest = manifest_for_python_commands()
+            manifest.commands["build"].argv = [VIBECUTTER_PYTHON, "-c", "print('token-ok')"]
+            result = LifecycleManager(manifest, Path(temp_dir)).build()
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.stdout.strip(), "token-ok")
 
     def test_reset_requires_explicit_approval(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
