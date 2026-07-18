@@ -107,10 +107,13 @@
 
 ### 3. judge.py skeleton + Attack gate 실동작
 
-- [ ] 7.6절 6개 게이트 함수 시그니처 정의: `check_build`, `check_attack`, `check_positive_functionality`, `check_regression`, `check_static`, `check_scope`(각각 `Validation`의 필드 하나씩을 채우는 형태).
-- [ ] **Attack gate만 실제 동작**: patch 적용 후 동일 attack이 더 이상 성공하지 않는지 재확인하는 로직. 오늘은 실제 patch가 없으므로 `verifiers.access_control.verify()`를 재호출해 `verified=False`가 나오는 경로를 단위 테스트로 통과시켜 둔다(Day3에 실제 patch loop와 연결).
-- [ ] 나머지 5개 게이트는 스텁(`NotImplementedError`)으로 남긴다.
-- [ ] **judge가 LLM 주장을 그대로 승격 못 하도록 하드 가드 재확인**: `update_finding_status`(구멍① 수정판)를 거치지 않고 `FindingRow`를 직접 쓰는 경로가 코드베이스에 없는지 grep으로 확인.
+- [x] 7.6절 6개 게이트 함수 시그니처 정의(`core/judge.py`): `check_build`, `check_attack`, `check_positive_functionality`, `check_regression`, `check_static`, `check_scope`(전부 `(run_id, patch_id) -> bool`, `Validation`의 필드 하나씩을 채우는 형태).
+- [x] **Attack gate만 실제 동작**: `check_attack(run_id, finding_id, *, verifier=verify_access_control)` — finding의 원본 `candidate_id`로 verifier를 재호출해 `verified=False`(더 이상 공격이 안 통함)면 gate 통과. `verifier`를 주입 가능하게 열어둬서 Day3에 injection/xss verifier가 생기거나 patched worktree 대상으로 바뀌어도 시그니처는 그대로 재사용 가능. 오늘은 실제 patch가 없으므로 "지금 코드베이스를 다시 찌른다"는 의미로 문서화.
+- [x] 나머지 5개 게이트는 스텁(`NotImplementedError`, 각자 Day3에 뭘 붙일지 docstring에 명시: build→P2 adapter, positive→role fixture, regression→P2 test runner, static→P4 Semgrep 재실행, scope→worktree 경로 diff 검사).
+- [x] **테스트**(`tests/test_judge.py`, 5건): attack gate가 mock verifier로 pass/fail 양쪽 다 정확히 판정하는 것, 존재하지 않는 finding/candidate-less finding 거부, 나머지 5게이트가 전부 `NotImplementedError`인 것 확인.
+- [x] **judge가 LLM 주장을 그대로 승격 못 하도록 하드 가드 재확인**: `grep -rn "verification_state\s*="`으로 전체 검색 — `core/evidence_store.py`의 `update_finding_status()` 내부 1곳과 `mcp_server/resources.py`의 더미 데이터 생성자 1곳(영속화 안 되는 예시 응답) 외엔 없음을 확인. 우회 경로 없음.
+
+**검증**: 전체 회귀 62개(P1 신규 15 추가) 통과.
 
 ### 4. findings resource 완성
 
