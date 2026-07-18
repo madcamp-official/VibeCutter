@@ -31,10 +31,16 @@ class TestRunSummary(BaseModel):
 class RunScopedTestRunner:
     """Run tests only in a worktree created under `.vibecutter/worktrees/<run_id>`."""
 
-    def __init__(self, manifest: TargetManifest, repository_root: Path) -> None:
+    def __init__(
+        self,
+        manifest: TargetManifest,
+        repository_root: Path,
+        *,
+        artifact_root: Path | None = None,
+    ) -> None:
         self.manifest = manifest
         self.repository_root = repository_root.resolve()
-        self.worktrees = WorktreeManager(self.repository_root)
+        self.worktrees = WorktreeManager(self.repository_root, artifact_root=artifact_root)
 
     def run(self, run_id: str) -> TestRunSummary:
         worktree_path = self.worktrees.path_for(run_id)
@@ -48,7 +54,11 @@ class RunScopedTestRunner:
                 status="not_configured",
                 results=[],
             )
-        results = LifecycleManager(self.manifest, worktree_path).run_test_suites()
+        # The source clone itself is a Git repository.  Project the manifest
+        # into its detached worktree so no command can silently test the
+        # original source clone or the VibeCutter repository.
+        worktree_manifest = self.manifest.model_copy(update={"source_dir": "."})
+        results = LifecycleManager(worktree_manifest, worktree_path).run_test_suites()
         return TestRunSummary(
             run_id=run_id,
             worktree_path=str(worktree_path),
