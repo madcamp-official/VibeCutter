@@ -122,7 +122,7 @@ stdio 기반 MCP 서버라 별도 포트를 열지 않는다. Claude Desktop류 
 }
 ```
 
-`command`는 반드시 이 저장소의 `.venv`(`python3.11 -m venv .venv`, README 참고) 안의
+`command`는 반드시 이 저장소의 `.venv`(`python3.13 -m venv .venv`, README 참고) 안의
 인터프리터를 가리켜야 한다 — 시스템 Python에는 `requirements.txt`가 설치돼 있지 않다.
 서버는 stdout에 JSON-RPC만 출력해야 하므로(`print()` 디버그 금지), Host가 이 서버를
 붙였을 때 `vc_ping` tool 호출이 `"pong"`을 반환하는지로 연결을 먼저 확인한다.

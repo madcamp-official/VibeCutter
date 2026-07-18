@@ -38,6 +38,8 @@ docs/handoffs/  역할별 일일 handoff 기록
 
 ## 설정
 
+팀 공통 실행 버전은 **Python 3.13**이다 (semgrep이 3.14에서 실행 불가하던 블로커를 해소하기 위해 통일). macOS는 `brew install python@3.13`.
+
 ```bash
 python3.13 -m venv .venv
 source .venv/bin/activate

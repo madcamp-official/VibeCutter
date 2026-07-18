@@ -16,7 +16,7 @@ P1은 이 `verify_candidate`를 단일 진입점으로 쓰거나(aggregate.kept 
 from __future__ import annotations
 
 from contracts.schemas import Candidate
-from verifiers import access_control, xss
+from verifiers import access_control, injection, xss
 from verifiers.types import MAX_REQUESTS_DEFAULT, VerifierOutput
 
 def _idor_verifier(
@@ -36,12 +36,13 @@ def _idor_verifier(
     return access_control.verify(run_id, candidate, max_requests=max_requests)
 
 
-# 구현된 verifier만 등록. injection은 아직 스캐폴딩(verifiers/injection.py, docstring뿐).
+# 구현된 verifier만 등록. 세 군(idor/xss/injection) 전부 구현됨.
 _VERIFIERS = {
     "idor": _idor_verifier,
-    "xss": xss.verify,  # 격리 브라우저 실행 oracle (verifiers/xss.py)
+    "xss": xss.verify,          # 격리 브라우저 실행 oracle (verifiers/xss.py)
+    "injection": injection.verify,  # 불리언 차등 blind SQLi oracle (verifiers/injection.py)
 }
-_NOT_READY = frozenset({"injection"})
+_NOT_READY = frozenset()
 
 # vuln_class가 비어 있을 때 CWE로 보정(SAST는 채우지만 hand-built 후보 대비).
 _CWE_TO_CLASS = {

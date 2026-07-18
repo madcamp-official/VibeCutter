@@ -294,12 +294,16 @@ def _render_body(template: str | None, values: dict[str, str], *, default: dict[
         raise ValueError(f"bearer body template의 허용되지 않은 placeholder: {exc.args[0]}") from exc
 
 
-def _identity_values(marker: str, password: str) -> dict[str, str]:
+def _identity_values(marker: str, password: str, *, nonce: str = "") -> dict[str, str]:
+    # 재현마다 fresh nonce로 계정 식별자를 유니크하게 만들어 재프로비저닝 409를 막는다
+    # (D4-P3 "bearer 재프로비저닝 충돌" — 같은 인스턴스에 attack/positive 게이트가 각각 재가입).
+    # marker는 name/email의 substring으로 남으므로 idor_oracle/positive_gate needle은 그대로 매칭된다.
+    ident = f"{marker}-{nonce}" if nonce else marker
     return {
         "marker": marker,
-        "name": marker,
-        "username": marker,
-        "email": f"{marker}@vc.local",
+        "name": ident,
+        "username": ident,
+        "email": f"{ident}@vc.local",
         "password": password,
     }
 
@@ -317,8 +321,9 @@ def _replay_bearer(probe: IdorProbe) -> tuple[dict, dict]:
     pw = "VcLocal123!"  # provision 전용 임시 비번(로컬 격리 대상, evidence 미기록)
     if probe.owner_marker is None:
         raise ValueError("bearer 재현엔 owner_marker가 필요하다")
-    owner_values = _identity_values(probe.victim_marker, pw)
-    attacker_values = _identity_values(probe.owner_marker, pw)
+    replay_nonce = uuid4().hex[:8]  # 재현마다 fresh — attack/positive 게이트가 같은 인스턴스에 재가입해도 충돌 없음
+    owner_values = _identity_values(probe.victim_marker, pw, nonce=replay_nonce)
+    attacker_values = _identity_values(probe.owner_marker, pw, nonce=replay_nonce)
     with httpx.Client(follow_redirects=True, timeout=10.0) as client:
         # owner(피해자)와 attacker(공격자)를 회원가입. 이름을 marker로 써서 프로필에 노출되게 한다.
         owner_response = client.post(
