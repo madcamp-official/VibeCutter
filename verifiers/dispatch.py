@@ -16,7 +16,7 @@ P1은 이 `verify_candidate`를 단일 진입점으로 쓰거나(aggregate.kept 
 from __future__ import annotations
 
 from contracts.schemas import Candidate
-from verifiers import access_control
+from verifiers import access_control, xss
 from verifiers.types import MAX_REQUESTS_DEFAULT, VerifierOutput
 
 def _idor_verifier(
@@ -27,7 +27,7 @@ def _idor_verifier(
 ) -> VerifierOutput:
     """IDOR 후보를 read/write oracle로 분기한다.
 
-    `attack_params.idor_mode == "write"`면 상태변화(write) oracle(`verify_mutation_candidate`)로,
+    `attack_params.idor_mode == "write"`면 상태변화(write) oracle(`verify_mutation_access_control`)로,
     아니면 read oracle(`verify`)로 보낸다. write 후보는 `surface.candidates.write_candidate_from_fixture`가
     `idor_mode=write`로 표시한다. 표시가 없는 기존 read 후보는 그대로 read verify로 간다(하위호환).
     """
@@ -36,11 +36,12 @@ def _idor_verifier(
     return access_control.verify(run_id, candidate, max_requests=max_requests)
 
 
-# 구현된 verifier만 등록. xss/injection은 아직 스캐폴딩(verifiers/{xss,injection}.py, docstring뿐).
+# 구현된 verifier만 등록. injection은 아직 스캐폴딩(verifiers/injection.py, docstring뿐).
 _VERIFIERS = {
     "idor": _idor_verifier,
+    "xss": xss.verify,  # 격리 브라우저 실행 oracle (verifiers/xss.py)
 }
-_NOT_READY = frozenset({"xss", "injection"})
+_NOT_READY = frozenset({"injection"})
 
 # vuln_class가 비어 있을 때 CWE로 보정(SAST는 채우지만 hand-built 후보 대비).
 _CWE_TO_CLASS = {

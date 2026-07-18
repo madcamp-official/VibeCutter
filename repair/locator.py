@@ -7,8 +7,9 @@
   1) 동적(가장 신뢰): 실제로 뚫린 endpoint를 처리하는 handler를 `surface.routes`로 소스에서 찾는다.
      — 공격이 실제로 이 경로로 도달했으므로 "reachable"이 증명된 위치다.
   2) SAST 교차검증: Finding.source_symbols(P4 Semgrep의 "파일:줄")와 파일이 일치하면 확신을 높인다.
-  3) code_index 폴백: route 매핑이 실패하면(routes.py는 현재 Spring 전용) P4 `model.code_index`로
-     endpoint 토큰을 검색해 후보 파일을 찾는다.
+  3) code_index 폴백: route 매핑이 실패하면(routes.py가 못 뽑는 스택/동적 라우팅) P4 `model.code_index`로
+     endpoint 토큰을 검색해 후보 파일을 찾는다. **프론트엔드 파일은 제외**하고 백엔드 후보만 채택한다
+     (D4 P1 요청: 비-Spring 타깃에서 프론트엔드 파일 오탐 방지).
 
 수정 위치 계층(controller hotfix / service policy / shared middleware)은 심볼/경로로 분류해
 rationale에 담는다 — RootCause 스키마에 layer 필드가 없어서다(D1-P3.md 이견 4, 확장은 P1과 협의).
@@ -84,11 +85,25 @@ def _files_agree(route_file: str, sast_files: set[str]) -> bool:
     )
 
 
+# 프론트엔드/빌드 산출물 시그니처 — code_index 폴백이 이런 파일을 근본 원인으로 짚지 않게 한다.
+_FRONTEND_SUFFIXES = (".jsx", ".tsx", ".vue", ".svelte", ".css", ".scss", ".sass", ".less", ".html")
+_FRONTEND_DIR_PARTS = ("frontend", "client", "static", "public", "assets", "node_modules", "dist", "build", ".next")
+
+
+def _is_frontend_file(file: str) -> bool:
+    """파일 경로가 프론트엔드/빌드 산출물로 보이는지(백엔드 패치 대상이 아님)."""
+    low = file.replace("\\", "/").lower()
+    if low.endswith(_FRONTEND_SUFFIXES):
+        return True
+    return any(f"/{part}/" in f"/{low}" for part in _FRONTEND_DIR_PARTS)
+
+
 def _locate_by_code_index(source_root: Path, endpoint: str) -> RootCause | None:
     """route/SAST가 모두 실패했을 때 P4 code_index로 폴백 검색한다.
 
-    model.code_index가 없거나(선택적 의존) 히트가 없으면 None. locator가 P4 인덱스를 소비하는
-    지점(D1-P4.md: "root-cause locator는 model.code_index 소비")이다.
+    model.code_index가 없거나(선택적 의존) 백엔드 히트가 없으면 None. **프론트엔드 파일은 건너뛰고**
+    백엔드 후보만 채택한다 — 비-Spring 타깃에서 route 매핑이 실패해도 프론트엔드 파일을 근본 원인으로
+    지목하지 않는다(D4 P1 요청). locator가 P4 인덱스를 소비하는 지점(D1-P4.md).
     """
     try:
         from model.code_index import CodeIndex
@@ -97,19 +112,19 @@ def _locate_by_code_index(source_root: Path, endpoint: str) -> RootCause | None:
 
     index = CodeIndex.build(source_root)
     query = " ".join(t for t in re.split(r"[/{}:]+", endpoint or "") if t)
-    hits = index.search(query, k=1)
-    if not hits:
-        return None
-    hit = hits[0]
-    file = getattr(hit.chunk, "file", None) or getattr(hit.chunk, "path", None) or str(hit.chunk)
-    return RootCause(
-        file=file,
-        symbol=None,
-        rationale=(
-            f"소스 route 매핑에서 endpoint {endpoint!r}를 못 찾아, code_index 검색 상위 결과를 "
-            f"근본 원인 후보로 채택했다(신뢰 낮음, 수동 확인 권장)."
-        ),
-    )
+    for hit in index.search(query, k=5):
+        file = getattr(hit.chunk, "file", None) or getattr(hit.chunk, "path", None) or str(hit.chunk)
+        if _is_frontend_file(file):
+            continue
+        return RootCause(
+            file=file,
+            symbol=None,
+            rationale=(
+                f"소스 route 매핑에서 endpoint {endpoint!r}를 못 찾아, code_index 검색 상위(프론트엔드 제외) "
+                f"백엔드 후보를 근본 원인으로 채택했다(신뢰 낮음, 수동 확인 권장)."
+            ),
+        )
+    return None  # 백엔드 후보가 없으면(전부 프론트엔드/무결과) 추측하지 않는다
 
 
 def localize(finding: Finding, *, source_root: str | Path) -> RootCause:
