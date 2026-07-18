@@ -7,6 +7,11 @@
 # 필드 정의는 datasets/README.md 참조.
 # focus ⊆ {idor, xss, injection}. adapter ∈ {node, fastapi, spring, generic_docker}.
 # verify: true 면 stack/url/adapter 를 실제로 확인해야 함.
+#
+# ※ 음성(clean) 정답: 공개 세트는 전부 양성이라 오탐(precision/FPR)을 측정할 수 없다.
+#    그래서 P3 가 D3-P3 에서 IDOR 표면 부재를 실제로 검증한 clean 앱(expected_vulns: [])을
+#    "음성 정답"으로 예외 포함한다 — detector 가 clean 앱에 아무것도 flag 하지 않는지(=오탐
+#    없음) 측정하는 ground-truth negative. 학생 앱이지만 이 목적에 한해 벤치마크에 둔다.
 # ─────────────────────────────────────────────────────────────────────────────
 
 apps:
@@ -168,3 +173,18 @@ apps:
     expected_vulns: [sqli, xss, idor, cmdi, csrf, deserialization]
     verify: true
     notes: OWASP Top10 매핑 명확. docker-compose 제공.
+
+  # ── Negative / clean (음성 정답) ──────────────────────────────────────────
+  # expected_vulns: [] = 정답이 "0건". detector 가 여기서 뭐라도 flag 하면 오탐(FP).
+  - id: 26s-w1-c2-05
+    name: CoolAI (26s-w1-c2-05)
+    repo_url: https://github.com/madcamp-official/26s-w1-c2-05
+    stack: python
+    adapter: fastapi
+    focus: [idor]
+    expected_vulns: []
+    verify: true
+    notes: >-
+      IDOR 음성(clean) 정답. P3 D3-P3 검증 — 모든 자원이 current_user.user_id 로 스코프,
+      JWT 건전, id-addressable 교차사용자 엔드포인트 부재로 공격 표면 자체가 없음(verify 0 이 정답).
+      precision/FPR 측정용 ground-truth negative. IDOR 는 심층 검증됨, 그 외 군은 정찰상 clean.
