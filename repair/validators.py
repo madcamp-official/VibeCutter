@@ -39,7 +39,7 @@ import json
 
 from pydantic import BaseModel
 
-from contracts.schemas import Candidate
+from contracts.schemas import Candidate, Finding, Patch
 from core import evidence_store
 
 # 재현 로직은 verifier 것을 그대로 재사용한다(DRY). `_replay_idor`는 P3 패키지 내부 재사용이라
@@ -128,21 +128,20 @@ def positive_gate_oracle(
 # ── ② + ③ 재현 + 조립 + evidence ────────────────────────────────────────────────────
 
 
-def validate_patch(
+def run_security_validation(
     run_id: str,
     candidate: Candidate,
     *,
     max_requests: int = MAX_REQUESTS_DEFAULT,
 ) -> SecurityValidation:
-    """패치된 대상에 동일 공격 시퀀스를 재실행해 재공격·정상기능 게이트를 함께 판정한다.
+    """패치된 대상에 동일 공격 시퀀스를 재실행해 재공격·정상기능 게이트를 함께 판정한다(엔진).
 
     호출 전제: patcher가 patch를 worktree에 적용하고 그 인스턴스가 떠 있어야 한다. 이 함수는
     candidate.signals의 base_url이 가리키는 대상을 그대로 찌른다 — closed-loop에서 호출자가
     base_url을 "패치된 인스턴스"로 바꿔 candidate를 넘기면 된다(로직은 대상 위치에 무관).
 
-    P1의 judge.check_positive_functionality/check_attack가 이 함수를 한 번 호출하고
-    `.positive_functionality.passed` / `.attack.passed`를 각 게이트 bool로 읽으면 된다 —
-    게이트마다 따로 재현하지 말 것(요청 수 2배, 10.2절 rate limit 낭비).
+    이건 두 게이트를 재현 1회로 함께 뽑는 **내부 엔진**이다. Plan B 단독 실행(P3가 judge 없이
+    closed-loop을 돌릴 때)과, 아래 `validate_patch()`(P1 judge용 bool 어댑터)가 공유한다.
     """
     probe = probe_from_candidate(candidate)
     baseline, attack = _replay_idor(probe, max_requests)
@@ -178,6 +177,47 @@ def validate_patch(
             evidence_ids=evidence_ids,
         ),
     )
+
+
+def _candidate_for_patch(patch_id: str) -> Candidate:
+    """patch_id → Patch → Finding → 원본 Candidate로 거슬러 올라간다.
+
+    재검증은 "처음 뚫었던 그 후보"를 똑같이 다시 찔러야 하므로, 재현 파라미터(base_url/경로/
+    marker)를 담은 원본 Candidate가 필요하다. patch에는 그게 없어 finding을 경유해 찾는다.
+    """
+    patch = evidence_store.get(Patch, patch_id)
+    if patch is None:
+        raise ValueError(f"patch {patch_id} not found")
+    finding = evidence_store.get(Finding, patch.finding_id)
+    if finding is None:
+        raise ValueError(f"finding {patch.finding_id} not found (patch {patch_id})")
+    if finding.candidate_id is None:
+        raise ValueError(f"finding {finding.id}에 candidate_id가 없어 재현할 후보를 찾을 수 없다")
+    candidate = evidence_store.get(Candidate, finding.candidate_id)
+    if candidate is None:
+        raise ValueError(f"candidate {finding.candidate_id} not found")
+    return candidate
+
+
+def validate_patch(
+    run_id: str,
+    patch_id: str,
+    *,
+    max_requests: int = MAX_REQUESTS_DEFAULT,
+) -> bool:
+    """P1 judge용 어댑터: positive functionality 게이트 결과만 bool로 돌려준다.
+
+    `core.judge.check_positive_functionality(run_id, patch_id)`가 이 함수를 호출한다(P1이 이미
+    배선함). P1 계약: **"positive functionality 하나만 bool로 반환하라 — attack은 judge가
+    check_attack으로 따로 본다."** 그래서 리턴 타입이 `SecurityValidation`이 아니라 `bool`이다.
+
+    내부적으로는 `run_security_validation`이 재현 1회로 두 게이트를 다 뽑지만(재공격 evidence도
+    저장된다), 여기서는 계약대로 `positive_functionality.passed`만 노출한다. 두 게이트 결과가
+    다 필요한 단독 실행(Plan B)에서는 `run_security_validation()`을 직접 부르면 된다.
+    """
+    candidate = _candidate_for_patch(patch_id)
+    result = run_security_validation(run_id, candidate, max_requests=max_requests)
+    return result.positive_functionality.passed
 
 
 # 확장 여지(다음 라운드): 지금 정상기능 게이트는 baseline(공격자의 자기 자원)만 확인한다.
