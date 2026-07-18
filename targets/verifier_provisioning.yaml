@@ -12,3 +12,11 @@ targets:
     strategy: self_signup
     auth_mode: bearer
     notes: P3 verifier self-signs up two ephemeral local users and keeps bearer tokens in memory only.
+  26s-w1-c2-01:
+    strategy: self_signup
+    auth_mode: bearer
+    notes: Local FastAPI signup/login issues bearer access tokens; P3 must consume the declared no-secret auth-flow contract.
+  26s-w1-c2-02:
+    strategy: self_signup
+    auth_mode: bearer
+    notes: Local Node signup issues bearer access tokens; P3 must consume the declared no-secret auth-flow contract.

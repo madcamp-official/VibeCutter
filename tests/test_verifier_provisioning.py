@@ -30,6 +30,15 @@ class CheckedInVerifierProvisioningTests(unittest.TestCase):
         self.assertIsNone(plan.fixture_command_id)
         self.assertIsNone(plan.fixture_path)
 
+    def test_p2_declares_new_self_signup_targets_without_credentials(self) -> None:
+        for target_id in ("26s-w1-c2-01", "26s-w1-c2-02"):
+            with self.subTest(target_id=target_id):
+                plan = self.catalog.verifier_provisioning_for(target_id)
+                self.assertEqual(plan.strategy, ProvisioningStrategy.SELF_SIGNUP)
+                self.assertEqual(plan.auth_mode, "bearer")
+                self.assertIsNone(plan.fixture_command_id)
+                self.assertIsNone(plan.fixture_path)
+
     def test_unconfigured_target_requires_p3_fixture_contract(self) -> None:
         plan = self.catalog.verifier_provisioning_for("26s-w1-c1-03")
         self.assertEqual(plan.strategy, ProvisioningStrategy.FIXTURE_CONTRACT_REQUIRED)

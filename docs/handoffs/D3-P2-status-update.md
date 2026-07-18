@@ -19,8 +19,8 @@ scoped clean/blocked 결과를 만드는 것이다.
 - `docs/REMAINING_TARGET_EXECUTION_PLAN.md`: Notion 체크를 우선순위로 사용하되 P2 viability가 확인된
   W1 target도 진행 후보로 삼는 P1 5 / P2 5 / P3 8 batch 배분을 기록.
 - `runtime/provisioning.py`, `targets/verifier_provisioning.yaml`: P2 verifier provisioning contract.
-  `c2-04` fixture-file/unauthenticated, `c1-05` self-signup/bearer, 나머지 fixture contract 필요를
-  typed metadata로 노출.
+  `c2-04` fixture-file/unauthenticated, `c1-05`·`c2-01`·`c2-02` self-signup/bearer를 typed
+  metadata로 노출한다. endpoint/payload/token key의 실제 소비는 P3 generic bridge가 맡는다.
 - `docs/VERIFIER_BATCH_INTERFACE.md`: P2 provisioning → P3 Candidate bridge → P1 orchestration →
   P2 patched runtime → P3 replay → P1 judge → P4 trajectory의 호출 순서를 확정.
 - 최신 main 반영: P1 `audit_local_target` prompt·kill switch·rollback·retry budget과
@@ -156,5 +156,9 @@ two-role resource replay)를 contract로 지정해 달라.
 `email,password,name`, `login_path=/api/v1/auth/login`, token key `access_token`을 넣으면 된다.
 P2는 endpoint의 ID 기반 workspace/map/block/comment resource 생성 경로를 확인했으며, verifier가
 요청할 typed candidate/fixture schema에 맞춰 두 역할 provisioning을 이어서 제공한다.
+
+P2는 `c2-01`과 `c2-02`를 `self_signup`/`bearer` provisioning으로 등록했다. 이 metadata에는
+credential/token이 없으며, 현재 P3 bridge의 target별 hint가 없어서 Candidate를 성급히 만들지 않는다.
+P3 generic bridge가 들어오면 새 runtime run을 그대로 소비할 수 있다.
 - Semgrep의 Python 3.14 호환 실패는 P2 runtime 문제가 아니다. 팀의 실행 기준을 3.11 또는 3.12로
   통일해야 P4 static gate와 P1 final judge가 안정적으로 동작한다.
