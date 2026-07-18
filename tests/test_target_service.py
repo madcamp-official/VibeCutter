@@ -4,11 +4,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import yaml
 
 from core.policy_engine import PolicyViolation
 from runtime.catalog import TargetCatalog
+from runtime.lifecycle import CommandResult
 from runtime.target_service import TargetOperationError, TargetRuntimeService
 
 
@@ -91,6 +93,35 @@ class TargetRuntimeServiceTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             self.service.reset("demo-api", approved=False)
         self.assertTrue(self.service.reset("demo-api", approved=True))
+
+    def test_reset_run_resets_generated_runtime_before_removing_worktree(self) -> None:
+        overlay = MagicMock()
+        overlay.execute.return_value = CommandResult(
+            command_id="reset", status="passed", exit_code=0, duration_ms=1, stdout="", stderr=""
+        )
+        worktrees = MagicMock()
+        self.service.catalog.run_overlay_for = MagicMock(return_value=overlay)  # type: ignore[method-assign]
+        self.service.catalog.worktree_manager_for = MagicMock(return_value=worktrees)  # type: ignore[method-assign]
+
+        self.assertTrue(self.service.reset_run("demo-api", "run-1", approved=True))
+        overlay.execute.assert_called_once_with("reset")
+        worktrees.remove.assert_called_once_with("run-1", approved=True)
+
+    def test_reset_run_failure_keeps_worktree_for_retry(self) -> None:
+        overlay = MagicMock()
+        overlay.execute.return_value = CommandResult(
+            command_id="reset", status="failed", exit_code=1, duration_ms=1, stdout="", stderr="failed"
+        )
+        worktrees = MagicMock()
+        self.service.catalog.run_overlay_for = MagicMock(return_value=overlay)  # type: ignore[method-assign]
+        self.service.catalog.worktree_manager_for = MagicMock(return_value=worktrees)  # type: ignore[method-assign]
+
+        self.assertFalse(self.service.reset_run("demo-api", "run-1", approved=True))
+        worktrees.remove.assert_not_called()
+
+    def test_reset_run_requires_explicit_approval_before_runtime_cleanup(self) -> None:
+        with self.assertRaises(PermissionError):
+            self.service.reset_run("demo-api", "run-1", approved=False)
 
     def test_port_mismatch_is_rejected_before_command_execution(self) -> None:
         self.scope_path.write_text(

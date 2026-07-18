@@ -101,7 +101,16 @@ def _advance_to_patch_applied(run: Run) -> None:
 
 def _git_apply(worktree_path: Path, diff: str) -> None:
     result = subprocess.run(
-        ["git", "-C", str(worktree_path), "apply", "-"],
+        [
+            "git",
+            "-c",
+            "core.autocrlf=false",
+            "-C",
+            str(worktree_path),
+            "apply",
+            "--ignore-space-change",
+            "-",
+        ],
         input=diff,
         capture_output=True,
         text=True,

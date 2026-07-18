@@ -111,6 +111,25 @@ class TargetRuntimeService:
             raise ApprovalRequired("vc_reset_target requires explicit approval")
         return self.catalog.adapter_for(target_id).reset(approved=True).status == "passed"
 
+    def reset_run(self, target_id: str, run_id: str, *, approved: bool) -> bool:
+        """Remove one approved patched runtime and its target-source worktree.
+
+        The generated Compose overlay is run-specific, so its reset command
+        only addresses the Docker project built from that worktree.  A failed
+        runtime reset deliberately leaves the worktree in place for diagnosis
+        and retry; source removal is performed only after Compose reset passes.
+        """
+        target = self._require_operation(target_id, "reset_target")
+        if not approved:
+            raise ApprovalRequired("run reset requires explicit approval")
+
+        overlay = self.catalog.run_overlay_for(target_id, run_id)
+        result = overlay.execute(target.manifest.reset.command_id)
+        if result.status != "passed":
+            return False
+        self.catalog.worktree_manager_for(target_id).remove(run_id, approved=True)
+        return True
+
     def _require_operation(self, target_id: str, command_id: str) -> RegisteredRuntimeTarget:
         target = self._require_authorized(target_id)
         self._require_command(command_id, {"target_id": target_id})

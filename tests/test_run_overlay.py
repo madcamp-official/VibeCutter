@@ -76,6 +76,10 @@ networks:
             worktrees = WorktreeManager(source, artifact_root=root / ".vibecutter" / "worktrees" / "demo-api")
             worktree = worktrees.create("run-1")
             try:
+                # A run worktree must use repository bytes, not the host's
+                # core.autocrlf setting: generated LF patch diffs otherwise
+                # fail to apply on Windows CRLF checkouts.
+                self.assertEqual((worktree / "app.py").read_bytes(), b"print('target')\n")
                 overlay = RunComposeOverlay(_manifest(), root, source, worktree, "run-1")
                 path = overlay.prepare()
                 document = yaml.safe_load(path.read_text(encoding="utf-8"))

@@ -32,7 +32,18 @@ class WorktreeManager:
             raise FileExistsError(f"worktree already exists for run {run_id}")
         self.artifact_root.mkdir(parents=True, exist_ok=True)
         subprocess.run(
-            ["git", "-C", str(self.repository_root), "worktree", "add", "--detach", str(path), revision],
+            [
+                "git",
+                "-c",
+                "core.autocrlf=false",
+                "-C",
+                str(self.repository_root),
+                "worktree",
+                "add",
+                "--detach",
+                str(path),
+                revision,
+            ],
             check=True,
             shell=False,
             capture_output=True,
