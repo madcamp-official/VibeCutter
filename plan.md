@@ -219,9 +219,11 @@ D2-P4.md도 확인: P4가 GPU 불필요 항목을 전부 끝냈다 — `scanners
 
 ### 1. Kill switch 구현 (10.2절)
 
-- [ ] global pause file(예: `.vibecutter/PAUSE`) 존재 여부를 확인하는 공통 가드(`core/kill_switch.py` 신규, 예: `check_not_paused()`)를 만들고, `_prepare_verification()`/`_prepare_scan()`과 `tools_repair.py`의 각 tool(특히 `vc_apply_patch`/`vc_build_and_test`/`vc_replay_attack`) 진입부에서 공통으로 호출한다 — 한 곳에서 켜면 전체 tool 호출이 즉시 막히는 구조.
-- [ ] supervisor timeout: run이 일정 시간 이상 걸리면(설계 판단 — 어느 상태 전이 기준으로 잴지 오늘 결정) 강제로 pause 상태로 전이.
-- [ ] 테스트: pause file 존재 시 모든 tool이 `PermissionError`(또는 전용 예외)로 거부되는 것, pause 해제 후 정상 재개되는 것.
+- [x] global pause file(`.vibecutter/PAUSE`) 존재 여부를 확인하는 공통 가드(`core/kill_switch.py` 신규, `check_not_paused()` → `KillSwitchEngaged`)를 만들고, `_prepare_verification()`/`_prepare_scan()`(`tools_analysis.py`)과 `tools_repair.py`의 `vc_localize_root_cause`/`vc_generate_patch`/`vc_apply_patch`/`vc_build_and_test`/`vc_replay_attack`/`vc_validate_regression` 6곳 진입부에서 공통으로 호출한다. `vc_pause`/`vc_resume`(`mcp_server/tools_control.py` 신규)은 승인 없이 언제든 호출 가능하고 이 가드 자체를 타지 않는다(pause 중에도 resume은 돼야 하므로). `vc_kill_run`도 같은 이유로 가드를 안 탄다(정리는 pause 중에도 가능해야 함).
+- [ ] supervisor timeout: run이 일정 시간 이상 걸리면 강제로 pause 상태로 전이 — **Day4 나머지 작업(planner/SKILL.md/trajectory export)을 먼저 끝내기로 하고 보류**. stdio 단일 프로세스 MCP 서버라 진짜 백그라운드 supervisor는 별도 스레드/프로세스가 필요해 pause file보다 설계 폭이 크다 — Day5 하드닝 때 재검토.
+- [x] 테스트(`tests/test_kill_switch.py`, 7건): pause file 존재 시 `_prepare_verification`/`_prepare_scan`이 `KillSwitchEngaged`로 거부되는 것, `clear_pause()` 후 정상 재개되는 것, `vc_pause`→`vc_resume` MCP round-trip.
+
+**검증**: 전체 회귀 146개(kill switch 7건 포함) 통과.
 
 ### 2. Rollback 경로 연결
 
@@ -252,15 +254,21 @@ D2-P4.md도 확인: P4가 GPU 불필요 항목을 전부 끝냈다 — `scanners
 
 ### 5. SKILL.md 작성 (6.8절 예시 기반)
 
-- [ ] 언제 도구를 호출할지, 승인 시점, 절대 금지 범위, 보고서 형식을 규정. 핵심 규칙:
-   - [ ] `vc_list_authorized_targets`가 반환한 target에만 동작
-   - [ ] 임의 네트워크 목적지 구성 금지
-   - [ ] patch 적용은 explicit user confirmation 없이 금지
-   - [ ] `verified=true`는 오직 judge 결과로만 인정
-   - [ ] 패치 후 반드시 replay_attack + regression_suite 실행
-   - [ ] 3회 연속 수정 실패 시 human review 요청 (3번 planner 구현과 문구 일치시킬 것)
-   - [ ] pause file이 설정되어 있으면 즉시 중단하고 사용자에게 보고 (kill switch와 연결)
-- [ ] Host 설정 예시(claude_desktop_config류) 작성.
+- [x] 저장소 루트 `SKILL.md` 작성. docx 6.8절 원문 예시(`vc_list_authorized_targets`,
+  `vc_judge_evidence` 등)를 그대로 베끼지 않고 **실제 구현된 tool/resource 이름으로
+  다시 썼다** — 그 두 tool은 실제로 존재하지 않는다(문서 초안에만 있었음), 대신
+  `vibecutter://policies/scope` resource와 `vc_verify_*`/`update_finding_status`가 같은
+  역할을 한다. 각 규칙에 **[코드 강제]**(우회 불가)/**[Host 책임]**(서버가 안 막아줌)를
+  라벨링해 Host가 뭘 스스로 지켜야 하는지 명확히 했다:
+   - [x] `policies/scope.yaml`에 등록된 target에만 동작 (코드 강제, `PolicyViolation`)
+   - [x] 임의 네트워크 목적지 구성 금지 (코드 강제, tool 입력이 식별자만 받음)
+   - [x] patch 적용은 explicit user confirmation 없이 금지 (코드 강제 + Host 책임 혼합 — `confirmed=True` 자체는 강제되지만 "진짜 사용자에게 물어봤는지"는 Host 책임)
+   - [x] `verified=true`는 오직 judge 결과(evidence 기반)로만 인정 (코드 강제, `update_finding_status`의 evidence 실존 검사)
+   - [x] 패치 후 반드시 `vc_build_and_test`+`vc_replay_attack`+`vc_validate_regression` 전부 실행 (Host 책임 — 하나라도 빠지면 verdict가 영원히 미확정)
+   - [x] 3회 연속 수정 실패 시 human review 요청 — planner 구현(섹션 3)과 문구 일치, 코드 강제로 격상(`vc_generate_patch`가 4번째 시도 자체를 거부)
+   - [x] pause 시 즉시 중단 — `vc_pause` 호출은 Host 책임, 이후 모든 tool 거부는 코드 강제
+- [x] Host 설정 예시(claude_desktop_config류, `.venv` 인터프리터 경로 지정) 작성.
+- [x] **[신규 발견]** SKILL.md를 실제 tool 배선과 대조하며 쓰다가 발견한 진짜 gap: `vc_map_routes`/`vc_map_roles`/`vc_index_code`가 전부 스텁이고 Run을 `READY`→`MAPPING`으로 옮기는 다른 tool도 없어서, **지금은 Host가 tool 호출만으로 MAPPING 단계를 통과할 방법이 없다**(`vc_run_sast`/`vc_run_sca`는 `MAPPING`/`CANDIDATE_SCAN` 상태를 요구). `surface.graph.find_idor_suspects`(P3, D3 완료)는 이미 있는데 tool로 배선이 안 됐다 — SKILL.md에 알려진 격차로 남겨두고, 아래 커뮤니케이션 항목에서 P3에게 공유.
 
 ### 6. Trajectory export 인터페이스 완성 (P4 밤 배치 전제, 오후 최우선)
 
@@ -271,7 +279,8 @@ D2-P4.md도 확인: P4가 GPU 불필요 항목을 전부 끝냈다 — `scanners
 - [ ] **P4에게 아침 최우선**: D3 상태가 없어 직접 확인 필요(0번) — 답변 받는 대로 trajectory export 포맷 확정.
 - [ ] **P4에게 낮 동안 최우선**: trajectory export 포맷/위치를 확정해 전달 — Day4 밤 P4의 7B QLoRA 학습 배치가 이 데이터를 쓴다.
 - [ ] **P2에게**: (a) overlay를 build/regression 경로에 연결 완료 알림, 포트 충돌 처리 방식 확인 요청. (b) kill switch가 `reset_run()`을 호출하도록 연결했다는 것과 kill 이후 Run 상태 표시 방식(2번 설계 판단) 공유. (c) semgrep 블로커에 대한 팀 결정 참여 요청. (d) `c3-09`(holdout 후보) 준비 상태 확인, Day5 clean-room 리허설에 그대로 쓸 수 있는지 확인.
-- [ ] **P3에게**: (a) overlay 배선 완료로 c1-05 closed-loop를 이제 MCP 경로로 자동 재현할 수 있다는 것 알림, 함께 리허설 요청. (b) semgrep 블로커 팀 결정 공유. (c) `RootCause` 확장/`redact()` 제거는 예정대로 Day5로 유지 확인.
+- [ ] **P3에게**: (a) overlay 배선 완료로 c1-05 closed-loop를 이제 MCP 경로로 자동 재현할 수 있다는 것 알림, 함께 리허설 요청. (b) semgrep 블로커 팀 결정 공유. (c) `RootCause` 확장/`redact()` 제거는 예정대로 Day5로 유지 확인. (d) `vc_generate_patch`가 이제 `attempt_no`를 실제로 계산해 `repair.patcher.generate_patch()`에 넘긴다는 것 확인 요청 — patcher.py 자체 docstring이 전제하던 연결이라 P3 쪽 코드 변경은 없어야 정상. (e) 🔴 **SKILL.md 작성 중 발견**: `vc_map_routes`/`vc_map_roles`/`vc_index_code`가 전부 스텁이라 Host가 tool 호출만으로는 `READY`→`MAPPING`을 통과할 방법이 없다(지금까지의 모든 테스트가 Run을 직접 `CANDIDATE_SCAN`으로 만들어 우회해왔다는 뜻). `surface.graph.find_idor_suspects`는 이미 완성돼 있으니, 이걸 `vc_map_routes` 본문에 배선하거나(P3) `vc_run_sast`/`vc_run_sca`가 MAPPING을 자동으로 거치게 할지(P1) 조율 필요 — Day4 남은 시간 또는 Day5 초반 처리 대상으로 제안.
+- [ ] **P2·P3 공통**: `core/state_machine.py`의 `RUN_TRANSITIONS[RunState.RETRY]`에 `HUMAN_REVIEW`를 추가한 것(additive, 기존 `PATCH_PROPOSED` 경로 유지) 공유 — 공통 계약 변경이라 "조용히 변경 금지" 규칙에 따라 알림.
 - [ ] 저녁 handoff에 "overlay 배선 완료, kill switch/rollback 동작 확인, planner 오케스트레이션 완성, 3회 실패 HUMAN_REVIEW 전이 확인, trajectory export 완료, semgrep 블로커 상태" 기록.
 
 ---
