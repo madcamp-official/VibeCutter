@@ -15,17 +15,40 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
-from contracts.schemas import Finding, Patch, RootCause, Run, Validation
+from contracts.schemas import Finding, Patch, RootCause, Run, RunState, Validation
 from core.audit_log import audited
-from core.evidence_store import get
+from core.evidence_store import get, save
+from core.state_machine import transition
+from core.trajectory import record_trajectory_step
 from mcp_server.tools_inventory import _service
 from repair.locator import localize
+from repair.patcher import generate_patch
 
 
 class ReportResult(BaseModel):
     run_id: str
     artifact_uri: str
     format: str
+
+
+def _advance_to_patch_proposed(run: Run) -> None:
+    """VERIFIED/LOCALIZING/RETRY → PATCH_PROPOSED로 전진시킨다(멱등).
+
+    RunState 그래프는 VERIFIED→LOCALIZING→PATCH_PROPOSED를 강제하고, RETRY도
+    PATCH_PROPOSED로 되돌아간다(재시도). `vc_generate_patch`가 이미 PATCH_PROPOSED인
+    run에서 다시 호출되면(예: patch 후보 재생성) 상태는 그대로 두고 통과시킨다.
+    """
+    if run.status == RunState.VERIFIED:
+        run.status = transition(run.status, RunState.LOCALIZING)
+        save(run)
+    if run.status in (RunState.LOCALIZING, RunState.RETRY):
+        run.status = transition(run.status, RunState.PATCH_PROPOSED)
+        save(run)
+    elif run.status != RunState.PATCH_PROPOSED:
+        raise ValueError(
+            "vc_generate_patch는 run이 VERIFIED/LOCALIZING/RETRY/PATCH_PROPOSED 상태여야 "
+            f"호출할 수 있습니다(현재 {run.status})"
+        )
 
 
 def register(mcp: FastMCP) -> None:
@@ -55,8 +78,38 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     @audited
     def vc_generate_patch(finding_id: str) -> Patch:
-        """root cause 기반 patch 후보를 생성한다(원본 미변경). P3 소유."""
-        raise NotImplementedError("P3 repair agent 구현 대기")
+        """root cause 기반 patch 후보를 생성한다(원본 미변경, `approval=PENDING`).
+
+        실제 합성·랭킹 로직은 P3 소유(`repair.patcher.generate_patch`) — P1은 finding → run →
+        target → source_root 조회, root_cause 계산(`repair.locator.localize` 재호출 —
+        `vc_localize_root_cause`와 별도 entry point, D3-P3.md 요청대로 이 tool 안에서 직접
+        계산한다), RunState 전이(VERIFIED/LOCALIZING/RETRY → PATCH_PROPOSED), Patch 저장,
+        trajectory 기록만 배선한다.
+
+        **실패 처리**: 패치 후보를 하나도 합성 못 하면 `generate_patch()`가 `ValueError`를
+        내는데, 이때는 RunState를 전이하지 않는다(패치가 없는데 PATCH_PROPOSED로 넘어가지
+        않도록) — 실패해도 run은 원래 상태(예: VERIFIED)에 그대로 남는다.
+        """
+        finding = get(Finding, finding_id)
+        if finding is None:
+            raise ValueError(f"finding {finding_id} not found")
+        run = get(Run, finding.run_id)
+        if run is None:
+            raise ValueError(f"run {finding.run_id} not found")
+
+        source_root = _service().catalog.source_root_for(run.target_id)
+        root_cause = localize(finding, source_root=source_root)
+        patch = generate_patch(run.id, finding, root_cause, source_root=source_root)
+        save(patch)
+        _advance_to_patch_proposed(run)
+        record_trajectory_step(
+            run.id,
+            state=run.status,
+            action={"tool": "vc_generate_patch", "finding_id": finding_id},
+            result={"patch_id": patch.id, "files": patch.files, "approval": patch.approval},
+            next_state=run.status,
+        )
+        return patch
 
     @mcp.tool()
     @audited
