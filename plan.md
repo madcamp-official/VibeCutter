@@ -115,6 +115,8 @@
 
 **검증**: 전체 회귀 62개(P1 신규 15 추가) 통과.
 
+**추가(P3 Notion "Plan B" handoff 반영)**: P3가 `repair/validators.py`를 오늘 직접 구현하기로 하면서(judge 완성을 안 기다리고 attack·positive gate 실행기를 단독 동작하게 만드는 설계 — `verifiers.access_control.verify()`를 judge가 소비하는 것과 같은 패턴) `check_positive_functionality()`가 `validators.validate_patch()`를 호출하도록 미리 배선해달라고 요청. 위 6개 게이트 표에 반영 완료(Positive functionality gate 항목 참고). `verifiers/access_control.py`에 `IdorProbe.owner_marker` 필드를 추가하는 것(정상기능 게이트가 "주인이 자기 자원을 여전히 본다"를 판정하는 데 필요)은 P3 소유 파일 소폭 수정이라 P1은 손대지 않음.
+
 ### 4. findings resource 완성
 
 - [x] `vibecutter://findings/{finding_id}`가 더미 대신 `evidence_store.get(Finding, finding_id)`를 실제로 조회하도록 `mcp_server/resources.py` 수정. 없는 finding_id는 `ValueError`. 더 이상 안 쓰는 `_dummy_finding()`/`FindingStatus` import 제거.
@@ -136,7 +138,7 @@
 
 ### 오늘 커뮤니케이션
 
-- [ ] **P3에게**: (a) 구멍①②③ 수정 완료 + `VerifyResult`/`VerifierOutput`을 `contracts.schemas.VerificationResult`로 통합 완료(별칭으로 `verifiers/types.py`도 갱신했지만 `verifiers/access_control.py`는 무수정) 공유. (b) `verifiers/access_control.py`의 임시 `redact()`는 저장 계층(`core/redaction.py`)에서도 동일 규칙으로 다시 걸리니 지금 당장 지우지 않아도 안전(idempotent) — 다만 중복 유지보수 피하려면 제거 시점 확인 요청. (c) `Candidate.vuln_class`/`attack_params` 필드를 추가했다(기존 `signals` 파싱은 그대로 둠) — 새 필드로 옮겨 갈지, 언제 옮길지는 P3 판단에 맡기고 강제하지 않았다는 것 공유. (d) verify tool 본문(P1 소유) 실배선 완료, `vc_verify_access_control`이 `verifiers.access_control.verify()`를 그대로 호출한다는 것 확인 요청.
+- [ ] **P3에게**: (a) 구멍①②③ 수정 완료 + `VerifyResult`/`VerifierOutput`을 `contracts.schemas.VerificationResult`로 통합 완료(별칭으로 `verifiers/types.py`도 갱신했지만 `verifiers/access_control.py`는 무수정) 공유. (b) `verifiers/access_control.py`의 임시 `redact()`는 저장 계층(`core/redaction.py`)에서도 동일 규칙으로 다시 걸리니 지금 당장 지우지 않아도 안전(idempotent) — 다만 중복 유지보수 피하려면 제거 시점 확인 요청. (c) `Candidate.vuln_class`/`attack_params` 필드를 추가했다(기존 `signals` 파싱은 그대로 둠) — 새 필드로 옮겨 갈지, 언제 옮길지는 P3 판단에 맡기고 강제하지 않았다는 것 공유. (d) verify tool 본문(P1 소유) 실배선 완료, `vc_verify_access_control`이 `verifiers.access_control.verify()`를 그대로 호출한다는 것 확인 요청. (e) Plan B handoff 요청대로 `check_positive_functionality()` → `repair.validators.validate_patch(run_id, patch_id) -> bool` 위임 배선 완료 — **`validate_patch()`는 positive functionality 결과만 bool로 반환해야 한다**는 계약을 확인 요청(attack 결과까지 합쳐서 반환하는 형태면 judge 쪽에서 못 받는다).
 - [ ] **P2에게**: (a) 🔴 `targets/manifests/{26s-w1-c2-05,26s-w1-c2-08,26s-w1-c3-04}.yaml`의 `role_fixtures[].secret_env_names`가 `VIBECUTTER_*` 규칙을 어겨 `TargetCatalog.load()`가 전체 실패하는 것 최우선 수정 요청(지금은 어떤 target도 `vc_register_target`/`build`/`start`/`check_readiness`가 안 됨). (b) 🟡 `runtime/target_service.py` build 실패 경로의 `target.id`(존재 안 함) → `target.manifest.id` 오타 수정 요청. (c) `policies/scope.yaml`/`commands.yaml` 등록 내용(host/port) 최종 확인. (d) IDOR 검증 가능한 target(2 사용자 + 각자 소유 자원) 1개 지정 요청, role fixture(로그인 endpoint + 자격증명 + seed 자원 id) 요청.
 - [ ] **P4에게**: `Observation.type`을 `ObservationType` enum으로 고정 완료(`http_exchange` 포함이라 기존 코드 영향 없음) 공유, batch scan JSONL(`candidates/<app>.candidates.jsonl` + `summary.json`) 산출물을 evidence/candidate store가 흡수할 포맷 확정, inventory(41개) vs `targets/`(21개 manifest) 단일 진실 소스 합의(P2/P4 상충 지점 중재).
 - [ ] **전원에게**: 스키마 변경 시 로컬 `.vibecutter/evidence.db`를 지워야 한다는 것 공유(오늘 섹션 5에서 실제로 겪음 — `SQLModel.create_all()`은 기존 테이블에 컬럼을 추가하지 않아 컬럼 추가/리네임 후엔 `no such column` 에러가 남). 마이그레이션 도구 도입 여부는 Day3 이후 논의.
@@ -151,7 +153,7 @@
 - [ ] **6개 judge 게이트 전체 구현**:
    - [ ] Build gate: P2 adapter의 build 결과 확인
    - [ ] Attack gate: 기존 재현 시퀀스가 더 이상 보안 영향 없음
-   - [ ] Positive functionality gate: 정상 권한 사용자 기능 성공
+   - [x] ~~Positive functionality gate: 정상 권한 사용자 기능 성공~~ **Day2에 앞당겨 배선 완료** — P3의 Notion "Plan B" handoff 요청에 따라 `core/judge.py:check_positive_functionality()`가 `repair.validators.validate_patch(run_id, patch_id) -> bool`에 위임하도록 미리 고정했다(지연 import, `repair/validators.py`가 아직 docstring뿐이라 지금 호출하면 `AttributeError` — 다른 스텁과 동등한 "미구현" 신호). **계약**: `validate_patch()`는 positive functionality 결과만 bool로 반환해야 한다(attack gate 결과는 이미 `check_attack()`이 별도로 담당). P3가 실제로 구현하면(오늘 예정) 이 위임은 코드 변경 없이 바로 동작한다 — `tests/test_judge.py`에 mock으로 배선만 미리 검증해둠(3건).
    - [ ] Regression gate: 기존 test suite 통과 (P2 test runner 호출)
    - [ ] Static gate: 새 high severity finding/secret 없음 (P4의 Semgrep 결과 재확인)
    - [ ] Scope gate: **패치가 target worktree 밖 파일을 변경하지 않음** — 이건 절대 원칙(10.1절)과 직결되므로 가장 엄격하게 구현.

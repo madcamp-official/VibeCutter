@@ -69,9 +69,25 @@ def check_build(run_id: str, patch_id: str) -> bool:
 def check_positive_functionality(run_id: str, patch_id: str) -> bool:
     """Positive functionality gate: 정상 권한 사용자 기능이 패치 후에도 성공하는지 확인한다.
 
-    Day3에 구현 — role fixture(P2)로 정상 사용자 플로우를 재현해야 한다.
+    **P3 handoff(Plan B)**: 실제 재현·판정은 `repair.validators.validate_patch(run_id,
+    patch_id)`에 위임한다 — P3가 attack gate 재확인 + positive functionality 확인을 묶어
+    "judge 없이도 단독 실행 가능한" 실행기로 구현하기로 했다(`verifiers.access_control.verify`를
+    judge가 소비하는 것과 같은 패턴: 실제 HTTP 재현/evidence 저장은 P3 모듈이, 여기 judge는
+    그 결과를 bool로 받아 게이트 판정에만 쓴다).
+
+    **이 함수가 기대하는 계약**: `repair.validators.validate_patch(run_id, patch_id)`는
+    positive functionality 결과를 **bool**로 반환해야 한다(patch가 정상 기능을 깨지 않았으면
+    True). attack gate 결과까지 같이 필요하면 별도 함수로 분리해달라 — 이 게이트는
+    positive_functionality 하나만 판정한다.
+
+    `repair/validators.py`가 아직 docstring뿐이라(Day3 예정) 지금은 import 시점이 아니라
+    호출 시점에 지연 import한다 — `validate_patch`가 아직 없으면 그 사실 그대로
+    `AttributeError`/`ImportError`가 올라간다(다른 게이트의 `NotImplementedError`와 동등한
+    "아직 준비 안 됨" 신호).
     """
-    raise NotImplementedError("Day3에 role fixture 연동 후 구현")
+    from repair import validators
+
+    return validators.validate_patch(run_id, patch_id)
 
 
 def check_regression(run_id: str, patch_id: str) -> bool:

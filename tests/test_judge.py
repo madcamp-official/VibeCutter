@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
 from contracts.schemas import Candidate, Finding, VerificationResult
@@ -65,16 +66,32 @@ class CheckAttackTests(unittest.TestCase):
 class RemainingGatesAreStubsTests(unittest.TestCase):
     """Day3 스텁 — 시그니처는 고정, 본문은 아직 미구현임을 명시적으로 확인."""
 
-    def test_all_five_remaining_gates_raise_not_implemented(self) -> None:
-        for gate in (
-            check_build,
-            check_positive_functionality,
-            check_regression,
-            check_static,
-            check_scope,
-        ):
+    def test_remaining_four_gates_raise_not_implemented(self) -> None:
+        for gate in (check_build, check_regression, check_static, check_scope):
             with self.assertRaises(NotImplementedError):
                 gate("run-x", "patch-x")
+
+
+class CheckPositiveFunctionalityDelegatesToP3ValidatorsTests(unittest.TestCase):
+    """P3 handoff(Plan B): check_positive_functionality는 repair.validators.validate_patch()에
+    위임한다. `repair/validators.py`가 아직 docstring뿐이라 실제 함수는 없으므로, P3가
+    구현했을 때를 가정해 `create=True`로 임시 attribute를 만들어 배선만 검증한다.
+    """
+
+    def test_delegates_to_repair_validators_validate_patch(self) -> None:
+        with patch("repair.validators.validate_patch", create=True, return_value=True) as mock_fn:
+            self.assertTrue(check_positive_functionality("run-x", "patch-x"))
+        mock_fn.assert_called_once_with("run-x", "patch-x")
+
+    def test_propagates_false_from_validate_patch(self) -> None:
+        with patch("repair.validators.validate_patch", create=True, return_value=False):
+            self.assertFalse(check_positive_functionality("run-x", "patch-x"))
+
+    def test_raises_clearly_while_p3_has_not_implemented_it_yet(self) -> None:
+        # 현재 repair/validators.py엔 validate_patch가 실제로 없다 — mock 없이 호출하면
+        # 다른 스텁 게이트의 NotImplementedError와 동등한 "아직 준비 안 됨" 신호가 와야 한다.
+        with self.assertRaises(AttributeError):
+            check_positive_functionality("run-x", "patch-x")
 
 
 if __name__ == "__main__":
