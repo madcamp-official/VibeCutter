@@ -117,8 +117,11 @@
 
 ### 4. findings resource 완성
 
-- [ ] `vibecutter://findings/{finding_id}`가 더미 대신 `evidence_store.get(Finding, finding_id)`를 실제로 조회해 부록 B 스키마 형태로 반환하도록 `mcp_server/resources.py` 수정(아직 없는 필드는 null 유지).
-- [ ] `mcp_server/resources.py`의 stale docstring("evidence_store가 아직 없으므로 더미 응답") 갱신 — P3가 이미 지적함.
+- [x] `vibecutter://findings/{finding_id}`가 더미 대신 `evidence_store.get(Finding, finding_id)`를 실제로 조회하도록 `mcp_server/resources.py` 수정. 없는 finding_id는 `ValueError`. 더 이상 안 쓰는 `_dummy_finding()`/`FindingStatus` import 제거.
+- [x] `mcp_server/resources.py`의 stale docstring("evidence_store가 아직 없으므로 더미 응답") 갱신 — findings/policies 두 resource는 실제 데이터, 나머지(targets/manifest/run/evidence)는 아직 더미라고 명확히 구분해 적었다.
+- [x] **테스트**(`tests/test_resources.py`): 실제 `mcp.read_resource()` 프로토콜 경로로 저장된 Finding(verified 상태 + evidence_ids 포함)이 그대로 반환되는 것, 없는 finding_id는 에러 나는 것 확인.
+
+**검증**: 전체 회귀 64개 통과.
 
 ### 5. 공통 계약 이견 정리 (P3가 "오늘이 사실상 마지막 무료 변경 창구"라고 지목)
 

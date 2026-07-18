@@ -1,9 +1,13 @@
 """vibecutter:// MCP resources (6.4절).
 
-target/run/evidence/finding을 담을 evidence_store가 아직 없으므로(item 8에서 구현),
-오늘은 최종 스키마 모양을 보여주는 더미 데이터로 응답한다. `vibecutter://policies/scope`는
-예외적으로 실제 policies/scope.yaml을 그대로 읽어 반환한다 — 이건 mock이 아니라 진짜
-정책 상태다. Finding 관련 resource는 Day2 item 4에서 evidence_store 연동으로 "완성"된다.
+target/run/evidence 관련 resource는 아직 최종 스키마 모양을 보여주는 더미 데이터로
+응답한다(target manifest 조회 배선과 run/evidence 목록 조회 배선은 Day2 범위 밖 — 아직
+할 일로 남아 있다). `vibecutter://policies/scope`는 예외적으로 실제 policies/scope.yaml을
+그대로 읽어 반환한다 — 이건 mock이 아니라 진짜 정책 상태다.
+
+`vibecutter://findings/{finding_id}`는 Day2에 evidence_store 연동으로 "완성"됐다 —
+`core.evidence_store.get(Finding, finding_id)`로 실제 Finding을 조회해 부록 B 스키마
+형태로 반환한다(아직 채워지지 않은 필드는 Finding 모델 기본값대로 null/빈 값).
 """
 
 from __future__ import annotations
@@ -11,7 +15,8 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
-from contracts.schemas import Finding, FindingStatus, Observation, Run, RunState, Target
+from contracts.schemas import Finding, Observation, Run, RunState, Target
+from core.evidence_store import get
 from core.policy_engine import load_scope
 from mcp_server.tools_repair import ReportResult
 
@@ -114,16 +119,6 @@ def _dummy_evidence(run_id: str) -> list[Observation]:
     ]
 
 
-def _dummy_finding(finding_id: str) -> Finding:
-    return Finding(
-        id=finding_id,
-        run_id="run-dummy",
-        title="(예시) IDOR on DELETE /api/posts/{id}",
-        cwe="CWE-639",
-        verification_state=FindingStatus.CANDIDATE,
-    )
-
-
 def register(mcp: FastMCP) -> None:
     @mcp.resource("vibecutter://targets")
     def list_targets() -> list[Target]:
@@ -147,8 +142,11 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.resource("vibecutter://findings/{finding_id}")
     def get_finding(finding_id: str) -> Finding:
-        """부록 B Finding Report Schema. evidence_store 연동은 Day2에 완성한다(현재는 예시)."""
-        return _dummy_finding(finding_id)
+        """부록 B Finding Report Schema. evidence_store에서 실제 Finding을 조회한다."""
+        finding = get(Finding, finding_id)
+        if finding is None:
+            raise ValueError(f"finding {finding_id} not found")
+        return finding
 
     @mcp.resource("vibecutter://policies/scope")
     def get_scope_policy() -> dict:
