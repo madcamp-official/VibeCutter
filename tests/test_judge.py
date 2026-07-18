@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-from contracts.schemas import Candidate, Finding, VerificationResult
+from contracts.schemas import Candidate, Finding, Patch, Run, RunState, VerificationResult
 from core.evidence_store import save
 from core.judge import (
+    ScopeViolationError,
+    assert_diff_within_worktree,
     check_attack,
     check_build,
     check_positive_functionality,
     check_regression,
     check_scope,
     check_static,
+    diff_touched_files,
 )
 
 
@@ -64,12 +68,91 @@ class CheckAttackTests(unittest.TestCase):
 
 
 class RemainingGatesAreStubsTests(unittest.TestCase):
-    """Day3 스텁 — 시그니처는 고정, 본문은 아직 미구현임을 명시적으로 확인."""
+    """Day3 스텁 — 시그니처는 고정, 본문은 아직 미구현임을 명시적으로 확인.
 
-    def test_remaining_four_gates_raise_not_implemented(self) -> None:
-        for gate in (check_build, check_regression, check_static, check_scope):
+    `check_scope`는 오늘 실제로 구현했으므로(아래 `CheckScopeTests`) 여기서는 뺐다.
+    """
+
+    def test_remaining_three_gates_raise_not_implemented(self) -> None:
+        for gate in (check_build, check_regression, check_static):
             with self.assertRaises(NotImplementedError):
                 gate("run-x", "patch-x")
+
+
+class DiffTouchedFilesTests(unittest.TestCase):
+    def test_extracts_paths_from_plus_plus_plus_headers(self) -> None:
+        diff = (
+            "--- a/src/Foo.java\n+++ b/src/Foo.java\n@@ -1,1 +1,1 @@\n-x\n+y\n"
+            "--- a/src/Bar.java\n+++ b/src/Bar.java\n@@ -1,1 +1,1 @@\n-x\n+y\n"
+        )
+        self.assertEqual(diff_touched_files(diff), ["src/Foo.java", "src/Bar.java"])
+
+    def test_empty_diff_yields_no_files(self) -> None:
+        self.assertEqual(diff_touched_files(""), [])
+
+
+class AssertDiffWithinWorktreeTests(unittest.TestCase):
+    """10.1절 절대 원칙: worktree 밖 경로는 무조건 거부."""
+
+    def test_passes_for_paths_inside_worktree(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td)
+            diff = "--- a/src/Foo.java\n+++ b/src/Foo.java\n@@ -1,1 +1,1 @@\n-x\n+y\n"
+            assert_diff_within_worktree(diff, worktree)  # 예외 없이 통과
+
+    def test_rejects_path_traversal_outside_worktree(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td) / "worktree"
+            worktree.mkdir()
+            diff = "--- a/../../etc/passwd\n+++ b/../../etc/passwd\n@@ -1,1 +1,1 @@\n-x\n+y\n"
+            with self.assertRaises(ScopeViolationError):
+                assert_diff_within_worktree(diff, worktree)
+
+
+class CheckScopeTests(unittest.TestCase):
+    """check_scope: vc_apply_patch의 사전 강제와 짝을 이루는 사후 검증(Day3 구현)."""
+
+    def _run_and_patch(self, diff: str) -> tuple[Run, Patch]:
+        run = Run(id=f"run-{uuid4().hex[:12]}", target_id="fake-target", status=RunState.VALIDATING)
+        save(run)
+        p = Patch(id=f"patch-{uuid4().hex[:12]}", finding_id="finding-x", run_id=run.id, diff=diff)
+        save(p)
+        return run, p
+
+    def test_passes_when_all_files_inside_worktree(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td)
+            run, p = self._run_and_patch(
+                "--- a/src/Foo.java\n+++ b/src/Foo.java\n@@ -1,1 +1,1 @@\n-x\n+y\n"
+            )
+            fake_service = MagicMock()
+            fake_service.catalog.worktree_manager_for.return_value.path_for.return_value = worktree
+            with patch("core.judge._service", return_value=fake_service):
+                self.assertTrue(check_scope(run.id, p.id))
+
+    def test_fails_when_diff_escapes_worktree(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td) / "worktree"
+            worktree.mkdir()
+            run, p = self._run_and_patch(
+                "--- a/../../etc/passwd\n+++ b/../../etc/passwd\n@@ -1,1 +1,1 @@\n-x\n+y\n"
+            )
+            fake_service = MagicMock()
+            fake_service.catalog.worktree_manager_for.return_value.path_for.return_value = worktree
+            with patch("core.judge._service", return_value=fake_service):
+                self.assertFalse(check_scope(run.id, p.id))
+
+    def test_unknown_patch_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            check_scope("run-x", "patch-does-not-exist")
 
 
 class CheckPositiveFunctionalityDelegatesToP3ValidatorsTests(unittest.TestCase):

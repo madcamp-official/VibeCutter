@@ -16,13 +16,49 @@ gate도 같은 이유로 evidence가 실제로 남는 `verifiers.access_control.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
+from pathlib import Path
 
-from contracts.schemas import Candidate, Finding, VerificationResult
+from contracts.schemas import Candidate, Finding, Patch, Run, VerificationResult
 from core.evidence_store import get
 from repair.validators import validate_patch
 from verifiers.access_control import verify as verify_access_control
 from verifiers.types import MAX_REQUESTS_DEFAULT
+
+# `+++ b/<path>` 헤더에서 diff가 실제로 건드리는 파일 경로를 뽑는다. `repair.patcher`가
+# 만드는 diff는 항상 기존 파일 수정이라 삭제(`+++ /dev/null`)는 대상에 없다 — patcher가
+# 파일 삭제를 만들게 되면 이 정규식도 함께 넓혀야 한다.
+_DIFF_NEW_PATH_RE = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
+
+
+class ScopeViolationError(ValueError):
+    """diff가 worktree 밖 경로를 건드릴 때(10.1절 절대 원칙 위반)."""
+
+
+def diff_touched_files(diff: str) -> list[str]:
+    """unified diff의 `+++ b/<path>` 헤더에서 실제로 건드리는 파일 목록을 뽑는다."""
+    return _DIFF_NEW_PATH_RE.findall(diff)
+
+
+def assert_diff_within_worktree(diff: str, worktree_path: Path) -> None:
+    """diff가 가리키는 모든 파일이 worktree_path 안에 있는지 확인한다(10.1절 절대 원칙).
+
+    `vc_apply_patch`(적용 전 사전 강제)와 `check_scope`(적용 후 사후 검증) 양쪽이 공유한다.
+    """
+    root = worktree_path.resolve()
+    for rel in diff_touched_files(diff):
+        resolved = (worktree_path / rel).resolve()
+        if resolved != root and root not in resolved.parents:
+            raise ScopeViolationError(f"patch가 worktree 밖 경로를 건드립니다: {rel}")
+
+
+def _service():
+    """`mcp_server.tools_inventory._service()`와 동일한 팩토리를, core가 mcp_server에
+    의존하지 않도록 여기서 독립적으로 재구성한다(레이어링: mcp_server → core, 역방향 금지)."""
+    from runtime.target_service import TargetRuntimeService
+
+    return TargetRuntimeService.from_repository_root(Path(__file__).resolve().parent.parent)
 
 
 def check_attack(
@@ -103,6 +139,20 @@ def check_static(run_id: str, patch_id: str) -> bool:
 def check_scope(run_id: str, patch_id: str) -> bool:
     """Scope gate: 패치가 target worktree 밖 파일을 변경하지 않았는지 확인한다.
 
-    10.1절 절대 원칙과 직결 — 6개 게이트 중 가장 엄격하게 구현해야 한다(Day3).
+    10.1절 절대 원칙과 직결 — 6개 게이트 중 가장 엄격하게 구현한다. `vc_apply_patch`가 적용
+    시점에 이미 `assert_diff_within_worktree()`로 같은 검사를 사전 강제하지만, 이 게이트는
+    judge 6게이트의 일부로 사후에도 다시 확인한다(단일 지점 실패에 의존하지 않는 이중 확인).
     """
-    raise NotImplementedError("Day3에 구현 — worktree 경로 밖 diff는 무조건 실패 처리")
+    patch = get(Patch, patch_id)
+    if patch is None:
+        raise ValueError(f"patch {patch_id} not found")
+    run = get(Run, run_id)
+    if run is None:
+        raise ValueError(f"run {run_id} not found")
+
+    worktree_path = _service().catalog.worktree_manager_for(run.target_id).path_for(run.id)
+    try:
+        assert_diff_within_worktree(patch.diff, worktree_path)
+    except ScopeViolationError:
+        return False
+    return True
