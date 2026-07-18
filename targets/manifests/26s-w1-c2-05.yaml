@@ -15,7 +15,9 @@ reset: {command_id: reset, snapshot_name: source-sqlite-ephemeral-v1}
 role_fixtures:
   - name: linguaai_source_sqlite
     description: Source-provided SQLite app.db is copied into the ephemeral API container and reset by container removal.
-    secret_env_names: [GOOGLE_API_KEY, GEMINI_API_KEY, SECRET_KEY]
+    # Gemini is disabled in this isolated runtime. These provider variables
+    # are container implementation details, not role-fixture credentials.
+    secret_env_names: []
 test_suites: []
 log_paths: []
 docker_isolation: {compose_file: targets/compose/26s-w1-c2-05.yaml, internal_network: vibecutter-internal, require_loopback_port_bindings: true}

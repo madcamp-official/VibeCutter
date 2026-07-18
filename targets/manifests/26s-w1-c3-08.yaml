@@ -16,7 +16,9 @@ reset: {command_id: reset, snapshot_name: local-postgres-prisma-v1}
 role_fixtures:
   - name: maeari_local_health
     description: Fresh PostgreSQL volume is initialized with source Prisma migrations. Kakao OAuth, OpenAI moderation, OCR, Gmail SMTP, SOLAPI SMS, and phone lookup use local placeholders or disabled flags; smoke verifies API health/time, unauthenticated boundary, Next login page, and Next /api proxy.
-    secret_env_names: [JWT_SECRET, KAKAO_CLIENT_SECRET, OPENAI_API_KEY, PUBLIC_TOKEN_PEPPER, PUBLIC_TOKEN_ENCRYPTION_KEY]
+    # OAuth, OpenAI moderation, OCR, mail and SMS are disabled/placeholder
+    # integrations, not credentials required by this health fixture.
+    secret_env_names: []
 test_suites:
   - name: maeari-health-smoke
     command_id: smoke

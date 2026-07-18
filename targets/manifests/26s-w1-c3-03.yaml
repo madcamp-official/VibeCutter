@@ -16,7 +16,8 @@ reset: {command_id: reset, snapshot_name: node-memory-only-v1}
 role_fixtures:
   - name: colormaster_local_socket_players
     description: Two ephemeral Socket.IO users exercise room create, validate, join, and ready transitions. Firebase Admin service account is intentionally absent; DB and Storage APIs return 503 under local isolation.
-    secret_env_names: [FIREBASE_SERVICE_ACCOUNT_PATH]
+    # Firebase Admin is deliberately absent in the local Socket.IO fixture.
+    secret_env_names: []
 test_suites:
   - name: colormaster-socket-smoke
     command_id: smoke

@@ -63,7 +63,10 @@ class HealthCheck(BaseModel):
 
     path: str = Field(default="/health", pattern=r"^/")
     expected_status: int = Field(default=200, ge=100, le=599)
-    timeout_seconds: int = Field(default=20, ge=1, le=120)
+    # Fresh local database migration and seed can legitimately take longer
+    # than two minutes. Keep this bounded, while matching the checked-in
+    # isolated runtimes that have already been exercised with 180–240 seconds.
+    timeout_seconds: int = Field(default=20, ge=1, le=300)
 
 
 class ResetSpec(BaseModel):

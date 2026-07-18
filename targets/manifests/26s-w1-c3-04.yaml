@@ -16,7 +16,8 @@ reset: {command_id: reset, snapshot_name: local-mysql-seeded-v1}
 role_fixtures:
   - name: stockshorts_local_device
     description: X-Device-Id header creates an ephemeral local Device row; company/sector seed data comes from source SQL. RSS, Gemini, and KIS integrations are unavailable under egress blocking.
-    secret_env_names: [KIS_APP_KEY, KIS_APP_SECRET, GEMINI_API_KEY]
+    # RSS/KIS/Gemini calls are disabled by isolated-runtime configuration.
+    secret_env_names: []
 test_suites:
   - name: stockshorts-api-smoke
     command_id: smoke

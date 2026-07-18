@@ -1,7 +1,7 @@
 manifest_version: 1
 id: 26s-w1-c2-08
 display_name: 26s-w1-c2-08 local isolated runtime
-adapter: generic
+adapter: generic-docker
 source_dir: .vibecutter/targets/sources/26s-w1-c2-08
 base_url: http://127.0.0.1:14023
 commands:
@@ -15,7 +15,8 @@ reset: {command_id: reset, snapshot_name: source-sqlite-ephemeral-v1}
 role_fixtures:
   - name: ggultem_source_sqlite
     description: Source SQLite database is copied into the ephemeral API container and reset by container removal; Gemini vision is unavailable under egress blocking.
-    secret_env_names: [GEMINI_API_KEY, GEMINI_API_KEYS]
+    # Gemini vision is intentionally unavailable under egress blocking.
+    secret_env_names: []
 test_suites: []
 log_paths: []
 docker_isolation: {compose_file: targets/compose/26s-w1-c2-08.yaml, internal_network: vibecutter-internal, require_loopback_port_bindings: true}

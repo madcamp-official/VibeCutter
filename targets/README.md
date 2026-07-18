@@ -71,6 +71,15 @@ P2 `TargetRuntimeService`는 checked-in manifest와 MCP로 제출된 manifest가
 host와 port가 scope와 같은지, lifecycle command ID가 typed policy에 있는지를 차례로
 검증한다. `vc_reset_target`는 추가로 `approved: true`가 필수다.
 
+## P3 IDOR fixture handoff
+
+실제 앱에서 두 사용자와 소유 자원을 준비해야 할 때 P2는 선택적으로
+`prepare_idor_fixture` command를 manifest에 둔다. 이 command는 target이 `start`된 뒤에만
+실행하며, 역할 ID·baseline/attack path·안전한 marker만 `.vibecutter/fixtures/`의
+gitignored JSON에 기록한다. password, JWT, session cookie와 HTTP response body는 stdout,
+manifest, handoff, evidence에 기록하지 않는다. P3는 이 metadata로 candidate별 재현을
+구성하고, cross-user request 및 취약점 판정은 P3 verifier가 담당한다.
+
 ## Docker Compose isolation
 
 Docker Compose target은 `docker_isolation`을 선언한다. readiness 검사는 실행 전에 compose

@@ -9,12 +9,19 @@ commands:
   start: {argv: [docker, compose, -f, targets/compose/26s-w1-c2-04.yaml, up, -d, --wait], working_dir: ., timeout_seconds: 360}
   stop: {argv: [docker, compose, -f, targets/compose/26s-w1-c2-04.yaml, down, --remove-orphans], working_dir: ., timeout_seconds: 180}
   reset: {argv: [docker, compose, -f, targets/compose/26s-w1-c2-04.yaml, down, --volumes, --remove-orphans], working_dir: ., timeout_seconds: 180}
+  prepare_idor_fixture: {argv: [py, "-3.13", targets/scripts/26s-w1-c2-04-idor-fixture.py], working_dir: ., timeout_seconds: 60}
 tool_versions: {docker: "29.6.1", docker-compose: "v5.3.0", python: "3.13", node: "22", sqlite: "3"}
 healthcheck: {path: /api/data, expected_status: 200, timeout_seconds: 90}
 reset: {command_id: reset, snapshot_name: local-sqlite-ephemeral-v1}
 role_fixtures:
   - name: wordnote_local_sqlite
     description: Fresh API container creates the source SQLite schema and seeded shared vocabularies in its ephemeral filesystem.
+    secret_env_names: []
+  - name: idor_owner_user_a
+    description: prepare_idor_fixture creates a fresh local owner and a private vocabulary/word. Its ID and safe victim marker are written only to the gitignored fixture metadata file.
+    secret_env_names: []
+  - name: idor_attacker_user_b
+    description: prepare_idor_fixture creates a distinct local user with its own vocabulary/word. This target currently uses identifier-only endpoints and does not issue an authorization token.
     secret_env_names: []
 test_suites: []
 log_paths: []

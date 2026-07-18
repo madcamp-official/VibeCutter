@@ -16,7 +16,9 @@ reset: {command_id: reset, snapshot_name: local-postgres-seeded-v1}
 role_fixtures:
   - name: myocatmongo_seed_user
     description: Source seed creates catlover123@example.com / 12345678 and campus cat/map data. Vision, Google, Kakao, SMTP, and public tunnel integrations are disabled or mocked under local isolation.
-    secret_env_names: [JWT_SECRET, GOOGLE_CLIENT_ID, SMTP_PASS]
+    # Local placeholder settings cover auth; cloud OAuth and SMTP are not part
+    # of the fixture's normal-flow verification.
+    secret_env_names: []
 test_suites:
   - name: myocatmongo-api-smoke
     command_id: smoke

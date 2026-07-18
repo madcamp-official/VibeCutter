@@ -9,7 +9,7 @@ import yaml
 
 from core.policy_engine import PolicyViolation
 from runtime.catalog import TargetCatalog
-from runtime.target_service import TargetRuntimeService
+from runtime.target_service import TargetOperationError, TargetRuntimeService
 
 
 def manifest_data() -> dict:
@@ -98,4 +98,13 @@ class TargetRuntimeServiceTests(unittest.TestCase):
             encoding="utf-8",
         )
         with self.assertRaisesRegex(PolicyViolation, "port must match"):
+            self.service.build("demo-api")
+
+    def test_build_failure_reports_manifest_target_id_instead_of_wrapper_attribute_error(self) -> None:
+        failed = manifest_data()
+        failed["commands"]["build"] = {"argv": [sys.executable, "-c", "raise SystemExit(7)"]}
+        self.manifest_path.write_text(yaml.safe_dump(failed, sort_keys=False), encoding="utf-8")
+        self.service.catalog.load()
+
+        with self.assertRaisesRegex(TargetOperationError, "build failed for target demo-api"):
             self.service.build("demo-api")

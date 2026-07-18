@@ -1,7 +1,7 @@
 manifest_version: 1
 id: 26s-w1-c3-02
 display_name: 26s-w1-c3-02 local isolated runtime
-adapter: generic
+adapter: generic-docker
 source_dir: .vibecutter/targets/sources/26s-w1-c3-02
 base_url: http://127.0.0.1:14025
 commands:
@@ -10,12 +10,14 @@ commands:
   stop: {argv: [docker, compose, -f, targets/compose/26s-w1-c3-02.yaml, down, --remove-orphans], working_dir: ., timeout_seconds: 180}
   reset: {argv: [docker, compose, -f, targets/compose/26s-w1-c3-02.yaml, down, --volumes, --remove-orphans], working_dir: ., timeout_seconds: 180}
 tool_versions: {docker: "29.6.1", docker-compose: "v5.3.0", python: "3.13", node: "20", mysql: "8.0"}
-healthcheck: {path: /api/auth/nickname-check?nickname=p2, expected_status: 200, timeout_seconds: 180}
+healthcheck: {path: "/api/auth/nickname-check?nickname=p2", expected_status: 200, timeout_seconds: 180}
 reset: {command_id: reset, snapshot_name: local-mysql-ephemeral-v1}
 role_fixtures:
   - name: munjangseojae_local_mysql
     description: Fresh MySQL schema is created by source Django migrations; external Aladin, OpenAI, Kakao, and Wikipedia integrations remain unavailable under egress blocking.
-    secret_env_names: [OPENAI_API_KEY, KAKAO_REST_API_KEY, KAKAO_CLIENT_SECRET]
+    # Remote curation and OAuth integrations are excluded from the local
+    # fixture, so provider configuration must not gate readiness.
+    secret_env_names: []
 test_suites: []
 log_paths: []
 docker_isolation: {compose_file: targets/compose/26s-w1-c3-02.yaml, internal_network: vibecutter-internal, require_loopback_port_bindings: true}

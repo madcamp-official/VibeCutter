@@ -87,7 +87,11 @@ class TargetRuntimeService:
         if result.status != "passed":
             run.ended_at = datetime.utcnow()
             self._save_run(run)
-            raise TargetOperationError(f"build failed for target {target.id}")
+            # ``target`` is P2's RegisteredRuntimeTarget wrapper, whereas the
+            # P1 contract identity lives on its manifest/contract projection.
+            # Keep the error on the public target ID rather than raising an
+            # AttributeError only when a build has already failed.
+            raise TargetOperationError(f"build failed for target {target.manifest.id}")
         run.status = transition(run.status, RunState.READY)
         self._save_run(run)
         return run

@@ -15,7 +15,9 @@ reset: {command_id: reset, snapshot_name: local-postgres-prisma-ephemeral-v1}
 role_fixtures:
   - name: concert_local_postgres
     description: Fresh local PostgreSQL is migrated and seeded exclusively inside the isolated runtime; external Supabase, OpenAI, and KOPIS integrations remain unavailable.
-    secret_env_names: [SUPABASE_SECRET_KEY, OPENAI_API_KEY, KOPIS_API_KEY, CONCERT_SYNC_SECRET, CRON_SECRET]
+    # Hosted integrations are disabled or locally stubbed; no role credential
+    # is required to declare this local fixture ready.
+    secret_env_names: []
 test_suites: []
 log_paths: []
 docker_isolation: {compose_file: targets/compose/26s-w1-c2-07.yaml, internal_network: vibecutter-internal, require_loopback_port_bindings: true}
