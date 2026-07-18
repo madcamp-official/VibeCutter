@@ -173,13 +173,12 @@ def write_candidate_from_fixture(run_id: str, fixture: dict | str | Path) -> Can
     """fixture의 `safe_mutation` → write-IDOR Candidate (없으면 None).
 
     read `candidate_from_fixture`의 write 짝. verifier의 `mutation_probe_from_fixture`로
-    MutationProbe(안전·되돌릴 수 있는 변경만)를 얻어 typed `attack_params`로 담는다. 두 가지 주의:
-      - `mutation_marker`는 **담지 않는다** — 재현마다 verifier가 새로 만든다(재공격 재현 독립성).
-      - `extra_body`는 attack_params가 dict[str,str]이라 JSON 문자열로 직렬화한다.
-    `idor_mode=write`로 표시해 dispatch가 write oracle(`verify_mutation`)로 라우팅하게 한다.
-
-    한계: `mutation_probe_from_fixture`의 `observe_path` 유도가 현재 c2-04 형태(`?owner_id=`)라
-    다른 앱은 fixture가 observe_path를 선언하도록 후속 일반화가 필요하다(P2 계약).
+    MutationProbe(안전·되돌릴 수 있는 변경만)를 얻어, P1의 `mutation_probe_from_candidate` 계약
+    키로 typed `attack_params`에 담는다:
+      - `extra_body`(중첩 dict)는 attack_params가 dict[str,str]이라 `extra_body_json`에 JSON으로 담는다.
+      - `mutation_marker`도 candidate에 담는다(P1 계약: write tool/dispatch가 이 값을 그대로 읽음).
+    `idor_mode=write`로 표시해 dispatch(`verify_candidate`)가 write oracle로 라우팅하게 한다.
+    observe_path는 `mutation_probe_from_fixture`가 fixture의 `safe_mutation.observe_path`를 우선 쓴다(P2 f4b08e5).
     """
     try:
         probe = mutation_probe_from_fixture(fixture)
@@ -187,13 +186,13 @@ def write_candidate_from_fixture(run_id: str, fixture: dict | str | Path) -> Can
         return None  # safe_mutation 미선언 → write 후보 없음(정상)
     ap = {
         "base_url": probe.base_url,
-        "auth_mode": "none",  # write oracle은 현재 무인증만
         "observe_path": probe.observe_path,
         "mutation_method": probe.mutation_method,
         "mutation_path": probe.mutation_path,
+        "mutation_marker": probe.mutation_marker,  # P1 계약: candidate에 담는다
         "marker_field": probe.marker_field,
-        "extra_body": json.dumps(probe.extra_body, ensure_ascii=False),
-        "idor_mode": "write",
+        "extra_body_json": json.dumps(probe.extra_body, ensure_ascii=False),  # P1 계약 키명
+        "idor_mode": "write",  # dispatch 라우팅용
     }
     return Candidate(
         id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-639", vuln_class="idor",

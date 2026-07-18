@@ -2,7 +2,7 @@
 
 vc_map_routes, vc_map_roles, vc_index_code (Mapping)
 vc_run_sast, vc_run_sca, vc_scan_access_control, vc_run_secret_scan, vc_browser_crawl (Analysis)
-vc_verify_access_control, vc_verify_injection, vc_verify_xss (Verification)
+vc_verify_access_control, vc_verify_mutation_access_control, vc_verify_injection, vc_verify_xss (Verification)
 
 Mapping 도구(vc_map_*)는 P3(공격 표면) 소유이며 아직 스텁이다. vc_run_sast/vc_run_sca는
 Day3에 P1이 실배선했다(D2-P4.md 요청 (e)): policy 검사 + CANDIDATE_SCAN 전이 + target
@@ -38,6 +38,7 @@ from scanners.sast import run_semgrep
 from scanners.sca import run_osv
 from surface.candidates import candidates_for_target
 from verifiers.access_control import verify as verify_access_control
+from verifiers.access_control import verify_mutation_access_control
 from verifiers.types import MAX_REQUESTS_DEFAULT, MAX_REQUESTS_MAX, MAX_REQUESTS_MIN
 
 # 부록 A `max_requests` 입력 제약(`{"type":"integer","minimum":1,"maximum":20}`)을 실제
@@ -267,6 +268,35 @@ def register(mcp: FastMCP) -> None:
             run_id, candidate_id, approved=approved, tool_name="vc_verify_access_control"
         )
         result = verify_access_control(run_id, candidate, max_requests=max_requests)
+        target_status = FindingStatus.VERIFIED if result.verified else FindingStatus.REJECTED
+        update_finding_status(finding.id, target_status, evidence_ids=result.evidence_ids)
+        return result
+
+    @mcp.tool()
+    @audited
+    def vc_verify_mutation_access_control(
+        run_id: str,
+        candidate_id: str,
+        max_requests: MaxRequests = MAX_REQUESTS_DEFAULT,
+        approved: bool = False,
+    ) -> VerificationResult:
+        """Write-IDOR(상태변화) 후보를 실제 재현으로 검증한다.
+
+        policy 검사/승인 게이트/RunState 전이/Finding 판정은 `vc_verify_access_control`과
+        같은 배선. `verify_access_control`(read-oracle: 공격 응답에 피해자 marker가
+        새어나오는지)과 달리, 이 tool은 `verifiers.access_control.verify_mutation`(P3
+        소유)을 호출해 before/mutation/after 상태 비교로 "공격자가 실제로 피해자 자원을
+        바꿨는가"를 판정한다 — `PUT /api/tiers`(26s-w1-c3-09)나 `PATCH /api/reviews/<id>/`
+        (26s-w1-c2-08)처럼 읽기 marker 유출이 아니라 쓰기 권한 부재로 나타나는 IDOR용.
+
+        candidate는 `verifiers.access_control.mutation_probe_from_candidate()` 계약을
+        따라야 한다(`attack_params`에 `observe_path`/`mutation_method`/`mutation_path`/
+        `mutation_marker` 필수, `extra_body_json`/`marker_field` 선택).
+        """
+        _, candidate, finding = _prepare_verification(
+            run_id, candidate_id, approved=approved, tool_name="vc_verify_mutation_access_control"
+        )
+        result = verify_mutation_access_control(run_id, candidate, max_requests=max_requests)
         target_status = FindingStatus.VERIFIED if result.verified else FindingStatus.REJECTED
         update_finding_status(finding.id, target_status, evidence_ids=result.evidence_ids)
         return result

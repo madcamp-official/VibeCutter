@@ -32,7 +32,7 @@ def _idor_verifier(
     `idor_mode=write`로 표시한다. 표시가 없는 기존 read 후보는 그대로 read verify로 간다(하위호환).
     """
     if candidate.attack_params.get("idor_mode") == "write":
-        return access_control.verify_mutation_candidate(run_id, candidate, max_requests=max_requests)
+        return access_control.verify_mutation_access_control(run_id, candidate, max_requests=max_requests)
     return access_control.verify(run_id, candidate, max_requests=max_requests)
 
 
