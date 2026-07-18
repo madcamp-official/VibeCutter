@@ -3,8 +3,15 @@ from __future__ import annotations
 import unittest
 from uuid import uuid4
 
-from contracts.schemas import Finding, FindingStatus
-from core.evidence_store import InvalidEvidenceError, get, save, update_finding_status, write_artifact
+from contracts.schemas import Candidate, Finding, FindingStatus
+from core.evidence_store import (
+    InvalidEvidenceError,
+    find_or_create_finding,
+    get,
+    save,
+    update_finding_status,
+    write_artifact,
+)
 from core.state_machine import MissingEvidenceError
 
 
@@ -98,6 +105,31 @@ class WriteArtifactRedactionTests(unittest.TestCase):
         with open(stored, "rb") as f:
             on_disk = f.read()
         self.assertEqual(on_disk, binary)
+
+
+class FindOrCreateFindingVocabTests(unittest.TestCase):
+    """D2-P4.md 채택: candidate signals → Finding.severity/owasp_category 자동 반영."""
+
+    def test_severity_and_owasp_derived_from_candidate_signals(self) -> None:
+        run_id = f"run-{uuid4().hex[:12]}"
+        candidate = Candidate(
+            id=f"cand-{uuid4().hex[:12]}",
+            run_id=run_id,
+            cwe="CWE-639",
+            signals=["focus:idor", "severity:ERROR"],
+        )
+        save(candidate)
+        finding = find_or_create_finding(run_id, candidate)
+        self.assertEqual(finding.severity, "high")
+        self.assertEqual(finding.owasp_category, "A01:2021")
+
+    def test_missing_signals_leave_severity_and_owasp_none(self) -> None:
+        run_id = f"run-{uuid4().hex[:12]}"
+        candidate = Candidate(id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-89")
+        save(candidate)
+        finding = find_or_create_finding(run_id, candidate)
+        self.assertIsNone(finding.severity)
+        self.assertIsNone(finding.owasp_category)
 
 
 if __name__ == "__main__":

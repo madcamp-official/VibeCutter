@@ -16,6 +16,9 @@
 #   26s-w1-c1-01 — health까지만 통과, 원본 요구 Supabase schema 부재로 기능 regression 미완
 #   26s-w1-c2-03 — 로컬 Supabase/외부 OAuth 의존으로 정상 기능 검증 보류
 #   26s-w1-c3-07 — hosted Supabase/Edge Function 의존, 로컬 재현 불가로 보류
+#
+# 26s-w1-c3-09는 D1-P2.md 12:14 갱신본에서 새로 통과 확인되어 추가함
+# (targets/manifests/26s-w1-c3-09.yaml base_url과 포트 일치 확인).
 targets:
   26s-w1-c1-02:
     allowed_hosts: [127.0.0.1]
@@ -74,3 +77,6 @@ targets:
   26s-w1-c3-08:
     allowed_hosts: [127.0.0.1]
     port: 14034
+  26s-w1-c3-09:
+    allowed_hosts: [127.0.0.1]
+    port: 14036
