@@ -91,6 +91,7 @@ class CheckBuildTests(unittest.TestCase):
             run, p = _run_and_patch_with_worktree(worktree)
 
             fake_manifest = MagicMock()
+            fake_manifest.docker_isolation = None
             fake_manifest.model_copy.return_value = fake_manifest
             fake_service = _fake_service_with_worktree(worktree)
             fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest)
@@ -115,6 +116,7 @@ class CheckBuildTests(unittest.TestCase):
             run, p = _run_and_patch_with_worktree(worktree)
 
             fake_manifest = MagicMock()
+            fake_manifest.docker_isolation = None
             fake_manifest.model_copy.return_value = fake_manifest
             fake_service = _fake_service_with_worktree(worktree)
             fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest)
@@ -137,6 +139,52 @@ class CheckBuildTests(unittest.TestCase):
         with patch("core.judge._service", return_value=fake_service):
             with self.assertRaises(FileNotFoundError):
                 check_build(run.id, p.id)
+
+    def test_compose_target_builds_via_run_scoped_overlay(self) -> None:
+        """docker_isolation이 설정된 target은 P2 run_overlay_for()를 build context로 써야 한다 —
+        직접 LifecycleManager를 worktree에 대고 돌리면 checked-in Compose의 build context가
+        여전히 원본 source clone을 가리켜 patched 코드를 검증하지 못한다(D3-P2.md가 이 문제를
+        풀려고 만든 run-scoped overlay)."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td)
+            run, p = _run_and_patch_with_worktree(worktree)
+
+            fake_manifest = MagicMock()
+            fake_manifest.docker_isolation = MagicMock()  # Compose-based target
+            fake_service = _fake_service_with_worktree(worktree)
+            fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest)
+
+            fake_overlay = MagicMock()
+            fake_overlay.execute.return_value = MagicMock(status="passed")
+            fake_service.catalog.run_overlay_for.return_value = fake_overlay
+
+            with patch("core.judge._service", return_value=fake_service):
+                self.assertTrue(check_build(run.id, p.id))
+
+            fake_service.catalog.run_overlay_for.assert_called_once_with(run.target_id, run.id)
+            fake_overlay.prepare.assert_called_once_with()
+            fake_overlay.execute.assert_called_once_with("build")
+
+    def test_compose_target_build_failure_fails_gate(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td)
+            run, p = _run_and_patch_with_worktree(worktree)
+
+            fake_manifest = MagicMock()
+            fake_manifest.docker_isolation = MagicMock()
+            fake_service = _fake_service_with_worktree(worktree)
+            fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest)
+
+            fake_overlay = MagicMock()
+            fake_overlay.execute.return_value = MagicMock(status="failed")
+            fake_service.catalog.run_overlay_for.return_value = fake_overlay
+
+            with patch("core.judge._service", return_value=fake_service):
+                self.assertFalse(check_build(run.id, p.id))
 
 
 class CheckRegressionTests(unittest.TestCase):
