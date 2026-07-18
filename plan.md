@@ -280,11 +280,26 @@ D2-P4.md도 확인: P4가 GPU 불필요 항목을 전부 끝냈다 — `scanners
 
 **검증**: 전체 회귀 169개(trajectory export 5건 포함) 통과.
 
+### 7. P3 candidate bridge 배선 (계획에 없던 항목 — P3가 실시간으로 요청)
+
+P3가 `surface/candidates.py:candidates_for_target(run_id, provisioning, source_root)`를
+완성하고 단일 진입점으로 넘겨줬다(`docs/VERIFIER_BATCH_INTERFACE.md` §2/§3 계약, IDOR
+suspect 프리필터 + P2 provisioning을 합쳐 typed Candidate 또는 blocked를 낸다). P1이
+map/scan 도구 중 하나에 이 한 줄만 배선하면 감사 루프가 실제로 돈다는 요청이었다.
+
+- [x] **신규 tool `vc_scan_access_control(run_id) -> ScanResult`** (`mcp_server/tools_analysis.py`) — `vc_run_sast`/`vc_run_sca`와 같은 패턴(`_prepare_scan`/`_store_scan_candidates` 재사용): `catalog.source_root_for()` + `vc_get_verifier_provisioning()`(P2가 이미 노출한 tool의 내부 함수 `service.verifier_provisioning()`)을 조회해 `candidates_for_target()`에 넘기고, 결과 candidate를 기존 aggregate 파이프라인으로 저장한다. `BridgeResult.blocked`(provisioning 미비로 candidate를 못 만든 경우)는 trajectory에 사유를 남긴다 — "endpoint만 보고 공격하지 않는다"는 P3 계약을 여기서 우회하지 않았다.
+- [x] **[추가로 닫은 실제 블로커] `_prepare_scan()`의 READY→MAPPING gap 해소**: SKILL.md 작성 중 발견한 문제(Host가 tool 호출만으로는 MAPPING 단계를 통과할 수 없었음, 섹션 5 참고)를 이번에 실제로 고쳤다 — `_prepare_scan()`이 `READY`로 들어오면 `MAPPING`→`CANDIDATE_SCAN`까지 한 번에 전이시킨다(mapping tool 구현을 더는 기다리지 않음). `vc_run_sast`/`vc_run_sca`도 같은 함수를 쓰므로 이제 셋 다 `READY`에서 바로 호출 가능 — 곁다리 수혜지만 부작용은 없다(additive, 기존 MAPPING/CANDIDATE_SCAN 진입 경로 그대로 유지).
+- [x] 테스트: `tests/test_scan_access_control.py`(4건 — candidate 저장+상태 전이, blocked 사유 기록, source_root/provisioning 전달 확인, 미등록 target 거부), `tests/test_scan_tool_wiring.py` 갱신(READY 케이스를 "거부"에서 "cascade 성공"으로 수정 + 무관한 상태는 여전히 거부 확인 케이스 추가).
+- [x] **[뒤늦게 발견한 빠뜨린 연결] `audit_local_target` 프롬프트 텍스트 자체가 여전히 `vc_map_routes`(스텁)를 가리키고 있었다** — tool/state_machine은 고쳤는데 Host에게 주는 안내문(`mcp_server/prompts.py`)을 안 고쳐서, 프롬프트 그대로 따르면 여전히 3번에서 멈추는 상태였다. P2가 "audit_local_target prompt가 step 3에서 멈춘다"고 정확히 지적해서 알았다 — `_STEPS`의 3번을 `vc_scan_access_control`/`vc_run_sast`/`vc_run_sca`로 교체하고 이후 번호를 다시 맞췄다. `SKILL.md`의 "표준 절차"도 동일하게 갱신(더 이상 "알려진 격차"가 아님). `tests/test_prompts.py`에 `vc_scan_access_control` 언급 확인 추가.
+- [x] **P2 확인 사항 교차 확인**: (a) `res.blocked`를 "P2 fixture 준비/계약 요청으로 기록"하라는 요청 — 기존 구현이 이미 `BlockedTarget.reason`/`needed`(예: "P1 승인으로 vc_prepare_verifier_fixture 실행", "P2가 fixture 구현")를 trajectory에 그대로 남기고 있어 추가 변경 불필요, 그대로 충족. (b) P2가 준비 중이라는 `26s-w1-c2-01`은 `policies/scope.yaml`에 이미 등록돼 있음(포트 14011) — 정책 등록은 안 막힘.
+
+**검증**: 전체 회귀 174개(vc_scan_access_control 4 + 관련 수정 포함) 통과.
+
 ### 오늘 커뮤니케이션
 - [ ] **P4에게 아침 최우선**: D3 상태가 없어 직접 확인 필요(0번) — severity/owasp vocab·semgrep 블로커 인지 여부 확인.
 - [ ] **P4에게 낮 동안 최우선**: `core.trajectory.export_training_dataset()` 완성 알림 — `.vibecutter/trajectories/export/training_samples.jsonl`에 모든 run의 학습 샘플이 P4 자신의 `model.trajectory.to_sft_sample()` 포맷 그대로 모여 있다. **P4의 실제 요구사항과 다르면(예: run 전체 evidence를 통째로 조인하는 지금 방식이 너무 거칠다면) 오늘 안에 알려달라** — `to_sft_sample()`/`training_samples()` 자체는 손대지 않았으니 P4가 그 두 함수만 바꾸면 이 export도 자동으로 따라간다.
 - [ ] **P2에게**: (a) overlay를 build/regression 경로에 연결 완료 알림, 포트 충돌 처리 방식 확인 요청. (b) kill switch가 `reset_run()`을 호출하도록 연결했다는 것과 kill 이후 Run 상태 표시 방식(2번 설계 판단) 공유. (c) semgrep 블로커에 대한 팀 결정 참여 요청. (d) `c3-09`(holdout 후보) 준비 상태 확인, Day5 clean-room 리허설에 그대로 쓸 수 있는지 확인.
-- [ ] **P3에게**: (a) overlay 배선 완료로 c1-05 closed-loop를 이제 MCP 경로로 자동 재현할 수 있다는 것 알림, 함께 리허설 요청. (b) semgrep 블로커 팀 결정 공유. (c) `RootCause` 확장/`redact()` 제거는 예정대로 Day5로 유지 확인. (d) `vc_generate_patch`가 이제 `attempt_no`를 실제로 계산해 `repair.patcher.generate_patch()`에 넘긴다는 것 확인 요청 — patcher.py 자체 docstring이 전제하던 연결이라 P3 쪽 코드 변경은 없어야 정상. (e) 🔴 **SKILL.md 작성 중 발견**: `vc_map_routes`/`vc_map_roles`/`vc_index_code`가 전부 스텁이라 Host가 tool 호출만으로는 `READY`→`MAPPING`을 통과할 방법이 없다(지금까지의 모든 테스트가 Run을 직접 `CANDIDATE_SCAN`으로 만들어 우회해왔다는 뜻). `surface.graph.find_idor_suspects`는 이미 완성돼 있으니, 이걸 `vc_map_routes` 본문에 배선하거나(P3) `vc_run_sast`/`vc_run_sca`가 MAPPING을 자동으로 거치게 할지(P1) 조율 필요 — Day4 남은 시간 또는 Day5 초반 처리 대상으로 제안.
+- [ ] **P3에게**: (a) overlay 배선 완료로 c1-05 closed-loop를 이제 MCP 경로로 자동 재현할 수 있다는 것 알림, 함께 리허설 요청. (b) semgrep 블로커 팀 결정 공유. (c) `RootCause` 확장/`redact()` 제거는 예정대로 Day5로 유지 확인. (d) `vc_generate_patch`가 이제 `attempt_no`를 실제로 계산해 `repair.patcher.generate_patch()`에 넘긴다는 것 확인 요청 — patcher.py 자체 docstring이 전제하던 연결이라 P3 쪽 코드 변경은 없어야 정상. (e) ✅ **해소 완료**: `vc_map_routes` 등 mapping 스텁 문제 — `vc_scan_access_control` 신규 tool로 `candidates_for_target()`을 배선하고 `_prepare_scan()`의 READY→MAPPING gap도 같이 닫았다(섹션 7). c2-04/c1-05로 `vc_scan_access_control` → `vc_verify_access_control` 실제 호출 체인을 P3 환경에서 테스트해달라고 요청.
 - [ ] **P2·P3 공통**: `core/state_machine.py`의 `RUN_TRANSITIONS[RunState.RETRY]`에 `HUMAN_REVIEW`를 추가한 것(additive, 기존 `PATCH_PROPOSED` 경로 유지) 공유 — 공통 계약 변경이라 "조용히 변경 금지" 규칙에 따라 알림.
 - [ ] 저녁 handoff에 "overlay 배선 완료, kill switch/rollback 동작 확인, planner 오케스트레이션 완성, 3회 실패 HUMAN_REVIEW 전이 확인, trajectory export 완료, semgrep 블로커 상태" 기록.
 

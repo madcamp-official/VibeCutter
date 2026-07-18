@@ -1,18 +1,21 @@
 """Mapping + Analysis + Verification 카테고리 MCP tools.
 
 vc_map_routes, vc_map_roles, vc_index_code (Mapping)
-vc_run_sast, vc_run_sca, vc_run_secret_scan, vc_browser_crawl (Analysis)
+vc_run_sast, vc_run_sca, vc_scan_access_control, vc_run_secret_scan, vc_browser_crawl (Analysis)
 vc_verify_access_control, vc_verify_injection, vc_verify_xss (Verification)
 
 Mapping 도구(vc_map_*)는 P3(공격 표면) 소유이며 아직 스텁이다. vc_run_sast/vc_run_sca는
 Day3에 P1이 실배선했다(D2-P4.md 요청 (e)): policy 검사 + CANDIDATE_SCAN 전이 + target
 source_root 조회는 P1, 실제 스캐너(`scanners.sast.run_semgrep`/`scanners.sca.run_osv`)와
 FP reject/우선순위(`scanners.aggregate.aggregate`)는 P4 소유를 그대로 호출한다.
-vc_run_secret_scan/vc_browser_crawl은 아직 스텁(각각 P4/P3 소유). Verification 도구는
-Day2에 P1이 실배선했다: policy 검사 + run-level 승인 게이트 + RunState 전이 +
-Candidate→Finding 승격 + evidence 기반 judge 판정(core.evidence_store.update_finding_status)은
-P1이 맡고, "이 후보가 실제 보안 영향인가"만 판정하는 verifier 본문은 P3 소유(`verifiers/*.py`)를
-그대로 호출한다.
+vc_scan_access_control은 Day4에 P1이 배선했다(`docs/VERIFIER_BATCH_INTERFACE.md` §3
+"P1 orchestration loop" 4번 — P3 suspect bridge 결과를 evidence store에 저장): 실제
+suspect 탐지+provisioning 매칭(`surface.candidates.candidates_for_target`)은 P3 소유를
+그대로 호출한다. vc_run_secret_scan/vc_browser_crawl은 아직 스텁(각각 P4/P3 소유).
+Verification 도구는 Day2에 P1이 실배선했다: policy 검사 + run-level 승인 게이트 +
+RunState 전이 + Candidate→Finding 승격 + evidence 기반 judge 판정
+(core.evidence_store.update_finding_status)은 P1이 맡고, "이 후보가 실제 보안 영향인가"만
+판정하는 verifier 본문은 P3 소유(`verifiers/*.py`)를 그대로 호출한다.
 """
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ from mcp_server.tools_inventory import _service
 from scanners.aggregate import aggregate
 from scanners.sast import run_semgrep
 from scanners.sca import run_osv
+from surface.candidates import candidates_for_target
 from verifiers.access_control import verify as verify_access_control
 from verifiers.types import MAX_REQUESTS_DEFAULT, MAX_REQUESTS_MAX, MAX_REQUESTS_MIN
 
@@ -90,16 +94,20 @@ def _prepare_verification(
 
 
 def _prepare_scan(run_id: str, *, tool_name: str) -> Run:
-    """`vc_run_sast`/`vc_run_sca`가 공유하는 배선: policy 검사 → CANDIDATE_SCAN 전이(1회만).
+    """`vc_run_sast`/`vc_run_sca`/`vc_scan_access_control`이 공유하는 배선: policy 검사 →
+    CANDIDATE_SCAN 전이(1회만).
 
-    **알려진 한계(D2-P4.md 요청 (e) 배선 중 발견)**: RunState 그래프(`core/state_machine.py`)는
-    READY→MAPPING→CANDIDATE_SCAN 순서를 강제하는데, MAPPING 도구(`vc_map_routes` 등, P3 소유)가
-    아직 스텁이라 실제로 Run을 READY→MAPPING으로 옮기는 tool call 경로가 없다. 그래서 이 함수는
-    Run이 이미 MAPPING이면 CANDIDATE_SCAN으로 1회 전이하고, 이미 CANDIDATE_SCAN이면 그대로
-    두어 `vc_run_sast`/`vc_run_sca`를 여러 번(스캐너별로) 호출할 수 있게 한다 — `_prepare_verification`이
-    VERIFYING을 멱등하게 다루는 것과 같은 패턴. MAPPING도 CANDIDATE_SCAN도 아니면 명확한 에러로
-    거부한다(P3 mapping 완료 전까지는 테스트/리허설에서 Run을 직접 CANDIDATE_SCAN으로 만들어야
-    한다 — `tests/test_verify_tool_wiring.py`가 이미 이 방식을 쓰고 있다).
+    **[Day4에 닫음] READY→MAPPING gap**: RunState 그래프(`core/state_machine.py`)는
+    READY→MAPPING→CANDIDATE_SCAN 순서를 강제하는데, MAPPING 도구(`vc_map_routes` 등, P3
+    소유)가 여전히 스텁이라 실제로 Run을 READY→MAPPING으로 옮기는 tool call 경로가 없다
+    (SKILL.md 작성 중 재확인 — Host가 tool 호출만으로는 이 단계를 통과할 수 없었다). P3의
+    `surface.graph.find_idor_suspects`가 사실상 "mapping"(attack surface 식별)을 이미
+    하고 있으므로, 이 함수가 Run이 `READY`면 `MAPPING`을 거쳐 `CANDIDATE_SCAN`까지 한
+    호출로 대신 전이시킨다 — `vc_map_routes` 등 개별 mapping tool 구현을 더는 기다리지
+    않는다. `MAPPING`으로 들어오면 `CANDIDATE_SCAN`으로 1회 전이하고, 이미
+    `CANDIDATE_SCAN`이면 그대로 두어 여러 스캐너를 순서대로 호출할 수 있게 한다 —
+    `_prepare_verification`이 VERIFYING을 멱등하게 다루는 것과 같은 패턴. 그 밖의 상태는
+    명확한 에러로 거부한다.
     """
     check_not_paused()
     run = get(Run, run_id)
@@ -107,12 +115,15 @@ def _prepare_scan(run_id: str, *, tool_name: str) -> Run:
         raise ValueError(f"run {run_id} not found")
     require_target_allowed(run.target_id)
 
+    if run.status == RunState.READY:
+        run.status = transition(run.status, RunState.MAPPING)
+        save(run)
     if run.status == RunState.MAPPING:
         run.status = transition(run.status, RunState.CANDIDATE_SCAN)
         save(run)
     elif run.status != RunState.CANDIDATE_SCAN:
         raise ValueError(
-            f"{tool_name}는 run이 MAPPING 또는 CANDIDATE_SCAN 상태여야 호출할 수 있습니다"
+            f"{tool_name}는 run이 READY/MAPPING/CANDIDATE_SCAN 상태여야 호출할 수 있습니다"
             f"(현재 {run.status})"
         )
     return run
@@ -192,6 +203,40 @@ def register(mcp: FastMCP) -> None:
         source_root = _service().catalog.source_root_for(run.target_id)
         candidates = run_osv(source_root, run_id=run_id)
         return _store_scan_candidates(run, candidates, tool="vc_run_sca")
+
+    @mcp.tool()
+    @audited
+    def vc_scan_access_control(run_id: str) -> ScanResult:
+        """IDOR/BOLA attack-surface 프리필터로 검증 가능한 candidate를 생성한다.
+
+        `docs/VERIFIER_BATCH_INTERFACE.md` §3 "P1 orchestration loop" 4번("P3 suspect
+        bridge 결과의 Candidate를 evidence store에 저장")을 배선한다. 실제 suspect
+        탐지(`surface.graph.find_idor_suspects`)와 provisioning 매칭(`surface.candidates.
+        candidates_for_target`)은 P3 소유 — P1은 policy 검사/상태 전이/target
+        source_root·provisioning 조회/candidate 저장/trajectory 기록만 한다
+        (`vc_run_sast`/`vc_run_sca`와 같은 패턴).
+
+        provisioning 전략(fixture_file/self_signup)이 아직 준비되지 않은 target은 P3
+        계약대로 candidate를 만들지 않고 `blocked`로 남는다("endpoint만 보고 공격하지
+        않는다") — 여기서 우회하지 않고, blocked 사유를 trajectory에 그대로 남긴다.
+        """
+        run = _prepare_scan(run_id, tool_name="vc_scan_access_control")
+        service = _service()
+        source_root = service.catalog.source_root_for(run.target_id)
+        provisioning = service.verifier_provisioning(run.target_id)
+        bridge_result = candidates_for_target(run.id, provisioning, source_root)
+
+        if bridge_result.blocked:
+            record_trajectory_step(
+                run.id,
+                state=run.status,
+                action={"tool": "vc_scan_access_control"},
+                result={"blocked": [b.model_dump(mode="json") for b in bridge_result.blocked]},
+                next_state=run.status,
+            )
+        return _store_scan_candidates(
+            run, bridge_result.candidates, tool="vc_scan_access_control"
+        )
 
     @mcp.tool()
     @audited

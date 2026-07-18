@@ -24,6 +24,7 @@ class AuditLocalTargetPromptTests(unittest.TestCase):
 
         self.assertIn("26s-w1-c2-04", text)
         for tool_name in (
+            "vc_scan_access_control",
             "vc_verify_access_control",
             "vc_apply_patch",
             "vc_generate_patch",
