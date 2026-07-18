@@ -51,6 +51,18 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(result.status, "passed")
         self.assertEqual(result.stdout.strip(), "token-ok")
 
+    def test_utf8_command_output_does_not_depend_on_windows_console_code_page(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest = manifest_for_python_commands()
+            manifest.commands["build"].argv = [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.buffer.write('✅ build'.encode('utf-8'))",
+            ]
+            result = LifecycleManager(manifest, Path(temp_dir)).build()
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.stdout, "✅ build")
+
     def test_reset_requires_explicit_approval(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = LifecycleManager(manifest_for_python_commands(), Path(temp_dir))

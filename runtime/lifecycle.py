@@ -133,6 +133,11 @@ class LifecycleManager:
                 env=environment,
                 capture_output=True,
                 text=True,
+                # Docker/build tools commonly emit UTF-8 regardless of the Windows console
+                # code page.  Leaving this to the platform default (CP949 here) can make
+                # subprocess' reader thread fail and leave ``stdout``/``stderr`` as None.
+                encoding="utf-8",
+                errors="replace",
                 timeout=spec.timeout_seconds,
                 shell=False,
                 check=False,
@@ -151,8 +156,10 @@ class LifecycleManager:
             status="passed" if completed.returncode == 0 else "failed",
             exit_code=completed.returncode,
             duration_ms=_duration_ms(started),
-            stdout=completed.stdout,
-            stderr=completed.stderr,
+            # Keep the lifecycle result structurally valid even if a platform wrapper
+            # unexpectedly returns None for an empty stream.
+            stdout=_as_text(completed.stdout),
+            stderr=_as_text(completed.stderr),
         )
 
 

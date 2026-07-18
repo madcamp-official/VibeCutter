@@ -26,6 +26,9 @@ scoped clean/blocked 결과를 만드는 것이다.
 - 최신 main 반영: P1 `audit_local_target` prompt·kill switch·rollback·retry budget과
   P3 `candidates_for_target()` 단일 Candidate bridge를 확인하고, 기능 소유권과 target audit 실행
   분담을 분리해 기록.
+- `runtime/lifecycle.py`, `tests/test_lifecycle.py`: Windows CP949 기본 디코딩 때문에 Docker UTF-8
+  build output이 `stdout=None` Pydantic 오류로 바뀌던 P2 lifecycle 결함을 UTF-8/replacement decoding과
+  회귀 테스트로 수정.
 
 ## 제공 인터페이스
 
@@ -53,7 +56,7 @@ scoped clean/blocked 결과를 만드는 것이다.
 
 ## 검증
 
-- 최신 main 통합 후 전체 회귀 174건 PASS. 이 중 P2 관련 항목은 checked-in manifests, catalog, overlay,
+- 최신 main 통합 후 전체 회귀 175건 PASS. 이 중 P2 관련 항목은 checked-in manifests, catalog, overlay,
   worktree test runner, target service, portability, lifecycle, readiness, apply-patch 연동을
   포함하며, 새 provisioning registry/MCP tool/fixture approval 경로도 포함한다.
 - `vc_get_verifier_provisioning(26s-w1-c2-04)` 실제 MCP read 호출이
@@ -117,6 +120,12 @@ scoped clean/blocked 결과를 만드는 것이다.
   만들지 않는다. 따라서 DB seed만으로는 role fixture를 만들 수 없고, P2가 임의 OAuth 우회나 세션 주입을
   하지 않는다. trusted local test-login 또는 session-fixture 계약이 생기기 전에는 이 target을
   `fixture_contract_required` blocked로 남긴다.
+- `c1-07` 실행 batch: Docker build 중 UTF-8 출력이 Windows CP949 decoding을 깨는 P2 lifecycle 결함을
+  발견·수정한 뒤 `run-d1cc7c5befa7` build PASS와 access-control scan을 확인했다. Candidate 0,
+  `fixture_contract_required` blocked가 trajectory에 남았다.
+- `c1-03` 실행 batch: `run-b5a3643a31b9`에서 Spring Docker build PASS, Candidate 0,
+  `fixture_contract_required` blocked가 trajectory에 남았다. IDOR prefilter도 0건이다. 현재 local에
+  `semgrep`/`osv-scanner`가 없어 P4 static gate 없이 scoped clean을 확정하지 않는다.
 
 ## P1/P3 전달 메시지
 
