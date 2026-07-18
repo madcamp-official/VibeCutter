@@ -97,6 +97,9 @@ class IdorProbe(BaseModel):
     baseline_path: str  # 공격자 자기 자원
     attack_path: str  # 피해자 자원
     victim_marker: str  # 응답에 이게 보이면 피해자 데이터
+    owner_marker: str | None = None  # baseline(자기 자원) 응답에 이게 보여야 "주인은 여전히 자기 걸 본다"
+    # ↑ repair/validators.py의 정상기능 게이트(patch가 정상 기능을 안 망쳤는지)가 소비한다.
+    #   verifier(재현) 자체에는 불필요해 선택 필드다 — 없으면 정상기능 게이트가 status만 본다.
 
 
 def probe_from_candidate(candidate: Candidate) -> IdorProbe:
