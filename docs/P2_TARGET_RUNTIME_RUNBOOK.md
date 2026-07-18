@@ -5,6 +5,24 @@
 manifest의 격리 build/start/reset/worktree 제공으로 제한한다. `verified`/`fixed` 최종 판정은
 항상 evidence와 deterministic judge를 거친다.
 
+## D4 범위 갱신 — audit queue 분담 폐지
+
+사용자/팀 최신 결정으로 P1/P2/P3가 target을 나눠 audit operator로 수행하던 `P1 5 / P2 5 / P3 8`
+분담 계획은 폐지한다. 이후 repo별 후보 선별·검증 실행은 다시 P3가 전담하고, P2는 필요한 순간에만
+runtime/provisioning/fixture/worktree/overlay/reset/test-runner 지원을 제공한다.
+
+따라서 P2는 더 이상 `c2-01`, `c2-02`, `c1-06`, `c1-07`, `c1-03`을 독립 audit queue로 계속
+밀지 않는다. 기존에 남긴 build/health/Candidate/blocked/evidence 기록은 당시 실행 이력으로만
+보존하고, 새 audit 완료 판정에는 P3가 공통 파이프라인으로 만든 Candidate/evidence와 P1 judge 결과를
+사용한다.
+
+P3가 특정 target에서 막히면 P2는 아래 입력을 받아 최소 범위로 지원한다.
+
+- `target_id`, 필요한 runtime 상태(build/start/reset/run overlay)
+- 필요한 fixture 종류(`fixture_file`, `self_signup`, session/test-login, `safe_mutation` 등)
+- secret을 제외한 role/resource/endpoint schema
+- reset 또는 fixture prepare처럼 mutation 단계가 필요한지 여부
+
 ## Clean-room 후보
 
 - **P3 live-verifier 증명 대상:** `26s-w1-c2-04` — P3의 read/write IDOR live 검증은

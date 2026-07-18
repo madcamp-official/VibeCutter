@@ -1,5 +1,10 @@
 # D3 / P2 Status Update
 
+> D4 갱신: 아래 문서에 기록된 `P1 5 / P2 5 / P3 8` target audit queue 분담은
+> 사용자/팀 최신 결정으로 폐지됐다. 현재 기준은 `docs/handoffs/D4-P2.md`와
+> `docs/P2_TARGET_RUNTIME_RUNBOOK.md`의 D4 범위 갱신이다. 아래 내용은 D3 당시의 실행 이력으로만
+> 보존한다.
+
 > 이 문서는 Day3 구현 후 수행한 runtime 감사와 협업 상태 갱신이다. Day5 통합 freeze 또는
 > 최종 재현 작업이 끝났다는 뜻이 아니며, Day5 handoff 번호는 실제 최종 통합까지 비워 둔다.
 
