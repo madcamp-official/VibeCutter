@@ -44,11 +44,21 @@ class VcApplyPatchWiringTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def _fake_service(self, source_subdir: str = ".") -> MagicMock:
+        """`source_subdir`은 manifest `source_dir`가 git toplevel 밑 몇 단계에 있는지(예:
+        26s-w1-c3-09의 `backend/server`) — 기본 "."은 source_dir == repo root인 대부분의
+        target과 같다. P2의 `catalog.run_source_root_for`(worktree/source_dir)와 P1의
+        `_patch_directory_prefix`(git apply --directory= 오프셋) 양쪽이 이 값을 실제로
+        쓰므로, 둘 다 실제 `run_source_root_for`/`source_root_for`/`source_repository_for`
+        구현과 같은 값을 돌려주도록 일관되게 mock한다(따로 mock하면 서로 다른 경로를
+        보고 있는 걸 테스트가 놓친다).
+        """
         fake_service = MagicMock()
         fake_service.catalog.worktree_manager_for.return_value = self.worktree_manager
-        # source_dir == repo root in these fixtures: no --directory prefix needed.
-        fake_service.catalog.source_root_for.return_value = self.repo_root
-        fake_service.catalog.source_repository_for.return_value = self.repo_root
+        fake_service.catalog.source_root_for.return_value = (self.repo_root / source_subdir).resolve()
+        fake_service.catalog.source_repository_for.return_value = self.repo_root.resolve()
+        fake_service.catalog.run_source_root_for.side_effect = (
+            lambda target_id, run_id: (self.worktree_manager.path_for(run_id) / source_subdir).resolve()
+        )
         return fake_service
 
     def _run(self, status: RunState = RunState.PATCH_PROPOSED) -> Run:
@@ -114,9 +124,7 @@ class VcApplyPatchWiringTests(unittest.TestCase):
         )
         p = self._patch(run.id, diff)
 
-        fake_service = self._fake_service()
-        fake_service.catalog.source_root_for.return_value = self.repo_root / "backend" / "server"
-        fake_service.catalog.source_repository_for.return_value = self.repo_root
+        fake_service = self._fake_service(source_subdir="backend/server")
 
         with patch("mcp_server.tools_repair._service", return_value=fake_service):
             self._call({"patch_id": p.id, "confirmed": True})

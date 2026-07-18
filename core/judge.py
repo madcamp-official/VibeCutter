@@ -178,7 +178,7 @@ def check_build(run_id: str, patch_id: str) -> bool:
             return False
         return _repoint_to_patched_runtime(catalog, target, overlay)
     worktree_manifest = target.manifest.model_copy(update={"source_dir": "."})
-    result = LifecycleManager(worktree_manifest, worktree_path).build()
+    result = LifecycleManager(worktree_manifest, run_source_root).build()
     return result.status == "passed"
 
 
