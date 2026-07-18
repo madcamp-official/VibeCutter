@@ -559,3 +559,47 @@ def verify_mutation(
         )
         evidence_ids.append(obs.id)
     return VerifierOutput(verified=verified, evidence_ids=evidence_ids, reason=reason)
+
+
+# --- write-IDOR: Candidate 왕복 (read의 probe_from_candidate / verify 짝) --------------
+# read-IDOR가 Candidate를 받는데(vc_verify_access_control), write는 MutationProbe만 받아
+# P1 tool·dispatch가 read와 같은 (run_id, candidate) 시그니처로 못 쓰던 비대칭을 없앤다.
+
+
+def mutation_probe_from_candidate(candidate: Candidate) -> MutationProbe:
+    """write-IDOR candidate(typed `attack_params`) → MutationProbe.
+
+    read-IDOR `probe_from_candidate`의 write 짝. 두 가지가 read와 다르다:
+      1) `mutation_marker`는 candidate에 저장하지 않고 **재현마다 새로 생성**한다 — 같은 marker를
+         재사용하면 재공격(judge attack gate)에서 "변경 전에도 marker가 있음"으로 오판된다(재현 독립).
+      2) `extra_body`는 attack_params가 dict[str,str]이라 JSON 문자열로 담기므로 여기서 되푼다.
+    """
+    ap = candidate.attack_params
+    auth = ap.get("auth_mode", "none")
+    if auth not in ("none", ""):
+        raise NotImplementedError(
+            f"write-IDOR 재현은 현재 무인증(auth_mode=none)만 지원(요청 {auth!r}) — "
+            "인증 mutation 재현 경로는 후속 작업(fixture의 세션/토큰 계약 필요)"
+        )
+    extra_body_raw = ap.get("extra_body")
+    return MutationProbe(
+        base_url=ap["base_url"],
+        observe_path=ap["observe_path"],
+        mutation_method=ap["mutation_method"],
+        mutation_path=ap["mutation_path"],
+        mutation_marker=f"vc-write-idor-{uuid4().hex[:8]}",  # 재현마다 fresh(위 1)
+        marker_field=ap.get("marker_field", "description"),
+        extra_body=json.loads(extra_body_raw) if extra_body_raw else {},
+    )
+
+
+def verify_mutation_candidate(
+    run_id: str, candidate: Candidate, *, max_requests: int = MAX_REQUESTS_DEFAULT
+) -> VerifierOutput:
+    """write-IDOR candidate를 MutationProbe로 바꿔 `verify_mutation`을 부르는 어댑터.
+
+    dispatch(`verify_candidate`)와 P1의 write-IDOR tool이 read-IDOR `verify`와 **동일한**
+    `(run_id, candidate, *, max_requests)` 시그니처로 write-IDOR을 검증하게 해준다.
+    """
+    probe = mutation_probe_from_candidate(candidate)
+    return verify_mutation(run_id, probe, max_requests=max_requests)
