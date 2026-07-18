@@ -20,9 +20,12 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
-from contracts.schemas import Candidate, Finding, Patch, Run, VerificationResult
+from contracts.schemas import Candidate, Finding, Patch, Run, RunState, Validation, VerificationResult
 from core.evidence_store import get
 from repair.validators import validate_patch
+from scanners.aggregate import aggregate
+from scanners.sast import run_semgrep
+from scanners.vocab import candidate_severity
 from verifiers.access_control import verify as verify_access_control
 from verifiers.types import MAX_REQUESTS_DEFAULT
 
@@ -59,6 +62,24 @@ def _service():
     from runtime.target_service import TargetRuntimeService
 
     return TargetRuntimeService.from_repository_root(Path(__file__).resolve().parent.parent)
+
+
+def _patch_and_worktree(run_id: str, patch_id: str) -> tuple[Patch, Run, Path]:
+    """build/regression/static 게이트가 공유하는 조회: patch/run 존재 확인 + P2가
+    `vc_apply_patch`로 이미 만든 worktree 경로(없으면 아직 적용 전이라는 뜻)."""
+    patch = get(Patch, patch_id)
+    if patch is None:
+        raise ValueError(f"patch {patch_id} not found")
+    run = get(Run, run_id)
+    if run is None:
+        raise ValueError(f"run {run_id} not found")
+
+    worktree_path = _service().catalog.worktree_manager_for(run.target_id).path_for(run.id)
+    if not worktree_path.is_dir():
+        raise FileNotFoundError(
+            f"run {run.id}에 대한 P2 worktree가 없습니다 — vc_apply_patch를 먼저 호출하세요"
+        )
+    return patch, run, worktree_path
 
 
 def check_attack(
@@ -99,8 +120,28 @@ def check_attack(
 
 
 def check_build(run_id: str, patch_id: str) -> bool:
-    """Build gate: P2 adapter의 build 결과를 확인한다. Day3에 구현(P2 test runner 연동)."""
-    raise NotImplementedError("Day3에 P2 build/worktree 연동 후 구현")
+    """Build gate: patch가 적용된 worktree가 실제로 build되는지 확인한다.
+
+    `runtime.test_runner.RunScopedTestRunner`(P2)가 test suite에 쓰는 것과 같은 패턴 —
+    manifest의 `source_dir`를 worktree 자신을 가리키는 `"."`로 바꿔(`model_copy`) build
+    command를 worktree 안에서 재실행한다.
+
+    **알려진 한계**: 현재 checked-in manifest의 build command 다수는 `working_dir`로 P2
+    root의 static Compose overlay를 가리키고, 그 overlay의 build context는 아직 원본
+    source clone을 고정 참조한다(D1-P2.md가 예고한 다음 작업: patched worktree를 build
+    context로 쓰는 run-scoped overlay). 그 전까지는 `working_dir` override가 없는
+    target(순수 source-native build, 예: Gradle/npm build)에서만 이 게이트가 실질적으로
+    "패치된 코드"를 검증한다 — Compose 기반 target은 이 게이트가 통과해도 아직 patched
+    build를 증명하지 않는다는 뜻이다. P2 overlay가 도착하면 이 함수는 수정 없이 그대로
+    patched build를 검증하게 된다.
+    """
+    from runtime.lifecycle import LifecycleManager
+
+    _, run, worktree_path = _patch_and_worktree(run_id, patch_id)
+    target = _service().catalog.get(run.target_id)
+    worktree_manifest = target.manifest.model_copy(update={"source_dir": "."})
+    result = LifecycleManager(worktree_manifest, worktree_path).build()
+    return result.status == "passed"
 
 
 def check_positive_functionality(run_id: str, patch_id: str) -> bool:
@@ -121,19 +162,43 @@ def check_positive_functionality(run_id: str, patch_id: str) -> bool:
 
 
 def check_regression(run_id: str, patch_id: str) -> bool:
-    """Regression gate: 기존 test suite가 패치 후에도 통과하는지 확인한다.
+    """Regression gate: 기존 test suite가 patch 적용 후(worktree 안에서)에도 통과하는지 확인한다.
 
-    Day3에 구현 — `runtime.test_runner.RunScopedTestRunner`(P2)를 호출한다.
+    `runtime.test_runner.RunScopedTestRunner`(P2)를 그대로 호출한다 — 이미 worktree 전용으로
+    구현돼 있어 build gate 같은 Compose overlay 제약이 없다(P2 계약: source-native test
+    command는 `working_dir` override 없이 worktree에서 직접 돈다).
+
+    test suite가 선언되지 않은 target은 `TestRunSummary.status == "not_configured"`이고
+    `.passed`는 `False`다 — P2 계약대로 "없으면 통과로 치지 않는다"를 그대로 따른다.
     """
-    raise NotImplementedError("Day3에 P2 test runner 연동 후 구현")
+    _, run, _ = _patch_and_worktree(run_id, patch_id)
+    summary = _service().catalog.test_runner_for(run.target_id).run(run.id)
+    return summary.passed
+
+
+def _high_severity_count(candidates: list[Candidate]) -> int:
+    """FP reject/우선순위(`scanners.aggregate.aggregate`) 적용 후 critical/high 후보 수."""
+    kept = aggregate(candidates).kept
+    return sum(1 for c in kept if candidate_severity(c) in ("critical", "high"))
 
 
 def check_static(run_id: str, patch_id: str) -> bool:
-    """Static gate: 패치가 새 high severity finding/secret을 만들지 않았는지 확인한다.
+    """Static gate: 패치가 새 high/critical severity SAST finding을 추가하지 않았는지 확인한다.
 
-    Day3에 구현 — P4 Semgrep(`scanners.sast.run_semgrep`) 결과를 patch 적용 전/후로 재확인한다.
+    원본 source(`catalog.source_root_for`, 패치 전 기준선)와 patched worktree 양쪽에 P4
+    Semgrep(`scanners.sast.run_semgrep`)을 재실행해, FP reject/우선순위(`scanners.aggregate.aggregate`)
+    적용 후 critical/high severity 후보 수를 비교한다 — patched 쪽이 늘지 않으면 통과.
+
+    **알려진 한계**: `semgrep` 바이너리가 PATH에 없으면 `SemgrepUnavailableError`가 그대로
+    전파된다(`vc_run_sast`와 동일한 제약, 로컬 미설치 환경 다수).
     """
-    raise NotImplementedError("Day3에 P4 SAST 재실행 연동 후 구현")
+    _, run, worktree_path = _patch_and_worktree(run_id, patch_id)
+    catalog = _service().catalog
+    source_root = catalog.source_root_for(run.target_id)
+
+    baseline = run_semgrep(source_root, run_id=f"{run.id}-static-baseline")
+    patched = run_semgrep(worktree_path, run_id=f"{run.id}-static-patched")
+    return _high_severity_count(patched) <= _high_severity_count(baseline)
 
 
 def check_scope(run_id: str, patch_id: str) -> bool:
@@ -156,3 +221,19 @@ def check_scope(run_id: str, patch_id: str) -> bool:
     except ScopeViolationError:
         return False
     return True
+
+
+_GATE_FIELDS = ("build", "attack", "positive_test", "regression", "static", "scope")
+
+
+def compute_verdict(validation: Validation) -> str | None:
+    """6개 게이트가 전부 채워졌을 때만 verdict를 낸다 — 하나라도 아직 `None`이면 미확정(`None`).
+
+    전부 `True`면 `RunState.FIXED`, 하나라도 `False`면 `RunState.RETRY`. 재시도 횟수 상한
+    (3회 실패 시 human review)은 이 함수가 아니라 `core/planner.py`(Day4)가 강제한다 —
+    여기서는 `HUMAN_REVIEW`를 직접 내지 않는다(state_machine.py의 기존 원칙과 동일).
+    """
+    gates = [getattr(validation, field) for field in _GATE_FIELDS]
+    if any(gate is None for gate in gates):
+        return None
+    return RunState.FIXED.value if all(gates) else RunState.RETRY.value

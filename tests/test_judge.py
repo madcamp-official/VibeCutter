@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-from contracts.schemas import Candidate, Finding, Patch, Run, RunState, VerificationResult
+from contracts.schemas import Candidate, Finding, Patch, Run, RunState, Validation, VerificationResult
 from core.evidence_store import save
 from core.judge import (
     ScopeViolationError,
@@ -16,6 +16,7 @@ from core.judge import (
     check_regression,
     check_scope,
     check_static,
+    compute_verdict,
     diff_touched_files,
 )
 
@@ -67,16 +68,169 @@ class CheckAttackTests(unittest.TestCase):
             check_attack(run_id, finding.id)
 
 
-class RemainingGatesAreStubsTests(unittest.TestCase):
-    """Day3 스텁 — 시그니처는 고정, 본문은 아직 미구현임을 명시적으로 확인.
+def _run_and_patch_with_worktree(worktree: Path) -> tuple[Run, Patch]:
+    run = Run(id=f"run-{uuid4().hex[:12]}", target_id="fake-target", status=RunState.VALIDATING)
+    save(run)
+    p = Patch(id=f"patch-{uuid4().hex[:12]}", finding_id="finding-x", run_id=run.id, diff="d")
+    save(p)
+    return run, p
 
-    `check_scope`는 오늘 실제로 구현했으므로(아래 `CheckScopeTests`) 여기서는 뺐다.
-    """
 
-    def test_remaining_three_gates_raise_not_implemented(self) -> None:
-        for gate in (check_build, check_regression, check_static):
-            with self.assertRaises(NotImplementedError):
-                gate("run-x", "patch-x")
+def _fake_service_with_worktree(worktree: Path) -> MagicMock:
+    fake_service = MagicMock()
+    fake_service.catalog.worktree_manager_for.return_value.path_for.return_value = worktree
+    return fake_service
+
+
+class CheckBuildTests(unittest.TestCase):
+    def test_returns_true_when_worktree_build_passes(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td)
+            run, p = _run_and_patch_with_worktree(worktree)
+
+            fake_manifest = MagicMock()
+            fake_manifest.model_copy.return_value = fake_manifest
+            fake_service = _fake_service_with_worktree(worktree)
+            fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest)
+
+            fake_lifecycle_instance = MagicMock()
+            fake_lifecycle_instance.build.return_value = MagicMock(status="passed")
+            fake_lifecycle_cls = MagicMock(return_value=fake_lifecycle_instance)
+
+            with (
+                patch("core.judge._service", return_value=fake_service),
+                patch("runtime.lifecycle.LifecycleManager", fake_lifecycle_cls),
+            ):
+                self.assertTrue(check_build(run.id, p.id))
+            fake_lifecycle_cls.assert_called_once_with(fake_manifest, worktree)
+            fake_manifest.model_copy.assert_called_once_with(update={"source_dir": "."})
+
+    def test_returns_false_when_worktree_build_fails(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td)
+            run, p = _run_and_patch_with_worktree(worktree)
+
+            fake_manifest = MagicMock()
+            fake_manifest.model_copy.return_value = fake_manifest
+            fake_service = _fake_service_with_worktree(worktree)
+            fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest)
+
+            fake_lifecycle_instance = MagicMock()
+            fake_lifecycle_instance.build.return_value = MagicMock(status="failed")
+
+            with (
+                patch("core.judge._service", return_value=fake_service),
+                patch("runtime.lifecycle.LifecycleManager", return_value=fake_lifecycle_instance),
+            ):
+                self.assertFalse(check_build(run.id, p.id))
+
+    def test_missing_worktree_raises(self) -> None:
+        run = Run(id=f"run-{uuid4().hex[:12]}", target_id="fake-target", status=RunState.PATCH_APPLIED)
+        save(run)
+        p = Patch(id=f"patch-{uuid4().hex[:12]}", finding_id="finding-x", run_id=run.id, diff="d")
+        save(p)
+        fake_service = _fake_service_with_worktree(Path("/nonexistent-worktree-path"))
+        with patch("core.judge._service", return_value=fake_service):
+            with self.assertRaises(FileNotFoundError):
+                check_build(run.id, p.id)
+
+
+class CheckRegressionTests(unittest.TestCase):
+    def test_delegates_to_run_scoped_test_runner_passed_property(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td)
+            run, p = _run_and_patch_with_worktree(worktree)
+            fake_service = _fake_service_with_worktree(worktree)
+            fake_service.catalog.test_runner_for.return_value.run.return_value = MagicMock(passed=True)
+
+            with patch("core.judge._service", return_value=fake_service):
+                self.assertTrue(check_regression(run.id, p.id))
+            fake_service.catalog.test_runner_for.return_value.run.assert_called_once_with(run.id)
+
+    def test_not_configured_test_suite_does_not_pass(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td)
+            run, p = _run_and_patch_with_worktree(worktree)
+            fake_service = _fake_service_with_worktree(worktree)
+            fake_service.catalog.test_runner_for.return_value.run.return_value = MagicMock(passed=False)
+
+            with patch("core.judge._service", return_value=fake_service):
+                self.assertFalse(check_regression(run.id, p.id))
+
+
+class CheckStaticTests(unittest.TestCase):
+    def _candidate(self, run_id: str, severity: str) -> Candidate:
+        return Candidate(
+            id=f"cand-{uuid4().hex[:12]}",
+            run_id=run_id,
+            source_symbols=[f"src/{uuid4().hex[:6]}.py:1"],
+            confidence=0.7,
+            signals=[f"severity:{severity}"],
+        )
+
+    def test_passes_when_patched_has_no_more_high_severity_than_baseline(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td)
+            run, p = _run_and_patch_with_worktree(worktree)
+            fake_service = _fake_service_with_worktree(worktree)
+            fake_service.catalog.source_root_for.return_value = Path(__file__).resolve().parent
+
+            baseline = [self._candidate(run.id, "ERROR")]
+            patched: list[Candidate] = []  # patch removed the finding
+
+            with (
+                patch("core.judge._service", return_value=fake_service),
+                patch("core.judge.run_semgrep", side_effect=[baseline, patched]),
+            ):
+                self.assertTrue(check_static(run.id, p.id))
+
+    def test_fails_when_patched_introduces_new_high_severity(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td)
+            run, p = _run_and_patch_with_worktree(worktree)
+            fake_service = _fake_service_with_worktree(worktree)
+            fake_service.catalog.source_root_for.return_value = Path(__file__).resolve().parent
+
+            baseline: list[Candidate] = []
+            patched = [self._candidate(run.id, "ERROR")]
+
+            with (
+                patch("core.judge._service", return_value=fake_service),
+                patch("core.judge.run_semgrep", side_effect=[baseline, patched]),
+            ):
+                self.assertFalse(check_static(run.id, p.id))
+
+
+class ComputeVerdictTests(unittest.TestCase):
+    def test_none_while_any_gate_is_unset(self) -> None:
+        v = Validation(id="v-1", run_id="run-x", patch_id="patch-x", build=True)
+        self.assertIsNone(compute_verdict(v))
+
+    def test_fixed_when_all_gates_pass(self) -> None:
+        v = Validation(
+            id="v-1", run_id="run-x", patch_id="patch-x",
+            build=True, attack=True, positive_test=True, regression=True, static=True, scope=True,
+        )
+        self.assertEqual(compute_verdict(v), "FIXED")
+
+    def test_retry_when_any_gate_fails(self) -> None:
+        v = Validation(
+            id="v-1", run_id="run-x", patch_id="patch-x",
+            build=True, attack=True, positive_test=True, regression=False, static=True, scope=True,
+        )
+        self.assertEqual(compute_verdict(v), "RETRY")
 
 
 class DiffTouchedFilesTests(unittest.TestCase):
