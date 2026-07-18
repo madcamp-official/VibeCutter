@@ -1,9 +1,8 @@
 """vc_localize_root_cause MCP tool 배선 테스트 (D3-P3.md 요청).
 
 실제 판정(`repair.locator.localize`)은 P3 소유라 mock으로 대체하고, P1이 배선한
-finding → run → target(catalog) → source_root 경로만 검증한다. 현재
-`targets/manifests/`의 3개 깨진 manifest 때문에 실제 `_service()`는 어떤 target에도 못
-쓰므로(Day2 섹션 1 블로커), 여기서도 `_service()` 자체를 mock으로 대체한다.
+finding → run → target(catalog) → source_root 경로만 검증한다. `_service()` 자체는
+가벼운 mock으로 대체해 실제 target Docker/Git clone 없이도 배선 로직만 검증한다.
 """
 
 from __future__ import annotations
@@ -46,10 +45,9 @@ class VcLocalizeRootCauseWiringTests(unittest.TestCase):
         finding = _finding(run.id)
 
         fake_root_cause = RootCause(file="Foo.java", symbol="getX", rationale="mock")
-        fake_target = MagicMock()
-        fake_target.manifest.source_dir = ".vibecutter/targets/sources/fake-target"
+        expected_root = Path(__file__).resolve().parent.parent / ".vibecutter/targets/sources/fake-target"
         fake_service = MagicMock()
-        fake_service.catalog.get.return_value = fake_target
+        fake_service.catalog.source_root_for.return_value = expected_root
 
         with (
             patch("mcp_server.tools_repair._service", return_value=fake_service),
@@ -57,10 +55,9 @@ class VcLocalizeRootCauseWiringTests(unittest.TestCase):
         ):
             self._call({"finding_id": finding.id})
 
-        fake_service.catalog.get.assert_called_once_with("fake-target")
+        fake_service.catalog.source_root_for.assert_called_once_with("fake-target")
         (called_finding,), kwargs = mock_localize.call_args
         self.assertEqual(called_finding.id, finding.id)
-        expected_root = Path(__file__).resolve().parent.parent / ".vibecutter/targets/sources/fake-target"
         self.assertEqual(kwargs["source_root"], expected_root)
 
     def test_unknown_finding_raises(self) -> None:
