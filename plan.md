@@ -213,7 +213,7 @@ D2-P4.md도 확인: P4가 GPU 불필요 항목을 전부 끝냈다 — `scanners
 ### 0. 오전 최우선 — 어제 넘어온 채무 정리 (다른 모든 작업보다 먼저)
 
 - [x] **P2 overlay를 build 경로에 실제 연결** — 확인해보니 이미 완료돼 있었다. `git log`로 확인한 결과 `81c06be feat: judge 게이트 수정` 커밋(main/planner에 이미 병합됨)이 정확히 이 작업을 했다: `check_build`가 `target.manifest.docker_isolation is not None`이면 `catalog.run_overlay_for(target_id, run_id)` → `overlay.prepare()` → `overlay.execute("build")`를 쓰고, source-native target만 기존 `source_dir="."` 패턴을 유지한다. 이 plan을 짤 때 참고한 D3-P1.md(14:17 작성)가 이 수정(16:39 커밋) 이전 시점이라 낡은 정보였다 — **handoff 문서보다 실제 코드/git log를 항상 먼저 확인할 것**. `check_regression`은 원래부터 `catalog.test_runner_for(target_id).run(run_id)`라 손댈 것 없음. baseline container와 run overlay의 포트 충돌 문제는 아직 미해결로 남아 있어 아래 항목으로 이월.
-- [ ] baseline container와 patched run overlay가 같은 loopback port를 쓸 수 있다는 P2 경고(D3-P2-status-update.md) 대응 — 포트 충돌 감지 또는 baseline 자동 종료 처리 필요한지 확인.
+- [ ] baseline container와 patched run overlay가 같은 loopback port를 쓸 수 있다는 P2 경고(D3-P2-status-update.md) — 포트 할당은 `runtime/compose_isolation.py`/overlay 생성 로직(P2 소유)의 영역이라 P1이 직접 고치지 않는다. 오늘 커뮤니케이션에서 P2에게 실행 순서(예: baseline 먼저 내리고 overlay 실행) 확인만 받는다.
 - [ ] 🔴 **semgrep 블로커 팀 확인**: 오전 중 P2/P3/P4에게 상태 공유하고 팀 결정(버전 통일 vs brew 분리)을 받아온다 — 이 결정이 안 나면 오늘 `check_static` 게이트와 P4 SAST 밤 배치가 못 돈다. 결정이 나면 `scanners.sast.run_semgrep` 호출 경로(P4 소유)에 맞춰 내 `check_static` 게이트 실행 환경도 동일하게 맞춘다.
 - [ ] **P4 상태 직접 확인**: D3-P4.md가 없으므로 오늘 아침 P4에게 직접 물어 (a) severity/owasp vocab·`aggregate.kept` 배선이 기대대로 동작하는지, (b) semgrep 블로커를 이미 인지하고 있는지, (c) trajectory export에 필요한 정확한 필드/포맷(4.5절 학습 샘플 구조)을 확인한다 — 이 답을 받아야 아래 6번(trajectory export)을 P4가 실제로 쓸 수 있는 형태로 만들 수 있다.
 

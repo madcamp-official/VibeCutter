@@ -42,6 +42,7 @@ from core.judge import (
     check_static,
     compute_verdict,
 )
+from core.kill_switch import check_not_paused
 from core.state_machine import transition
 from core.trajectory import record_trajectory_step
 from mcp_server.tools_inventory import _service
@@ -183,6 +184,7 @@ def register(mcp: FastMCP) -> None:
         검증 실패로 catalog 전체 로드가 죽어 있었으나, P2가 수정해 checked-in manifest 22개가
         전부 `TargetCatalog.load()`를 통과한다 — 이 tool은 이제 실제 target으로 호출 가능하다.
         """
+        check_not_paused()
         finding = get(Finding, finding_id)
         if finding is None:
             raise ValueError(f"finding {finding_id} not found")
@@ -208,6 +210,7 @@ def register(mcp: FastMCP) -> None:
         내는데, 이때는 RunState를 전이하지 않는다(패치가 없는데 PATCH_PROPOSED로 넘어가지
         않도록) — 실패해도 run은 원래 상태(예: VERIFIED)에 그대로 남는다.
         """
+        check_not_paused()
         finding = get(Finding, finding_id)
         if finding is None:
             raise ValueError(f"finding {finding_id} not found")
@@ -240,6 +243,7 @@ def register(mcp: FastMCP) -> None:
         뒤 `git apply`로 적용한다. RunState는 PATCH_PROPOSED→WAITING_APPROVAL→PATCH_APPLIED로
         전이(이미 PATCH_APPLIED면 재적용하지 않고 그대로 반환 — 재시도 안전).
         """
+        check_not_paused()
         if not confirmed:
             raise PermissionError("vc_apply_patch는 confirmed=True 없이 호출할 수 없습니다")
 
@@ -287,6 +291,7 @@ def register(mcp: FastMCP) -> None:
         `vc_validate_regression`과 공유한다 — 세 tool이 각자 맡은 게이트만 채우고, 6개가
         모두 채워지는 순간 verdict가 확정된다(`_finalize_validation`).
         """
+        check_not_paused()
         patch = get(Patch, patch_id)
         if patch is None:
             raise ValueError(f"patch {patch_id} not found")
@@ -317,6 +322,7 @@ def register(mcp: FastMCP) -> None:
     @audited
     def vc_replay_attack(patch_id: str) -> Validation:
         """Attack gate: 동일 공격이 더 이상 통하지 않는지 재실행한다. P1 배선, P3 verifier 재사용."""
+        check_not_paused()
         patch = get(Patch, patch_id)
         if patch is None:
             raise ValueError(f"patch {patch_id} not found")
@@ -342,6 +348,7 @@ def register(mcp: FastMCP) -> None:
     @audited
     def vc_validate_regression(patch_id: str) -> Validation:
         """Positive functionality gate + Static/Scope gate를 실행한다."""
+        check_not_paused()
         patch = get(Patch, patch_id)
         if patch is None:
             raise ValueError(f"patch {patch_id} not found")
