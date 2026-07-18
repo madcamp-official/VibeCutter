@@ -20,6 +20,7 @@ from collections.abc import Callable
 
 from contracts.schemas import Candidate, Finding, VerificationResult
 from core.evidence_store import get
+from repair.validators import validate_patch
 from verifiers.access_control import verify as verify_access_control
 from verifiers.types import MAX_REQUESTS_DEFAULT
 
@@ -71,23 +72,16 @@ def check_positive_functionality(run_id: str, patch_id: str) -> bool:
 
     **P3 handoff(Plan B)**: 실제 재현·판정은 `repair.validators.validate_patch(run_id,
     patch_id)`에 위임한다 — P3가 attack gate 재확인 + positive functionality 확인을 묶어
-    "judge 없이도 단독 실행 가능한" 실행기로 구현하기로 했다(`verifiers.access_control.verify`를
+    "judge 없이도 단독 실행 가능한" 실행기로 구현했다(D3-P3.md, `verifiers.access_control.verify`를
     judge가 소비하는 것과 같은 패턴: 실제 HTTP 재현/evidence 저장은 P3 모듈이, 여기 judge는
-    그 결과를 bool로 받아 게이트 판정에만 쓴다).
+    그 결과를 bool로 받아 게이트 판정에만 쓴다). P3가 D3에 이 계약(bool, positive만) 그대로
+    구현·재확인했으므로 Day2에 쓰던 지연 import를 걷어내고 `check_attack`과 같은 top-level
+    import로 정리했다.
 
-    **이 함수가 기대하는 계약**: `repair.validators.validate_patch(run_id, patch_id)`는
-    positive functionality 결과를 **bool**로 반환해야 한다(patch가 정상 기능을 깨지 않았으면
-    True). attack gate 결과까지 같이 필요하면 별도 함수로 분리해달라 — 이 게이트는
-    positive_functionality 하나만 판정한다.
-
-    `repair/validators.py`가 아직 docstring뿐이라(Day3 예정) 지금은 import 시점이 아니라
-    호출 시점에 지연 import한다 — `validate_patch`가 아직 없으면 그 사실 그대로
-    `AttributeError`/`ImportError`가 올라간다(다른 게이트의 `NotImplementedError`와 동등한
-    "아직 준비 안 됨" 신호).
+    patch_id → finding → candidate 역추적, 재현, evidence 저장은 전부 `validate_patch()`
+    내부(`repair.validators._candidate_for_patch` + `run_security_validation`)가 한다.
     """
-    from repair import validators
-
-    return validators.validate_patch(run_id, patch_id)
+    return validate_patch(run_id, patch_id)
 
 
 def check_regression(run_id: str, patch_id: str) -> bool:
