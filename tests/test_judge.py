@@ -73,25 +73,27 @@ class RemainingGatesAreStubsTests(unittest.TestCase):
 
 
 class CheckPositiveFunctionalityDelegatesToP3ValidatorsTests(unittest.TestCase):
-    """P3 handoff(Plan B): check_positive_functionality는 repair.validators.validate_patch()에
-    위임한다. `repair/validators.py`가 아직 docstring뿐이라 실제 함수는 없으므로, P3가
-    구현했을 때를 가정해 `create=True`로 임시 attribute를 만들어 배선만 검증한다.
+    """P3 handoff(Plan B, D3-P3.md): check_positive_functionality는 이제 실제로 구현된
+    `repair.validators.validate_patch()`에 top-level import로 위임한다(D3에 P3가 계약대로
+    맞춰 구현 완료). `core.judge`가 `from repair.validators import validate_patch`로 이름을
+    직접 바인딩해서 patch 대상은 origin(`repair.validators.validate_patch`)이 아니라
+    `core.judge.validate_patch`여야 한다.
     """
 
     def test_delegates_to_repair_validators_validate_patch(self) -> None:
-        with patch("repair.validators.validate_patch", create=True, return_value=True) as mock_fn:
+        with patch("core.judge.validate_patch", return_value=True) as mock_fn:
             self.assertTrue(check_positive_functionality("run-x", "patch-x"))
         mock_fn.assert_called_once_with("run-x", "patch-x")
 
     def test_propagates_false_from_validate_patch(self) -> None:
-        with patch("repair.validators.validate_patch", create=True, return_value=False):
+        with patch("core.judge.validate_patch", return_value=False):
             self.assertFalse(check_positive_functionality("run-x", "patch-x"))
 
-    def test_raises_clearly_while_p3_has_not_implemented_it_yet(self) -> None:
-        # 현재 repair/validators.py엔 validate_patch가 실제로 없다 — mock 없이 호출하면
-        # 다른 스텁 게이트의 NotImplementedError와 동등한 "아직 준비 안 됨" 신호가 와야 한다.
-        with self.assertRaises(AttributeError):
-            check_positive_functionality("run-x", "patch-x")
+    def test_unknown_patch_id_raises_value_error(self) -> None:
+        # repair.validators.validate_patch가 이제 실제로 존재한다 — 존재하지 않는 patch_id는
+        # (mock 없이) 그 실제 구현이 ValueError로 거부한다.
+        with self.assertRaises(ValueError):
+            check_positive_functionality("run-x", "patch-does-not-exist")
 
 
 if __name__ == "__main__":

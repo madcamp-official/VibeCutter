@@ -152,18 +152,21 @@
 
 - [ ] **6개 judge 게이트 전체 구현**:
    - [ ] Build gate: P2 adapter의 build 결과 확인
-   - [ ] Attack gate: 기존 재현 시퀀스가 더 이상 보안 영향 없음
-   - [x] ~~Positive functionality gate: 정상 권한 사용자 기능 성공~~ **Day2에 앞당겨 배선 완료** — P3의 Notion "Plan B" handoff 요청에 따라 `core/judge.py:check_positive_functionality()`가 `repair.validators.validate_patch(run_id, patch_id) -> bool`에 위임하도록 미리 고정했다(지연 import, `repair/validators.py`가 아직 docstring뿐이라 지금 호출하면 `AttributeError` — 다른 스텁과 동등한 "미구현" 신호). **계약**: `validate_patch()`는 positive functionality 결과만 bool로 반환해야 한다(attack gate 결과는 이미 `check_attack()`이 별도로 담당). P3가 실제로 구현하면(오늘 예정) 이 위임은 코드 변경 없이 바로 동작한다 — `tests/test_judge.py`에 mock으로 배선만 미리 검증해둠(3건).
+   - [x] ~~Attack gate: 기존 재현 시퀀스가 더 이상 보안 영향 없음~~ **Day2 섹션 3에서 이미 실동작 완료** — `check_attack()`이 `verifiers.access_control.verify()`를 재호출해 `verified=False`를 확인. 그대로 유효.
+   - [x] ~~Positive functionality gate: 정상 권한 사용자 기능 성공~~ **완료(D3)** — Day2엔 지연 import로 배선만 해뒀는데, 오늘 P3가 D3-P3.md에서 `repair/validators.py:validate_patch(run_id, patch_id) -> bool`을 계약대로 실제 구현·재확인했다고 알려와 `core/judge.py`를 top-level import로 정리했다(`check_attack`과 같은 패턴). `tests/test_judge.py`도 mock 대상을 `core.judge.validate_patch`로, 미구현 케이스를 "존재하지 않는 patch_id → ValueError"(실제 구현이 내는 에러)로 갱신.
    - [ ] Regression gate: 기존 test suite 통과 (P2 test runner 호출)
    - [ ] Static gate: 새 high severity finding/secret 없음 (P4의 Semgrep 결과 재확인)
    - [ ] Scope gate: **패치가 target worktree 밖 파일을 변경하지 않음** — 이건 절대 원칙(10.1절)과 직결되므로 가장 엄격하게 구현.
 - [ ] **`vc_generate_patch`와 `vc_apply_patch`를 별도 도구로 명확히 분리**. generate는 원본 미변경, apply는 **explicit user confirmation 필수** + **git worktree에만 적용** (원본 branch 직접 변경 금지 — 절대 원칙). 이 분리 자체가 Definition of Done 핵심 항목이다.
 - [ ] 모든 게이트 통과 시 Finding 상태를 `fixed`로, 하나라도 실패 시 `RETRY`/`HUMAN_REVIEW`로 전이하는 로직 완성.
 - [ ] Report 인프라 착수: `vc_generate_report`용 데이터 조합 로직 (P4가 Day3에 HTML/SARIF export를 만들 예정이므로, 그 전에 report가 참조할 데이터 소스(finding+evidence+patch+validation 조인)를 오늘 준비).
+- [x] **`vc_localize_root_cause` 배선 완료** (D3-P3.md 요청, 원래 계획엔 없던 항목인데 P3가 `repair/locator.py`를 오늘 실제 구현하면서 요청): `mcp_server/tools_repair.py`가 `finding_id → Finding → Run → target(catalog) → source_root(manifest.source_dir)`를 조회해 `repair.locator.localize(finding, source_root=...)`를 호출. **Day2 섹션 1의 P2 manifest 블로커가 여기도 그대로 전파**된다 — `_service()`가 catalog 전체를 로드하다 3개 깨진 manifest에서 죽으므로, 그 블로커가 안 풀리면 이 tool도 어떤 target으로도 못 돈다. 테스트(`tests/test_localize_root_cause.py`, 3건)는 `_service()`를 mock으로 대체해 배선 로직만 검증.
+- [ ] **P3 제안(설계 판단, 아직 미결)**: judge가 6게이트를 다 돌리면 `check_attack`(verify 1회) + `check_positive_functionality`(validators 내부 재현 1회) = 사실상 같은 IDOR 시퀀스를 2번 재현한다. P3는 `repair.validators.run_security_validation()` 하나로 attack+positive를 한 번에 뽑을 수 있다고 제안(D3-P3.md). **보류 이유**: 이걸 제대로 하려면 "패치된 인스턴스를 누가 어떤 base_url로 띄우는가"(P2 worktree 전제, 아직 미확정)가 먼저 정해져야 한다 — 지금 손대면 추측으로 설계하게 된다. `check_build`/`check_regression`과 함께 worktree 통합 시점에 재검토.
 
 ### 오늘 커뮤니케이션
-- [ ] **P3에게**: 첫 IDOR closed-loop 완주 시점에 맞춰 judge가 실제로 verdict를 내는지 함께 확인 (P3 완료 기준 "IDOR closed-loop 완주"와 내 게이트 완성이 같은 날 맞물림 — 반드시 오후에 한 번 실제 target으로 end-to-end 리허설).
-- [ ] **P2에게**: regression suite 배선(P2 오늘 작업)과 내 Regression gate 연동 확인. snapshot rollback이 patch apply 실패 시 정상 복구되는지 함께 테스트.
+- [ ] **P3에게**: (a) `check_positive_functionality`가 top-level import로 정리됐고 계약(bool, positive만) 그대로 잘 붙는 것 확인 요청. (b) `vc_localize_root_cause` 배선 완료 알림 — 단, P2 manifest 블로커가 풀려야 실제 target으로 호출 가능하다는 것 공유. (c) 2회 재현 최적화(`run_security_validation()` 통합)는 worktree/패치 인스턴스 전제가 정해질 때까지 보류하기로 결정했다고 회신. (d) 그 외 헤드업 3건(RootCause 얇음/`redact()` 제거 시점 Day5/`attack_params` 마이그레이션은 patcher 이후) 전부 확인, 지금은 대응 불필요.
+- [ ] **P3에게**: 첫 IDOR closed-loop 완주 시점에 맞춰 judge가 실제로 verdict를 내는지 함께 확인 (P3 완료 기준 "IDOR closed-loop 완주"와 내 게이트 완성이 같은 날 맞물림 — 반드시 오후에 한 번 실제 target으로 end-to-end 리허설). **patcher.py만 남았으므로 그게 나오는 대로 바로 리허설 가능.**
+- [ ] **P2에게**: regression suite 배선(P2 오늘 작업)과 내 Regression gate 연동 확인. snapshot rollback이 patch apply 실패 시 정상 복구되는지 함께 테스트. `WorktreeManager.create(run_id)`가 대상 앱 repo 기준인지(P3가 D3-P3.md에서 재확인 요청) 답변 요청.
 - [ ] **P4에게**: report가 참조할 evidence/finding 스키마가 안정화됐음을 알리고, P4의 report 생성 코드가 이 스키마를 그대로 소비하도록 조정.
 - [ ] 교차 리뷰 원칙(Notion 리스크 표): Infra(P2)와 Judge(P1이 배선하지만 실질 판정 로직은 P3와 공동)는 서로 다른 사람이 리뷰 — 내 judge 게이트 구현을 P3 또는 P2에게 리뷰 요청해 self-confirmation 오류를 줄인다.
 
