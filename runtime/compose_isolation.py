@@ -26,15 +26,24 @@ class ComposeIsolationReport(BaseModel):
 class ComposeIsolationInspector:
     """Reads only a checked-in compose file; it never starts Docker or a container."""
 
-    def __init__(self, manifest: TargetManifest, repository_root: Path) -> None:
+    def __init__(
+        self,
+        manifest: TargetManifest,
+        repository_root: Path,
+        *,
+        compose_path: Path | None = None,
+    ) -> None:
         self.manifest = manifest
         self.repository_root = repository_root.resolve()
+        self.compose_path = compose_path.resolve() if compose_path is not None else None
 
     def inspect(self) -> ComposeIsolationReport:
         spec = self.manifest.docker_isolation
         if spec is None:
             return ComposeIsolationReport(status="not_configured")
-        compose_path = _resolve_within_root(self.repository_root, spec.compose_file)
+        compose_path = self.compose_path or _resolve_within_root(self.repository_root, spec.compose_file)
+        if compose_path != self.repository_root and self.repository_root not in compose_path.parents:
+            raise ValueError("compose file escapes repository root")
         if not compose_path.is_file():
             return ComposeIsolationReport(status="missing_file", compose_file=str(compose_path))
         try:
