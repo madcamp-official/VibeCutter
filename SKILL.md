@@ -61,24 +61,24 @@
 ## 표준 절차
 
 1. `vc_register_target` → `vc_check_readiness` → `vc_build_target` → `vc_start_target`
-2. `vc_map_routes` / `vc_map_roles` / `vc_index_code`로 attack surface 매핑 — **알려진
-   격차**: 이 tool 세 개는 아직 `NotImplementedError`고, Run을 `READY`→`MAPPING`으로
-   옮기는 다른 tool도 없다. 즉 지금은 Host가 tool 호출만으로는 이 단계를 통과할 방법이
-   없다(`vc_run_sast`/`vc_run_sca`는 Run이 이미 `MAPPING` 또는 `CANDIDATE_SCAN`이어야
-   호출된다). 실제 사용 전까지는 P1/P3가 이 gap을 메워야 한다 — mapping tool을
-   구현하거나, `vc_build_target`/`vc_start_target` 뒤에 자동으로 `CANDIDATE_SCAN`까지
-   전이하는 경로를 추가해야 한다. IDOR 후보 자동 탐지 로직 자체(`surface.graph.find_idor_suspects`)는
-   이미 구현돼 있으니, 남은 건 tool 배선이다.
-3. `vc_run_sast` / `vc_run_sca`(+가능하면 `vc_run_secret_scan` / `vc_browser_crawl`)로 candidate 생성
-4. 각 candidate를 `vc_verify_access_control` / `vc_verify_injection` / `vc_verify_xss` 중
+2. candidate 생성: `vc_scan_access_control`(IDOR/BOLA — attack-surface 프리필터
+   `surface.graph.find_idor_suspects` + P2 provisioning을 합쳐 검증 가능한 candidate를
+   만든다, `docs/VERIFIER_BATCH_INTERFACE.md`) / `vc_run_sast` / `vc_run_sca`(+가능하면
+   `vc_run_secret_scan` / `vc_browser_crawl`)를 호출한다. 셋 다 target이 `READY`여도
+   바로 호출 가능하다 — `_prepare_scan()`이 내부적으로 `MAPPING`→`CANDIDATE_SCAN`을
+   자동으로 거친다(Day4에 닫음). `vc_map_routes`/`vc_map_roles`/`vc_index_code`는 여전히
+   `NotImplementedError`이므로 부르지 않는다. `vc_scan_access_control`이 candidate 없이
+   `blocked`만 반환하면(provisioning 미비) candidate를 억지로 만들지 않고 사유를
+   보고한다.
+3. 각 candidate를 `vc_verify_access_control` / `vc_verify_injection` / `vc_verify_xss` 중
    맞는 것으로 `approved=True`를 명시해 재현 검증 — **현재 구현 상태**: Access Control
    (IDOR)만 실제로 동작한다. Injection/XSS는 정책·승인·상태 전이까지는 배선돼 있지만
    verifier 본문이 아직 `NotImplementedError`다(이 파일 갱신 시점 기준, P3 소유 작업).
-5. verified finding마다 `vc_localize_root_cause` → `vc_generate_patch`
-6. **사용자 승인 후** `vc_apply_patch(confirmed=True)`
-7. `vc_build_and_test` → `vc_replay_attack` → `vc_validate_regression`
-8. verdict가 `retry`면 5번으로 돌아간다(최대 3회, 규칙 6 참고)
-9. 종료 시 필요하면 `vc_kill_run`으로 정리
+4. verified finding마다 `vc_localize_root_cause` → `vc_generate_patch`
+5. **사용자 승인 후** `vc_apply_patch(confirmed=True)`
+6. `vc_build_and_test` → `vc_replay_attack` → `vc_validate_regression`
+7. verdict가 `retry`면 4번으로 돌아간다(최대 3회, 규칙 6 참고)
+8. 종료 시 필요하면 `vc_kill_run`으로 정리
 
 ## 출력 형식
 
