@@ -77,7 +77,7 @@ P2는 기존 runtime/provisioning 소유권을 유지하면서 아래 5개의 au
 | ---: | --- | ---: | --- |
 | 1 | `26s-w1-c2-01` | 12 | ephemeral DB password로 기동 후 signup→login two-role 계약 확인. 현재 bearer verifier는 가입 응답 토큰형만 지원하므로 login-path 확장 또는 fixture contract 뒤 Candidate/verify |
 | 2 | `26s-w1-c2-02` | 1 | **실행 완료(후속 계약 대기)**: `run-7ec9f46e4519` build PASS, access-control scan Candidate 0 / `fixture_contract_required` blocked. 현재 후보는 path-id 없는 leaderboard aggregate라 live fixture 뒤 scoped clean 또는 evidence로 확정 |
-| 3 | `26s-w1-c1-06` | 1 | IDOR suspect 검증, XSS 후보는 미지원 verifier blocker를 별도 기록 |
+| 3 | `26s-w1-c1-06` | 1 | **실행 완료(후속 계약 대기)**: `run-a1498e9a2489` build PASS, Candidate 0 / `fixture_contract_required` blocked. `/api/demo/settle`은 unprotected demo endpoint라 P3가 auth-none 또는 bearer resource verifier 계약을 지정해야 함 |
 | 4 | `26s-w1-c1-07` | 5 | Google OAuth + process-local memory session이라 DB seed만으로 재현 불가. trusted test-login/session-fixture 계약이 생기기 전까지 blocked 근거를 남김 |
 | 5 | `26s-w1-c1-03` | 0 | SAST/SCA와 검토 범위를 결합한 scoped clean 또는 다른 class Candidate 기록 |
 
@@ -126,7 +126,8 @@ tool 호출 진행, 결과·blocker 기록을 맡는다.
    저장하지 않는다. 기존 Docker volume을 비우는 reset은 별도 승인 뒤에만 실행한다.
 3. P3 bearer bridge에 선언형 signup payload와 선택 login(`login_path` 등) 계약이 추가되면
    `c2-01`을 첫 P2 audit target으로 실행하고 Candidate/evidence/blocked 결과를 handoff에 기록한다.
-4. 같은 방식으로 `c2-02 → c1-06 → c1-07 → c1-03` 순서로 진행한다.
+4. 같은 계약으로 `c2-02`와 `c1-06`을 재개한다. `c1-07`은 trusted test-login/session fixture,
+   `c1-03`은 existing-account fixture와 SAST/SCA clean scope를 별도로 준비한다.
 
 ## Handoff 최소 필드
 
@@ -152,4 +153,7 @@ P2의 첫 두 대상은 현재 bearer verifier가 가정한 고정 `{name,email,
 필요하며, `c2-02`는 `POST /api/auth/signup`이 `{username,password}` body와 `accessToken`을 사용합니다.
 target별 하드코딩 대신 bearer probe에 선언형 `signup_payload`과 선택 `login_path`/`login_payload` 계약을
 추가해 주세요. P2는 각 target의 endpoint·field·token key를 제공하고, 그 커밋 뒤 self-signup runtime으로
-Candidate→verify batch를 돌리겠습니다.
+Candidate→verify batch를 돌리겠습니다. 추가로 `c1-06`은 `/api/auth/signup`의
+`{email,password,nickname}` body에서 `token`을 즉시 반환하고, prefilter endpoint `/api/demo/settle`은
+인증 미들웨어가 없습니다. 이 endpoint를 auth-none 상태 변경 검증으로 다룰지, 두 계정/resource fixture가
+필요한 IDOR verifier로 다룰지 P3 contract를 지정해 주세요.

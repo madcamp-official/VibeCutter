@@ -107,6 +107,11 @@ scoped clean/blocked 결과를 만드는 것이다.
   `.vibecutter/trajectories/run-7ec9f46e4519.jsonl`에 `fixture_contract_required` / `인증/seed 방식 미확정`
   blocked 사유가 남았다. 이는 endpoint만 보고 임의 요청을 보내지 않은 정상 결과다. P3의 선언형 bearer
   계약 뒤 P2가 self-signup provisioning override를 추가하면 같은 target을 live scope로 재개한다.
+- `c1-06` source/batch: `/api/auth/signup`은 `{email,password,nickname}`에서 `token`을 즉시 반환한다.
+  `run-a1498e9a2489`의 manifest register/Docker build는 PASS했고, access-control scan은 Candidate 0과
+  `fixture_contract_required` blocked를 trajectory에 남겼다. 유일한 prefilter는 `/api/demo/settle`이며
+  `promiseId`를 받지만 인증 미들웨어가 없다. P3가 auth-none state-change 또는 two-role resource verifier
+  중 적용할 contract를 지정하면 P2가 같은 local runtime으로 재개한다.
 - `c1-07` source preflight: 유일한 login은 Google ID-token을 검증하는 `/api/auth/google`이며 성공 시
   `mp_session` opaque cookie를 서버 메모리 `Map`에 생성한다. seed는 game/score data만 만들고 user를
   만들지 않는다. 따라서 DB seed만으로는 role fixture를 만들 수 없고, P2가 임의 OAuth 우회나 세션 주입을
@@ -128,5 +133,8 @@ P2 첫 두 target은 고정 `{name,email,password}` signup 가정과 다르다. 
 `accessToken`을 받는다. target별 하드코딩 대신 bearer probe에 선언형 `signup_payload`과 선택
 `login_path`/`login_payload` 계약을 추가해 달라. P2는 endpoint·field·token key를 제공하고,
 그 뒤 self-signup runtime으로 Candidate→verify를 실행한다.
+추가로 `c1-06`은 signup payload `{email,password,nickname}`, token key `token`이며 `/api/demo/settle`
+후보는 인증 없이 `promiseId`를 받는다. 이 endpoint의 intended verifier mode(auth-none state change vs
+two-role resource replay)를 contract로 지정해 달라.
 - Semgrep의 Python 3.14 호환 실패는 P2 runtime 문제가 아니다. 팀의 실행 기준을 3.11 또는 3.12로
   통일해야 P4 static gate와 P1 final judge가 안정적으로 동작한다.
