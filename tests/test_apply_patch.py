@@ -54,10 +54,15 @@ class VcApplyPatchWiringTests(unittest.TestCase):
         """
         fake_service = MagicMock()
         fake_service.catalog.worktree_manager_for.return_value = self.worktree_manager
-        fake_service.catalog.source_root_for.return_value = (self.repo_root / source_subdir).resolve()
-        fake_service.catalog.source_repository_for.return_value = self.repo_root.resolve()
+        source_relative = Path(source_subdir)
+        source_root = self.repo_root if source_subdir == "." else self.repo_root / source_relative
+        # source_dir == repo root in default fixtures: no --directory prefix needed.
+        fake_service.catalog.source_root_for.return_value = source_root
+        fake_service.catalog.source_repository_for.return_value = self.repo_root
         fake_service.catalog.run_source_root_for.side_effect = (
-            lambda target_id, run_id: (self.worktree_manager.path_for(run_id) / source_subdir).resolve()
+            lambda _target_id, run_id: self.worktree_manager.path_for(run_id)
+            if source_subdir == "."
+            else self.worktree_manager.path_for(run_id) / source_relative
         )
         return fake_service
 
@@ -124,7 +129,7 @@ class VcApplyPatchWiringTests(unittest.TestCase):
         )
         p = self._patch(run.id, diff)
 
-        fake_service = self._fake_service(source_subdir="backend/server")
+        fake_service = self._fake_service("backend/server")
 
         with patch("mcp_server.tools_repair._service", return_value=fake_service):
             self._call({"patch_id": p.id, "confirmed": True})

@@ -160,8 +160,8 @@ def check_build(run_id: str, patch_id: str) -> bool:
 
     source-native target(Gradle/npm처럼 `working_dir` override 없이 그냥 소스 디렉터리에서
     도는 build)은 여전히 `runtime.test_runner.RunScopedTestRunner`(P2)가 test suite에 쓰는
-    것과 같은 패턴 — manifest의 `source_dir`를 worktree 자신을 가리키는 `"."`로 바꿔서
-    (`model_copy`) build command를 worktree 안에서 직접 재실행한다. 현재 checked-in manifest
+    것과 같은 패턴 — manifest의 `source_dir`를 run source root 자신을 가리키는 `"."`로 바꿔서
+    (`model_copy`) build command를 patched source root 안에서 직접 재실행한다. 현재 checked-in manifest
     22개가 전부 `docker_isolation`을 선언하므로 이 분기에는 아직 repoint가 없다 — 그런
     target이 생기면 같은 패턴(원본 stop → worktree 기준 start → health)을 추가해야 한다.
     """
