@@ -53,7 +53,7 @@ scoped clean/blocked 결과를 만드는 것이다.
 
 ## 검증
 
-- 전체 회귀 139건 PASS. 이 중 P2 관련 항목은 checked-in manifests, catalog, overlay,
+- 최신 main 통합 후 전체 회귀 174건 PASS. 이 중 P2 관련 항목은 checked-in manifests, catalog, overlay,
   worktree test runner, target service, portability, lifecycle, readiness, apply-patch 연동을
   포함하며, 새 provisioning registry/MCP tool/fixture approval 경로도 포함한다.
 - `vc_get_verifier_provisioning(26s-w1-c2-04)` 실제 MCP read 호출이
@@ -74,11 +74,9 @@ scoped clean/blocked 결과를 만드는 것이다.
 
 ## 다른 역할에 필요한 사항
 
-- P1/P3: `vc_map_routes`/`vc_map_roles`/`vc_index_code`가 아직 스텁이라 MCP tool만으로
-  `READY → MAPPING → CANDIDATE_SCAN`을 통과할 수 없다. P3가 제공한
-  `candidates_for_target(run_id, provisioning, source_root)`을 P1 mapping/scan tool에 배선할 것.
-- P1: overlay build, kill/reset, retry budget 연결은 최신 main에서 완료됐다. P1 배정 5개에도
-  동일한 audit prompt/tool 흐름을 실행하고 target별 결과를 남길 것.
+- P1: 최신 main의 `vc_scan_access_control`은 P3 bridge를 배선하고 `READY → MAPPING → CANDIDATE_SCAN`
+  전이, Candidate 저장, blocked trajectory 기록을 수행한다. overlay build, kill/reset, retry budget과
+  함께 report/judge 단계가 실제 batch 결과를 끝까지 소비하는지만 통합 시 확인할 것.
 - P3: 공용 verifier/candidate 모듈을 유지하면서 P3 배정 8개를 실행하고, P2/P1 실행 중 발견되는
   공용 verifier·인증 모드 문제만 모듈 소유자로서 보완할 것.
 - P4: P1 judge가 확정한 verified/fixed evidence만 trajectory에 수집할 것. GPU 학습은 이 라벨된
@@ -98,21 +96,37 @@ scoped clean/blocked 결과를 만드는 것이다.
   `/api/v1/auth/login`이 `access_token`을 반환한다. 현재 P3 bearer verifier는 signup response에서
   token을 찾는 `c1-05` 형태만 지원하므로, local process DB password로 runtime을 준비한 뒤에도
   P3의 login-path bearer 확장 또는 동등한 fixture contract가 있어야 Candidate 검증을 시작할 수 있다.
+- `c2-01` MCP register/build는 통과했지만 기존 Docker database volume이 이전 비밀번호로 초기화되어
+  schema migration이 `InvalidPasswordError`로 실패했다. 새 process-local 비밀번호로 재현하려면
+  `vc_reset_target(..., approved=True)`가 필요하며, 승인 전에는 해당 local volume을 보존한다.
+- `c2-02` source preflight: `/api/auth/signup`은 `{username,password}`와 `accessToken`을 반환한다.
+  프리필터 1건은 path-id가 없는 authenticated leaderboard aggregate(`GET /`)라 현재는 false positive
+  후보로 분류했다. runtime reset/기동 뒤 scoped clean 또는 evidence로 확정한다.
+- `c2-02` 실행 batch: `run-7ec9f46e4519`에서 manifest register와 Docker build가 PASS했고,
+  `vc_scan_access_control`은 `READY → MAPPING → CANDIDATE_SCAN`으로 전이했다. Candidate는 0개이며
+  `.vibecutter/trajectories/run-7ec9f46e4519.jsonl`에 `fixture_contract_required` / `인증/seed 방식 미확정`
+  blocked 사유가 남았다. 이는 endpoint만 보고 임의 요청을 보내지 않은 정상 결과다. P3의 선언형 bearer
+  계약 뒤 P2가 self-signup provisioning override를 추가하면 같은 target을 live scope로 재개한다.
+- `c1-07` source preflight: 유일한 login은 Google ID-token을 검증하는 `/api/auth/google`이며 성공 시
+  `mp_session` opaque cookie를 서버 메모리 `Map`에 생성한다. seed는 game/score data만 만들고 user를
+  만들지 않는다. 따라서 DB seed만으로는 role fixture를 만들 수 없고, P2가 임의 OAuth 우회나 세션 주입을
+  하지 않는다. trusted local test-login 또는 session-fixture 계약이 생기기 전에는 이 target을
+  `fixture_contract_required` blocked로 남긴다.
 
 ## P1/P3 전달 메시지
 
 ### P1
 
-`candidates_for_target(run_id, provisioning, source_root)`가 최신 main에 들어왔다. `vc_map_routes` 또는
-새 access-control scan에서 이 함수를 호출해 Candidate를 저장하고 `READY → MAPPING → CANDIDATE_SCAN`을
-실제로 전이해 달라. `res.blocked`는 P2 fixture 준비/계약 요청으로 기록하면 된다. P2는 `c2-01` runtime을
-준비 중이며 배선 직후 첫 공동 batch를 실행한다.
+최신 main의 `vc_scan_access_control` 배선(bridge 호출, `READY → MAPPING → CANDIDATE_SCAN`, Candidate 저장,
+blocked trajectory 기록)을 확인했다. P2는 `c2-02`부터 실제 batch 결과를 남긴다. P1은 이 결과가 report/judge
+단계에서 누락되지 않는지만 통합 시 확인해 달라.
 
 ### P3
 
-`c2-01`은 `POST /api/v1/auth/signup`이 id만, `POST /api/v1/auth/login`이 `access_token`을 반환한다.
-bearer verifier에 optional `login_path` 흐름을 추가하고 `_SELF_SIGNUP_HINTS`에
-`/api/v1/auth/signup`, `/api/v1/auth/login`, `access_token`을 등록해 달라. P2는 그 뒤
-`self_signup/bearer` provisioning override와 local runtime으로 Candidate→verify를 실행한다.
+P2 첫 두 target은 고정 `{name,email,password}` signup 가정과 다르다. `c2-01`은 signup 뒤
+`/api/v1/auth/login`으로 `access_token`을 받고, `c2-02`는 `{username,password}` signup에서
+`accessToken`을 받는다. target별 하드코딩 대신 bearer probe에 선언형 `signup_payload`과 선택
+`login_path`/`login_payload` 계약을 추가해 달라. P2는 endpoint·field·token key를 제공하고,
+그 뒤 self-signup runtime으로 Candidate→verify를 실행한다.
 - Semgrep의 Python 3.14 호환 실패는 P2 runtime 문제가 아니다. 팀의 실행 기준을 3.11 또는 3.12로
   통일해야 P4 static gate와 P1 final judge가 안정적으로 동작한다.

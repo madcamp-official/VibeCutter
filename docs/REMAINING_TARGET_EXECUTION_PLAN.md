@@ -26,11 +26,10 @@ Candidate·evidence 또는 범위가 명시된 clean/blocked 결과를 만든다
 - P3: `candidates_for_target()` 단일 진입점으로 `find_idor_suspects()`와 strategy-aware
   `build_candidates()`를 묶었다. P1은 target source와 P2 provisioning만 넘기면 typed Candidate 또는
   provisioning blocker를 받을 수 있다.
-- 현재 남은 공통 연결점: `audit_local_target`은 실행 함수가 아니라 Host 호출 순서를 안내하는
-  prompt다. `vc_map_routes`/`vc_map_roles`/`vc_index_code`가 아직 스텁이라 MCP tool만으로
-  `READY → MAPPING → CANDIDATE_SCAN`을 통과할 수 없다. P3는 단일 후보 진입점을 제공했으며,
-  P1이 이를 mapping/scan tool에 배선하기 전까지
-  직접 Python prefilter 결과는 준비 자료일 뿐 최종 batch 완료로 계산하지 않는다.
+- P1: 최신 main의 `vc_scan_access_control`이 위 bridge를 실제 배선한다. run이 `READY`이면
+  `MAPPING → CANDIDATE_SCAN`을 거쳐 Candidate를 evidence store에 저장하고, fixture 계약이 없으면
+  blocked 사유를 trajectory에 저장한다. `vc_map_*` 도구는 여전히 스텁이지만 access-control batch를
+  시작하는 데에는 더 이상 blocker가 아니다.
 - Access-control(IDOR) verifier는 동작한다. XSS/Injection verifier는 아직 미구현이므로 해당
   후보는 unsupported blocker와 필요한 verifier contract를 기록한다.
 
@@ -77,9 +76,9 @@ P2는 기존 runtime/provisioning 소유권을 유지하면서 아래 5개의 au
 | 우선순위 | target_id | prefilter | P2 실행 계획 |
 | ---: | --- | ---: | --- |
 | 1 | `26s-w1-c2-01` | 12 | ephemeral DB password로 기동 후 signup→login two-role 계약 확인. 현재 bearer verifier는 가입 응답 토큰형만 지원하므로 login-path 확장 또는 fixture contract 뒤 Candidate/verify |
-| 2 | `26s-w1-c2-02` | 1 | existing self-signup을 두 역할로 준비 후 Candidate/verify |
+| 2 | `26s-w1-c2-02` | 1 | **실행 완료(후속 계약 대기)**: `run-7ec9f46e4519` build PASS, access-control scan Candidate 0 / `fixture_contract_required` blocked. 현재 후보는 path-id 없는 leaderboard aggregate라 live fixture 뒤 scoped clean 또는 evidence로 확정 |
 | 3 | `26s-w1-c1-06` | 1 | IDOR suspect 검증, XSS 후보는 미지원 verifier blocker를 별도 기록 |
-| 4 | `26s-w1-c1-07` | 5 | Google OAuth 제약을 DB seed/session fixture로 풀 수 있는지 확인 후 verify 또는 blocked |
+| 4 | `26s-w1-c1-07` | 5 | Google OAuth + process-local memory session이라 DB seed만으로 재현 불가. trusted test-login/session-fixture 계약이 생기기 전까지 blocked 근거를 남김 |
 | 5 | `26s-w1-c1-03` | 0 | SAST/SCA와 검토 범위를 결합한 scoped clean 또는 다른 class Candidate 기록 |
 
 위 수치는 최신 main의 `find_idor_suspects()`를 P2 로컬 source에 읽기 전용으로 실행한 결과다.
@@ -120,12 +119,12 @@ tool 호출 진행, 결과·blocker 기록을 맡는다.
 
 ## 바로 다음 작업
 
-1. P1은 `candidates_for_target(run_id, provisioning, source_root)`을 mapping/scan tool에 배선해
-   Candidate 저장과 `READY → MAPPING → CANDIDATE_SCAN` 상태 전이를 닫는다.
-2. P2는 병렬로 `c2-01`에 process-local DB password를 주입해 build/start하고, `/api/v1/auth/signup`
+1. P2는 `c2-02`의 `fixture_contract_required`를 보존한다. P3의 선언형 bearer 계약이 들어오면
+   self-signup provisioning override를 추가해 live scope 확인을 재개한다.
+2. P2는 `c2-01`에 process-local DB password를 주입해 build/start하고, `/api/v1/auth/signup`
    → `/api/v1/auth/login`의 two-role 계약과 resource 생성 경로를 확인한다. 값·token은 파일·evidence에
-   저장하지 않는다.
-3. P3 bearer bridge에 signup 뒤 login으로 `access_token`을 받는 계약(`login_path` 등)이 추가되면
+   저장하지 않는다. 기존 Docker volume을 비우는 reset은 별도 승인 뒤에만 실행한다.
+3. P3 bearer bridge에 선언형 signup payload와 선택 login(`login_path` 등) 계약이 추가되면
    `c2-01`을 첫 P2 audit target으로 실행하고 Candidate/evidence/blocked 결과를 handoff에 기록한다.
 4. 같은 방식으로 `c2-02 → c1-06 → c1-07 → c1-03` 순서로 진행한다.
 
@@ -142,19 +141,15 @@ tool 호출 진행, 결과·blocker 기록을 맡는다.
 
 ### P1에게
 
-`surface.candidates.candidates_for_target(run_id, provisioning, source_root)`가 최신 main에 들어왔습니다.
-`vc_map_routes`/새 access-control scan 중 한 곳에서 이 함수를 호출해 Candidate를 evidence store에 저장하고,
-`READY → MAPPING → CANDIDATE_SCAN` 상태 전이를 실제로 연결해 주세요. 지금은 mapping tool이 스텁이라
-`audit_local_target` prompt가 step 3에서 멈춥니다. `res.blocked`는 P2 fixture 준비 또는 계약 요청으로
-기록하면 됩니다. P2는 첫 대상 `c2-01` runtime/provisioning을 준비 중이며, 배선이 들어오면 즉시 이
-target으로 첫 공동 batch를 실행하겠습니다.
+최신 main의 `vc_scan_access_control` 배선을 확인했습니다. P2는 `c2-02`부터 실제 tool 호출로
+Candidate 또는 provisioning blocker를 trajectory에 남기겠습니다. P1은 이 경로의 결과가 report/judge
+단계에서 누락되지 않는지만 통합 시 확인해 주세요.
 
 ### P3에게
 
-P2 첫 대상 `26s-w1-c2-01`의 인증 계약을 확인했습니다. 가입은 `POST /api/v1/auth/signup`이고 id만
-반환하며, attacker JWT는 `POST /api/v1/auth/login` 응답의 `access_token`에 있습니다. 현재 bearer
-verifier는 signup response에서 token을 찾으므로 이 target에서 실패합니다. bearer probe에 선택
-`login_path`(및 필요 시 login body field) 지원을 추가하고 `_SELF_SIGNUP_HINTS`에
-`signup_path=/api/v1/auth/signup`, `login_path=/api/v1/auth/login`, `token_key=access_token`을 등록해
-주세요. P2는 그 커밋 뒤 `self_signup/bearer` provisioning override와 local runtime을 제공해 실제
+P2의 첫 두 대상은 현재 bearer verifier가 가정한 고정 `{name,email,password}` signup body와 다릅니다.
+`c2-01`은 `POST /api/v1/auth/signup`이 id만 반환하고 `POST /api/v1/auth/login`의 `access_token`이
+필요하며, `c2-02`는 `POST /api/auth/signup`이 `{username,password}` body와 `accessToken`을 사용합니다.
+target별 하드코딩 대신 bearer probe에 선언형 `signup_payload`과 선택 `login_path`/`login_payload` 계약을
+추가해 주세요. P2는 각 target의 endpoint·field·token key를 제공하고, 그 커밋 뒤 self-signup runtime으로
 Candidate→verify batch를 돌리겠습니다.
