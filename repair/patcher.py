@@ -125,7 +125,11 @@ def _find_method_span(text: str, method_name: str) -> tuple[int, int, int] | Non
         brace_open = text.find("{", paren_close)
         if brace_open == -1:
             continue
-        # ')'와 '{' 사이에 다른 '(' 없어야(선언부가 맞는지) — throws 절 등은 허용
+        # 메서드 '선언'만 채택한다: ')' 다음이 (throws 절 옵션) '{'여야 한다. 같은 이름의 '호출부'
+        # (예: getMyProfile 안의 `service.getProfile(...)`)는 ')' 뒤에 다른 코드가 와서 걸러진다.
+        between = text[paren_close + 1 : brace_open].strip()
+        if between and not between.startswith("throws"):
+            continue
         return paren_open, paren_close, brace_open
     return None
 
