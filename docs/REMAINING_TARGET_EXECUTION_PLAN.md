@@ -1,92 +1,160 @@
 # Remaining Target Execution Plan
 
+## 이 배분의 의미
+
+P1/P2/P3의 기존 코드 소유권은 바꾸지 않는다.
+
+| 공통 기능 | 소유자 |
+| --- | --- |
+| Host orchestration, 상태 전이, evidence, judge, kill switch | P1 |
+| manifest, build/start/reset, provisioning, worktree/Compose overlay | P2 |
+| attack surface, suspect→Candidate, verifier, locator/patcher/validator | P3 |
+
+아래의 `P1 5 / P2 5 / P3 8`은 기능을 다시 나눈 것이 아니라, **P3가 혼자 수행하던
+레포별 후보 선별·검증 실행을 세 명이 나눠 맡는 audit queue**다. 각 작업자는 자기 배정 target에
+같은 공통 파이프라인을 실행한다. P2도 fixture 제공에서 멈추지 않고 자기 5개에서
+Candidate·evidence 또는 범위가 명시된 clean/blocked 결과를 만든다.
+
+`verified`와 `fixed` 판정은 작업자와 관계없이 P1 evidence store와 deterministic judge만 수행한다.
+
+## 최신 main 반영 상태
+
+- P1: `audit_local_target(target_id)` Host prompt, run kill/rollback, patched worktree overlay build,
+  3회 patch 재시도 상한을 구현했다.
+- P2: 22개 executable manifest, target lifecycle, provisioning contract,
+  run-scoped worktree/Compose overlay/reset/regression을 제공한다.
+- P3: `candidates_for_target()` 단일 진입점으로 `find_idor_suspects()`와 strategy-aware
+  `build_candidates()`를 묶었다. P1은 target source와 P2 provisioning만 넘기면 typed Candidate 또는
+  provisioning blocker를 받을 수 있다.
+- 현재 남은 공통 연결점: `audit_local_target`은 실행 함수가 아니라 Host 호출 순서를 안내하는
+  prompt다. `vc_map_routes`/`vc_map_roles`/`vc_index_code`가 아직 스텁이라 MCP tool만으로
+  `READY → MAPPING → CANDIDATE_SCAN`을 통과할 수 없다. P3는 단일 후보 진입점을 제공했으며,
+  P1이 이를 mapping/scan tool에 배선하기 전까지
+  직접 Python prefilter 결과는 준비 자료일 뿐 최종 batch 완료로 계산하지 않는다.
+- Access-control(IDOR) verifier는 동작한다. XSS/Injection verifier는 아직 미구현이므로 해당
+  후보는 unsupported blocker와 필요한 verifier contract를 기록한다.
+
 ## 실행 범위
 
-Notion 체크는 우선순위 신호로 사용하되, **P2가 manifest·loopback runtime·readiness로 실행 가능하다고
-판정한 W1 target은 미체크여도 진행 후보에 포함한다.** 이 문서의 active queue는 P2 executable
-manifest 22개에서 이미 P3 결과가 있는 4개 reference target을 뺀 18개다.
+Notion 체크는 우선순위 신호로 사용하되, P2가 manifest·loopback runtime·readiness로 실행 가능하다고
+판정한 W1 target은 미체크여도 진행 후보에 포함한다.
 
 - reference: `c1-05`(수동 closed-loop), `c2-04`(read/write IDOR), `c2-05`(clean),
   `c3-08`(검토 표면 방어됨)
-- active candidate queue: 18개
-- W2·기타 inventory는 아직 P2 manifest/runtime contract가 없으므로 backlog다. P2가 viability를
-  확인하면 다음 batch에 별도 추가한다.
+- active audit queue: reference 4개를 제외한 18개
+- W2·기타 inventory는 P2 manifest/runtime contract가 생기기 전까지 backlog
 
-## 배분 (P1 5 / P2 5 / P3 8)
+## 공통 target 완료 기준
 
-P3가 직접 security verification을 8개 수행해 P1/P2보다 많은 실행량을 맡는다. 이는 repository의
-독점 소유가 아니라 batch lead 배정이며, `verified`/`fixed`는 언제나 P1 evidence/judge가 판정한다.
+각 작업자는 배정 target마다 다음 중 하나를 남겨야 한다.
 
-### P1 — orchestration/candidate-store lead (5개)
+1. typed Candidate → verifier → `verified`/`rejected` evidence
+2. 확인한 취약점 범위, scanner/prefilter 결과와 함께 남긴 scoped clean 결과
+3. 인증·seed·미지원 verifier 등 재현 가능한 blocked 결과와 필요한 다음 계약
 
-| target_id | stack | P1 완료 조건 |
-| --- | --- | --- |
-| `26s-w1-c3-09` | Spring | holdout clean-room policy/run/report 경로 |
-| `26s-w1-c3-03` | Node | suspect/candidate/evidence store 연결 |
-| `26s-w1-c3-04` | Node | suspect/candidate/evidence store 연결 |
-| `26s-w1-c3-05` | Node | suspect/candidate/evidence store 연결 |
-| `26s-w1-c2-08` | Django/generic | candidate 생성 또는 class-view 제한 기록 |
+단순 build/health PASS, fixture 준비, suspect 개수만으로는 audit 완료가 아니다. verified finding이
+생기면 P1 승인·judge 흐름에 따라 locator→patch→P2 patched runtime→P3 replay/positive→최종
+verdict까지 진행한다.
 
-### P2 — provisioning/runtime unblock lead (5개)
+## 실행 배분
 
-| target_id | 현재 상태 | P2 완료 조건 |
-| --- | --- | --- |
-| `26s-w1-c1-03` | role fixture 필요 | fixture contract 또는 blocked 근거 |
-| `26s-w1-c1-07` | role fixture 필요 | seed/login fixture 또는 blocked 근거 |
-| `26s-w1-c2-01` | role fixture 필요 | two-role fixture 또는 blocked 근거 |
-| `26s-w1-c2-02` | role fixture 필요 | seed/login fixture 또는 blocked 근거 |
-| `26s-w1-c1-06` | XSS focus, role fixture 필요 | runtime 필요성/fixture 또는 blocked 근거 |
+### P1 audit queue — 5개
 
-P2는 `vc_get_verifier_provisioning(target_id)`로 base URL, auth mode, fixture strategy를 먼저 제공한다.
-fixture-file 생성은 `vc_prepare_verifier_fixture(target_id, approved=True)`만 사용하며, P3 계약이 없는
-인증/seed를 추측하지 않는다.
+P1은 공통 orchestration을 소유하는 동시에 아래 5개를 그 흐름의 첫 batch로 실행한다.
 
-### P3 — direct security verification lead (8개)
+| target_id | stack | 현재 prefilter 참고 |
+| --- | --- | ---: |
+| `26s-w1-c3-09` | Spring | IDOR suspect 8 |
+| `26s-w1-c3-03` | Node | IDOR suspect 2 |
+| `26s-w1-c3-04` | Node | IDOR suspect 16 |
+| `26s-w1-c3-05` | Node | IDOR suspect 3 |
+| `26s-w1-c2-08` | Django/generic | IDOR suspect 0 |
 
-| batch | target_id | stack | 우선 작업 |
-| --- | --- | --- |
-| A | `26s-w1-c2-03` | FastAPI | prefilter → candidate → verify |
-| A | `26s-w1-c3-06` | FastAPI | prefilter → candidate → verify |
-| A | `26s-w1-c1-02` | Node | route/controller ownership surface |
-| A | `26s-w1-c1-04` | Node | route/controller ownership surface |
-| B | `26s-w1-c1-01` | generic/mixed | manifest adapter 기준 surface |
-| B | `26s-w1-c2-06` | Django/generic | decorator route 지원 범위 IDOR |
-| B | `26s-w1-c2-07` | Node/Next | API route ownership surface |
-| B | `26s-w1-c3-02` | Django/generic | decorator route 지원 범위 IDOR |
+### P2 audit queue — 5개
 
-P3 target 완료 조건은 `verified/rejected` evidence, patch 후보, clean 근거, 또는 provisioning blocker 중
-하나다. 원본 source에는 patch를 적용하지 않는다.
+P2는 기존 runtime/provisioning 소유권을 유지하면서 아래 5개의 audit operator가 된다.
 
-## 자동 batch 연결 계약
+| 우선순위 | target_id | prefilter | P2 실행 계획 |
+| ---: | --- | ---: | --- |
+| 1 | `26s-w1-c2-01` | 12 | ephemeral DB password로 기동 후 signup→login two-role 계약 확인. 현재 bearer verifier는 가입 응답 토큰형만 지원하므로 login-path 확장 또는 fixture contract 뒤 Candidate/verify |
+| 2 | `26s-w1-c2-02` | 1 | existing self-signup을 두 역할로 준비 후 Candidate/verify |
+| 3 | `26s-w1-c1-06` | 1 | IDOR suspect 검증, XSS 후보는 미지원 verifier blocker를 별도 기록 |
+| 4 | `26s-w1-c1-07` | 5 | Google OAuth 제약을 DB seed/session fixture로 풀 수 있는지 확인 후 verify 또는 blocked |
+| 5 | `26s-w1-c1-03` | 0 | SAST/SCA와 검토 범위를 결합한 scoped clean 또는 다른 class Candidate 기록 |
+
+위 수치는 최신 main의 `find_idor_suspects()`를 P2 로컬 source에 읽기 전용으로 실행한 결과다.
+아직 evidence/judge를 통과한 결과가 아니므로 완료 수치로 사용하지 않는다.
+
+### P3 audit queue — 8개
+
+P3는 공용 보안 엔진을 유지하면서 더 많은 8개 target의 audit operator가 된다.
+
+| batch | target_id | stack | 현재 prefilter 참고 |
+| --- | --- | --- | ---: |
+| A | `26s-w1-c2-03` | FastAPI | 12 |
+| A | `26s-w1-c3-06` | FastAPI | 0 |
+| A | `26s-w1-c1-02` | Node | 2 |
+| A | `26s-w1-c1-04` | Node | 0 |
+| B | `26s-w1-c1-01` | generic/mixed | 3 |
+| B | `26s-w1-c2-06` | Django/generic | 0 |
+| B | `26s-w1-c2-07` | Node/Next | 0 |
+| B | `26s-w1-c3-02` | Django/generic | 21 |
+
+## target별 공통 실행 순서
 
 ```text
-P2: register/build/start → vc_get_verifier_provisioning
-       │                         │
-       │                         ├─ fixture_file: 승인된 prepare fixture
-       │                         ├─ self_signup: P3 verifier가 ephemeral 계정 생성
-       │                         └─ fixture required: P3 계약을 받아 P2가 준비
-       ▼
-P3: find_idor_suspects(source_root) → verifiable Candidate → verify_candidate
-       ▼
-P1: Candidate/evidence 저장, 상태 전이, patch 승인과 judge
-       ▼
-P2: patched worktree overlay build/start + regression
-       ▼
-P3: replay attack + positive functionality evidence
-       ▼
-P1: FIXED / RETRY / HUMAN_REVIEW
-       ▼
-P4: evidence+validation-linked trajectory/report only
+P1 Host orchestration / audit operator
+  → P2 register·build·start·provisioning
+  → P3 mapping·suspect→Candidate
+  → P3 verifier 실행
+  → P1 evidence 저장·deterministic verdict
+  → verified인 경우 P3 locate·patch 후보
+  → 사용자 승인 후 P2 worktree overlay build/start/regression
+  → P3 replay·positive validation
+  → P1 FIXED / RETRY / HUMAN_REVIEW
+  → P4 trajectory/report 입력
 ```
 
-상세 입력·출력·호출 순서는 [Verifier Batch Interface](VERIFIER_BATCH_INTERFACE.md)를 단일 기준으로
-사용한다.
+작업자가 P1/P2/P3 중 누구든 위 제공자를 바꾸지 않는다. 작업자는 자기 target의 입력 준비,
+tool 호출 진행, 결과·blocker 기록을 맡는다.
+
+## 바로 다음 작업
+
+1. P1은 `candidates_for_target(run_id, provisioning, source_root)`을 mapping/scan tool에 배선해
+   Candidate 저장과 `READY → MAPPING → CANDIDATE_SCAN` 상태 전이를 닫는다.
+2. P2는 병렬로 `c2-01`에 process-local DB password를 주입해 build/start하고, `/api/v1/auth/signup`
+   → `/api/v1/auth/login`의 two-role 계약과 resource 생성 경로를 확인한다. 값·token은 파일·evidence에
+   저장하지 않는다.
+3. P3 bearer bridge에 signup 뒤 login으로 `access_token`을 받는 계약(`login_path` 등)이 추가되면
+   `c2-01`을 첫 P2 audit target으로 실행하고 Candidate/evidence/blocked 결과를 handoff에 기록한다.
+4. 같은 방식으로 `c2-02 → c1-06 → c1-07 → c1-03` 순서로 진행한다.
 
 ## Handoff 최소 필드
 
-- `target_id`, run ID, source commit
-- provisioning strategy/auth mode/base URL/fixture artifact 상태(값·secret 제외)
-- prefilter 후보 수와 선택 endpoint
-- Candidate/evidence/validation ID 또는 clean·blocked 근거
-- patch가 있으면 worktree ID와 reset 여부
-- 다음 역할이 수행할 한 가지 입력
+- `target_id`, run ID, source commit, audit operator
+- provisioning strategy/auth mode/base URL/fixture artifact 상태(secret 값 제외)
+- scanner/prefilter 범위, suspect 수와 선택 endpoint
+- Candidate/evidence/validation ID 또는 scoped clean·blocked 근거
+- patch가 있으면 worktree ID, 승인 상태, reset 여부
+- 다음 역할에 필요한 한 가지 입력
+
+## 팀 동기화 메시지
+
+### P1에게
+
+`surface.candidates.candidates_for_target(run_id, provisioning, source_root)`가 최신 main에 들어왔습니다.
+`vc_map_routes`/새 access-control scan 중 한 곳에서 이 함수를 호출해 Candidate를 evidence store에 저장하고,
+`READY → MAPPING → CANDIDATE_SCAN` 상태 전이를 실제로 연결해 주세요. 지금은 mapping tool이 스텁이라
+`audit_local_target` prompt가 step 3에서 멈춥니다. `res.blocked`는 P2 fixture 준비 또는 계약 요청으로
+기록하면 됩니다. P2는 첫 대상 `c2-01` runtime/provisioning을 준비 중이며, 배선이 들어오면 즉시 이
+target으로 첫 공동 batch를 실행하겠습니다.
+
+### P3에게
+
+P2 첫 대상 `26s-w1-c2-01`의 인증 계약을 확인했습니다. 가입은 `POST /api/v1/auth/signup`이고 id만
+반환하며, attacker JWT는 `POST /api/v1/auth/login` 응답의 `access_token`에 있습니다. 현재 bearer
+verifier는 signup response에서 token을 찾으므로 이 target에서 실패합니다. bearer probe에 선택
+`login_path`(및 필요 시 login body field) 지원을 추가하고 `_SELF_SIGNUP_HINTS`에
+`signup_path=/api/v1/auth/signup`, `login_path=/api/v1/auth/login`, `token_key=access_token`을 등록해
+주세요. P2는 그 커밋 뒤 `self_signup/bearer` provisioning override와 local runtime을 제공해 실제
+Candidate→verify batch를 돌리겠습니다.
