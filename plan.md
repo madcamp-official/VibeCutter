@@ -97,15 +97,13 @@
 
 ### 2. verify tool 실배선 (원래 Day2 핵심 목표)
 
-- [ ] **run 승인 게이트**: verification 카테고리(공격성 도구, 6.6절) 호출 전 run-level 승인 여부를 확인하는 공통 게이트를 `vc_verify_*` 진입점에 추가. 미승인 run은 거부.
-- [ ] **`vc_verify_access_control` 본문 실제 구현** (`mcp_server/tools_analysis.py`):
-  1. policy 검사(`require_target_allowed`/`require_host_allowed`) + candidate/run 존재 확인
-  2. `Run.status`를 `transition(..., RunState.VERIFYING)`으로 전이
-  3. `candidate_id`로 `Candidate` 조회 → `verifiers.access_control.verify(run_id, candidate, max_requests=max_requests)` 호출
-  4. 결과의 `evidence_ids`로 `update_finding_status(finding_id, VERIFIED 또는 REJECTED, evidence_ids=...)` 호출(구멍① 수정판이 실제로 막는지 여기서 다시 확인)
-  5. `VerificationResult` 반환
-- [ ] `vc_verify_injection`/`vc_verify_xss`는 P3가 아직 verifier를 구현하지 않았으므로 policy/승인 게이트/상태 전이 배선까지만 만들고, verifier 호출부만 `NotImplementedError`로 남긴다(완성되면 바로 붙게 인터페이스는 맞춰둔다).
-- [ ] **WebGoat가 아닌 실제 몰입캠프 target**(1의 P2 지정 target)에 MCP tool 경로로 `vc_verify_access_control`을 실제 호출해 candidate → verified가 되는지 확인 — "WebGoat이라서 된 것"이 아님을 오늘 증명한다(D2-P3.md가 남긴 리스크 항목 해소).
+- [x] **run 승인 게이트**: `vc_verify_*` 세 tool에 `approved: bool = False` 파라미터 추가(기존 `vc_apply_patch`/`vc_reset_target` 패턴과 동일). `mcp_server/tools_analysis.py`의 `_prepare_verification()` 공통 헬퍼가 제일 먼저 이 게이트를 확인 — 미승인이면 verifier 호출 전에 `PermissionError`.
+- [x] **`vc_verify_access_control` 본문 실제 구현** — 계획한 5단계를 `_prepare_verification()`(공통) + tool 본문(verifier별) 두 층으로 배선:
+  1. 승인 게이트 → 2. `require_target_allowed(run.target_id)` policy 검사 → 3. `Run.status`를 `VERIFYING`으로 전이(이미 VERIFYING이면 재전이 생략 — 여러 candidate를 같은 run에서 검증 가능) → 4. `candidate_id` 조회 + `find_or_create_finding()`로 Finding 지연 생성(신규 — 지금까지 Candidate→Finding을 만드는 코드가 어디에도 없었다) → 5. `verifiers.access_control.verify()` 호출 → 6. `update_finding_status(finding.id, VERIFIED/REJECTED, evidence_ids=...)`.
+  - **알려진 한계 문서화**: policy 검사가 `target_id`까지만 확인하고 verifier가 실제로 때리는 host/port는 검사하지 못한다(Candidate에 typed 공격 파라미터가 없어서 — 섹션 5 계약 이견과 연결됨). 스키마 개선 후 `require_host_allowed`까지 추가할 것.
+- [x] `vc_verify_injection`/`vc_verify_xss`는 `_prepare_verification()`까지 동일하게 타지만 verifier 호출부는 `NotImplementedError`로 남김(P3 verifier 미구현).
+- [x] **테스트로 배선 검증**(`tests/test_verify_tool_wiring.py`, 10건): 미승인 거부, 미등록 target 거부, 존재하지 않는 run/candidate 거부, VERIFYING 전이(1회만, 재호출해도 안 바뀜), Finding 지연 생성/재사용, `verifiers.access_control.verify`를 mock으로 대체해 실제 `mcp.call_tool()` 경로로 verified→Finding 승격/rejected→미승격/evidence 기록까지 확인, injection stub도 동일하게 정책·상태 전이는 타고 verifier 직전에서 멈추는 것 확인.
+- [ ] ~~WebGoat가 아닌 실제 몰입캠프 target에 MCP tool 경로로 실제 호출~~ **P2 블로커로 보류** — `TargetCatalog` 전체 로드가 3개 깨진 manifest 때문에 죽어 있어(섹션 1 참고) 아직 실제 target으로 candidate를 만들 방법 자체가 없다(SAST/mapping도 전부 스텁). 지금 검증은 실제 policy 등록(`26s-w1-c1-03`) + mock verifier 조합으로 배선 로직만 증명한 상태 — verifier 자체가 실 앱에서도 되는지는 P2 블로커 해소 + P3의 role fixture 확보 후에 마저 확인해야 한다.
 
 ### 3. judge.py skeleton + Attack gate 실동작
 
