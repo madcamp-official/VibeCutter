@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -26,6 +27,22 @@ from .provisioning import ProvisioningStrategy, VerifierProvisioning
 
 class TargetOperationError(RuntimeError):
     """A manifest-defined target command failed without exposing its raw output."""
+
+
+@dataclass(frozen=True)
+class StaleRunSweepResult:
+    """Result of explicitly approved cleanup of inactive managed run overlays.
+
+    Only overlays with a checked-in/generated artifact beneath
+    ``.vibecutter/run-overlays/<target_id>`` are considered.  This deliberately
+    does not guess at arbitrary ``vc-*`` Docker projects, which could belong to
+    an active run whose local artifact is temporarily unavailable.
+    """
+
+    target_id: str
+    cleaned_run_ids: tuple[str, ...]
+    failed_run_ids: tuple[str, ...]
+    skipped_active_run_ids: tuple[str, ...]
 
 
 class TargetRuntimeService:
@@ -156,8 +173,73 @@ class TargetRuntimeService:
         result = overlay.execute(target.manifest.reset.command_id)
         if result.status != "passed":
             return False
-        self.catalog.worktree_manager_for(target_id).remove(run_id, approved=True)
+        worktrees = self.catalog.worktree_manager_for(target_id)
+        # A prior interrupted cleanup can leave the generated Compose artifact
+        # after Git has already pruned its worktree.  The overlay still needs
+        # teardown, but a missing worktree must not turn that successful cleanup
+        # into a failure.
+        if worktrees.path_for(run_id).exists():
+            worktrees.remove(run_id, approved=True)
+        overlay.remove_artifact()
         return True
+
+    def sweep_stale_run_overlays(
+        self,
+        target_id: str,
+        *,
+        active_run_ids: Iterable[str] = (),
+        approved: bool,
+    ) -> StaleRunSweepResult:
+        """Tear down inactive generated overlays for one allowed target.
+
+        The batch/orchestrator supplies the run IDs it is still using.  Every
+        other *managed* overlay artifact is reset through the same approval
+        guarded ``reset_run`` path; failed resets retain their artifacts and
+        worktrees for diagnosis and retry.
+        """
+        self._require_operation(target_id, "reset_target")
+        if not approved:
+            raise ApprovalRequired("stale run sweep requires explicit approval")
+
+        worktrees = self.catalog.worktree_manager_for(target_id)
+        active = set(active_run_ids)
+        for run_id in active:
+            if not isinstance(run_id, str):
+                raise TypeError("active run IDs must be strings")
+            worktrees.path_for(run_id)
+
+        overlay_root = (
+            self.catalog.repository_root / ".vibecutter" / "run-overlays" / target_id
+        )
+        if not overlay_root.is_dir():
+            return StaleRunSweepResult(target_id, (), (), ())
+
+        cleaned: list[str] = []
+        failed: list[str] = []
+        skipped: list[str] = []
+        for artifact_dir in sorted(overlay_root.iterdir(), key=lambda path: path.name):
+            if not artifact_dir.is_dir() or not (artifact_dir / "compose.yaml").is_file():
+                continue
+            run_id = artifact_dir.name
+            try:
+                worktrees.path_for(run_id)
+            except ValueError:
+                # Ignore unrelated/invalid directories rather than accepting a
+                # path supplied through the filesystem as a cleanup authority.
+                continue
+            if run_id in active:
+                skipped.append(run_id)
+                continue
+            if self.reset_run(target_id, run_id, approved=True):
+                cleaned.append(run_id)
+            else:
+                failed.append(run_id)
+        return StaleRunSweepResult(
+            target_id,
+            tuple(cleaned),
+            tuple(failed),
+            tuple(skipped),
+        )
 
     def _require_operation(self, target_id: str, command_id: str) -> RegisteredRuntimeTarget:
         target = self._require_authorized(target_id)
