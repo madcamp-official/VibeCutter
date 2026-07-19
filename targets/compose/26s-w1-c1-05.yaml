@@ -10,7 +10,9 @@ services:
       MYSQL_PASSWORD: ${VIBECUTTER_26S_W1_C1_05_DB_PASSWORD:?set a local test value before starting}
       MYSQL_ROOT_PASSWORD: ${VIBECUTTER_26S_W1_C1_05_ROOT_PASSWORD:?set a local test value before starting}
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      # mysqld가 포트를 열었다는 사실만으로는 init script의 grants가 끝난 것이 아니다.
+      # Spring 앱과 동일한 local app account/database로 실제 query가 가능할 때만 healthy다.
+      test: ["CMD-SHELL", "mysql --protocol=TCP -h 127.0.0.1 -u\"$$MYSQL_USER\" -p\"$$MYSQL_PASSWORD\" \"$$MYSQL_DATABASE\" -e 'SELECT 1' >/dev/null 2>&1"]
       interval: 5s
       timeout: 3s
       retries: 24

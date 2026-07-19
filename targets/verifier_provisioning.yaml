@@ -20,3 +20,7 @@ targets:
     strategy: self_signup
     auth_mode: bearer
     notes: Local Node signup issues bearer access tokens; P3 must consume the declared no-secret auth-flow contract.
+  26s-w1-c1-06:
+    strategy: self_signup
+    auth_mode: bearer
+    notes: Local Node signup at /api/auth/signup returns a bearer token in token; P3 keeps ephemeral credentials in memory only.

@@ -83,10 +83,14 @@ networks:
                 overlay = RunComposeOverlay(_manifest(), root, source, worktree, "run-1")
                 path = overlay.prepare()
                 document = yaml.safe_load(path.read_text(encoding="utf-8"))
+                self.assertEqual(document["name"], overlay.project_name)
+                self.assertTrue(overlay.project_name.startswith("vc-"))
                 self.assertEqual(Path(document["services"]["app"]["build"]["context"]), worktree)
                 self.assertTrue(Path(document["services"]["app"]["build"]["dockerfile"]).samefile(dockerfiles / "demo.Dockerfile"))
                 volume_source = document["services"]["app"]["volumes"][0].rsplit(":", 2)[0]
                 self.assertTrue(Path(volume_source).samefile(root / "targets" / "nginx.conf"))
                 self.assertTrue(overlay.inspect().compliant)
+                overlay.remove_artifact()
+                self.assertFalse(path.parent.exists())
             finally:
                 worktrees.remove("run-1", approved=True)
