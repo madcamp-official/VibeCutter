@@ -141,6 +141,72 @@ class VcVerifyAccessControlToolTests(unittest.TestCase):
                 self._call({"run_id": run.id, "candidate_id": candidate.id, "approved": False})
         mock_verify.assert_not_called()
 
+    def test_verified_result_transitions_run_to_verified(self) -> None:
+        run = _run()
+        candidate = _candidate(run.id)
+        obs = write_artifact(
+            run.id, observation_type="http_exchange", producer="test", data=b"mock exchange"
+        )
+        fake_result = VerificationResult(
+            verified=True, evidence_ids=[obs.id], reason="mocked: victim marker exposed"
+        )
+        with patch("mcp_server.tools_analysis.verify_access_control", return_value=fake_result):
+            self._call(
+                {"run_id": run.id, "candidate_id": candidate.id, "max_requests": 5, "approved": True}
+            )
+
+        self.assertEqual(get(Run, run.id).status, RunState.VERIFIED)
+
+    def test_rejected_result_leaves_run_in_verifying(self) -> None:
+        run = _run()
+        candidate = _candidate(run.id)
+        obs = write_artifact(
+            run.id, observation_type="http_exchange", producer="test", data=b"mock exchange"
+        )
+        fake_result = VerificationResult(
+            verified=False, evidence_ids=[obs.id], reason="mocked: no access control violation"
+        )
+        with patch("mcp_server.tools_analysis.verify_access_control", return_value=fake_result):
+            self._call(
+                {"run_id": run.id, "candidate_id": candidate.id, "max_requests": 5, "approved": True}
+            )
+
+        self.assertEqual(get(Run, run.id).status, RunState.VERIFYING)
+
+    def test_second_candidate_after_run_verified_is_rejected(self) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        run = _run()
+        first_candidate = _candidate(run.id)
+        second_candidate = _candidate(run.id)
+        obs = write_artifact(
+            run.id, observation_type="http_exchange", producer="test", data=b"mock exchange"
+        )
+        fake_result = VerificationResult(verified=True, evidence_ids=[obs.id], reason="mocked")
+        with patch("mcp_server.tools_analysis.verify_access_control", return_value=fake_result):
+            self._call(
+                {
+                    "run_id": run.id,
+                    "candidate_id": first_candidate.id,
+                    "max_requests": 5,
+                    "approved": True,
+                }
+            )
+        self.assertEqual(get(Run, run.id).status, RunState.VERIFIED)
+
+        # run이 이미 VERIFIED로 확정된 뒤에는 같은 run으로 다른 candidate를 검증할 수 없다
+        # (VERIFIED의 유일한 목적지는 LOCALIZING뿐 — VERIFYING으로 되돌아가는 전이가 없다).
+        with patch("mcp_server.tools_analysis.verify_access_control", return_value=fake_result):
+            with self.assertRaises(ToolError):
+                self._call(
+                    {
+                        "run_id": run.id,
+                        "candidate_id": second_candidate.id,
+                        "max_requests": 5,
+                        "approved": True,
+                    }
+                )
+
 
 class VcVerifyInjectionXssStubTests(unittest.TestCase):
     """verifier가 아직 없는 injection/xss도 policy/승인/상태 전이까지는 동일하게 배선됐는지 확인."""

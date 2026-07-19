@@ -176,6 +176,38 @@ class VcVerifyMutationAccessControlToolTests(unittest.TestCase):
                 self._call({"run_id": run.id, "candidate_id": candidate.id, "approved": False})
         mock_verify.assert_not_called()
 
+    def test_verified_result_transitions_run_to_verified(self) -> None:
+        run = _run()
+        candidate = _mutation_candidate(run.id)
+        obs = write_artifact(
+            run.id, observation_type="http_exchange", producer="test", data=b"mock exchange"
+        )
+        fake_result = VerificationResult(
+            verified=True, evidence_ids=[obs.id], reason="mocked: victim resource mutated"
+        )
+        with patch("mcp_server.tools_analysis.verify_mutation_access_control", return_value=fake_result):
+            self._call(
+                {"run_id": run.id, "candidate_id": candidate.id, "max_requests": 5, "approved": True}
+            )
+
+        self.assertEqual(get(Run, run.id).status, RunState.VERIFIED)
+
+    def test_rejected_result_leaves_run_in_verifying(self) -> None:
+        run = _run()
+        candidate = _mutation_candidate(run.id)
+        obs = write_artifact(
+            run.id, observation_type="http_exchange", producer="test", data=b"mock exchange"
+        )
+        fake_result = VerificationResult(
+            verified=False, evidence_ids=[obs.id], reason="mocked: victim resource unchanged"
+        )
+        with patch("mcp_server.tools_analysis.verify_mutation_access_control", return_value=fake_result):
+            self._call(
+                {"run_id": run.id, "candidate_id": candidate.id, "max_requests": 5, "approved": True}
+            )
+
+        self.assertEqual(get(Run, run.id).status, RunState.VERIFYING)
+
 
 class CheckAttackAutoDispatchTests(unittest.TestCase):
     """`check_attack`가 verifier를 명시하지 않으면 candidate 모양으로 read/write oracle을

@@ -94,6 +94,27 @@ def _prepare_verification(
     return run, candidate, finding
 
 
+def _finalize_verification_run(run: Run, *, verified: bool) -> None:
+    """verify tool 판정 이후 Run 상태를 마무리한다: verified일 때만 VERIFYING→VERIFIED.
+
+    스캔 tool의 `_prepare_scan()`이 READY→MAPPING→CANDIDATE_SCAN을 멱등 전이하는 것과
+    같은 패턴 — 이미 VERIFIED면 다시 전이하지 않는다(멱등). 이 전이가 없으면
+    `vc_generate_patch`(Run이 VERIFIED 이상이어야 함)가 항상 막혀 드라이버가 직접
+    `transition(run, VERIFIED)`를 수동 호출해 우회해야 했다(D4-P3-closed-loop.md,
+    라이브 run `run-e32346b2a4b0`에서 실측).
+
+    rejected는 의도적으로 Run에 반영하지 않는다 — REJECTED는 RunState 종료 상태라,
+    같은 run에서 다른 candidate를 마저 검증할 길(`_prepare_verification`이 이미 지원하는
+    "여러 candidate를 같은 run에서 검증 가능" 설계)이 막히기 때문이다. 어떤 candidate가
+    실제로 VERIFIED되면 그 run은 그 finding 하나를 끝까지 끌고 가는 것으로 확정되므로,
+    이후 같은 run으로 다른 candidate를 검증하려는 시도는 (Run이 더 이상 VERIFYING이
+    아니므로) 자연히 거부된다 — 이것도 의도된 동작이다.
+    """
+    if verified and run.status != RunState.VERIFIED:
+        run.status = transition(run.status, RunState.VERIFIED)
+        save(run)
+
+
 def _prepare_scan(run_id: str, *, tool_name: str) -> Run:
     """`vc_run_sast`/`vc_run_sca`/`vc_scan_access_control`이 공유하는 배선: policy 검사 →
     CANDIDATE_SCAN 전이(1회만).
@@ -264,12 +285,13 @@ def register(mcp: FastMCP) -> None:
         policy 검사/승인 게이트/RunState 전이/Finding 판정은 P1이 배선했다. 실제 재현·판정
         로직(`verifiers.access_control.verify`)은 P3 소유 — Day2에 WebGoat로 검증 완료.
         """
-        _, candidate, finding = _prepare_verification(
+        run, candidate, finding = _prepare_verification(
             run_id, candidate_id, approved=approved, tool_name="vc_verify_access_control"
         )
         result = verify_access_control(run_id, candidate, max_requests=max_requests)
         target_status = FindingStatus.VERIFIED if result.verified else FindingStatus.REJECTED
         update_finding_status(finding.id, target_status, evidence_ids=result.evidence_ids)
+        _finalize_verification_run(run, verified=result.verified)
         return result
 
     @mcp.tool()
@@ -293,12 +315,13 @@ def register(mcp: FastMCP) -> None:
         따라야 한다(`attack_params`에 `observe_path`/`mutation_method`/`mutation_path`/
         `mutation_marker` 필수, `extra_body_json`/`marker_field` 선택).
         """
-        _, candidate, finding = _prepare_verification(
+        run, candidate, finding = _prepare_verification(
             run_id, candidate_id, approved=approved, tool_name="vc_verify_mutation_access_control"
         )
         result = verify_mutation_access_control(run_id, candidate, max_requests=max_requests)
         target_status = FindingStatus.VERIFIED if result.verified else FindingStatus.REJECTED
         update_finding_status(finding.id, target_status, evidence_ids=result.evidence_ids)
+        _finalize_verification_run(run, verified=result.verified)
         return result
 
     @mcp.tool()
