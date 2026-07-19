@@ -311,3 +311,113 @@ def build_candidates(
         "인증/seed 방식 미확정",
         "P3가 필요한 role/resource/endpoint schema를 handoff로 제공 → P2가 fixture 구현",
     )
+
+
+# ── XSS/Injection suspect → Candidate 브리지 (surface.inject_xss 소비) ─────────────────
+# IDOR suspect는 핸들러 라우트를 이미 갖지만, XSS/Injection 프리필터는 file:line만 낸다. 그래서 여기서
+# 핸들러 본문을 다시 훑어 "싱크가 든 핸들러의 라우트+파라미터"를 뽑아 verify 가능한 Candidate로 만든다.
+# 핸들러 밖(서비스 계층/프론트) 싱크는 라우트를 못 붙여 blocked로 남긴다(IDOR blocked 경로와 동형).
+# 안전: SELECT 싱크만 injection candidate로 만든다(불리언 payload가 파괴적 write의 WHERE에 안 들어가게).
+
+from surface.graph import _iter_sources, _java_handlers, _node_handlers, _node_symbol_index, _python_handlers  # noqa: E402
+from surface.inject_xss import _DYN, _EXEC, _LOG_LINE, _interp_var, find_xss_suspects  # noqa: E402
+
+_SELECT_SINK = re.compile(r"\bselect\b[\s\S]{0,240}?\bfrom\b", re.I)  # 불리언 payload에 안전(읽기)
+_WRITE_SINK = re.compile(r"\binsert\s+into\b|\bupdate\b[\s\S]{0,120}?\bset\b|\bdelete\s+from\b", re.I)
+_HTMLRESP = re.compile(r'HTMLResponse\s*\(\s*f["\'][^"\']*\{([^}]+)\}', re.I)  # 서버 반사 XSS
+
+
+def _sql_sink_in_body(body: str) -> tuple[str, bool] | None:
+    """handler body에서 SQL 동적 결합+실행 라인을 찾아 (line, is_select). 없으면 None."""
+    for line in body.splitlines():
+        if _LOG_LINE.search(line) or not (_DYN.search(line) and _EXEC.search(line)):
+            continue
+        if _SELECT_SINK.search(line):
+            return line.strip(), True
+        if _WRITE_SINK.search(line):
+            return line.strip(), False
+    return None
+
+
+def _method_for(text: str, path: str) -> str:
+    esc = re.escape(path)
+    m = re.search(rf"\.(get|post|put|patch|delete)\s*\([^)]*{esc}", text, re.I)
+    if not m:
+        m = re.search(rf"@(Get|Post|Put|Patch|Delete)Mapping[^)]*{esc}", text, re.I)
+    return (m.group(1).upper() if m and m.group(1) else "GET")
+
+
+def _handlers_for(text: str, suffix: str, root: Path):
+    if suffix == ".java":
+        return (("java", h) for h in _java_handlers(text))
+    if suffix == ".py":
+        return (("python", h) for h in _python_handlers(text))
+    return (("node", h) for h in _node_handlers(text, _node_symbol_index(root)))
+
+
+def injection_xss_candidates(
+    run_id: str, provisioning: VerifierProvisioning, source_root: str | Path
+) -> BridgeResult:
+    """source_root → verify 가능한 XSS/Injection Candidate(또는 blocked).
+
+    핸들러 본문 inline SELECT SQLi → injection candidate; 서버 HTMLResponse 반사 → xss candidate.
+    파괴적 write SQL·서비스 계층·프론트 싱크는 blocked(라우트/안전 계약 필요). base_url은 provisioning에서.
+    """
+    root = Path(source_root)
+    tid = provisioning.target_id
+    base = provisioning.base_url
+    cands: list[Candidate] = []
+    blocked: list[BlockedTarget] = []
+    seen: set[tuple[str, str]] = set()
+
+    for p in _iter_sources(root):
+        text = p.read_text(encoding="utf-8", errors="replace")
+        rel = str(p.relative_to(root)) if p.is_relative_to(root) else str(p)
+        for _stack, (path, name, sig, body) in _handlers_for(text, p.suffix, root):
+            if not path:
+                continue
+            # ── Injection: 핸들러 본문의 SQL 동적 결합 ──
+            sink = _sql_sink_in_body(body)
+            if sink is not None:
+                line, is_select = sink
+                if not is_select:
+                    blocked.append(BlockedTarget(
+                        target_id=tid, strategy="prefilter",
+                        reason=f"{path} 핸들러에 write SQL 동적 결합(파괴적) — 불리언 injection 미지원",
+                        needed="안전한 write-injection oracle(후속) 또는 수동 검증",
+                    ))
+                elif ("injection", path) not in seen:
+                    seen.add(("injection", path))
+                    method = _method_for(text, path)
+                    param = _interp_var(line) or "q"
+                    ap = {"base_url": base, "inject_path": path, "inject_param": param,
+                          "inject_method": method, "inject_location": "query" if method == "GET" else "json"}
+                    if method != "GET":
+                        ap["read_query"] = "true"  # SELECT 싱크라 불리언 테스트 안전
+                    cands.append(Candidate(
+                        id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-89", vuln_class="injection",
+                        endpoint=path, source_symbols=[f"{rel}"], attack_params=ap,
+                    ))
+            # ── XSS: 서버 HTMLResponse 반사 ──
+            hm = _HTMLRESP.search(body)
+            if hm and ("xss", path) not in seen:
+                seen.add(("xss", path))
+                param = re.match(r"[A-Za-z_]\w*", hm.group(1).strip())
+                cands.append(Candidate(
+                    id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-79", vuln_class="xss",
+                    endpoint=path, source_symbols=[f"{rel}"],
+                    attack_params={"base_url": base, "context": "reflected", "inject_path": path,
+                                   "inject_param": param.group(0) if param else "q", "inject_method": "GET"},
+                ))
+
+    # ── 프론트 XSS 싱크: 라우트를 못 붙임 → blocked(fixture/라우트 계약 필요) ──
+    for s in find_xss_suspects(root):
+        if s.file.endswith(".py"):  # 서버측은 위에서 처리
+            continue
+        blocked.append(BlockedTarget(
+            target_id=tid, strategy="prefilter",
+            reason=f"프론트 XSS 싱크 {s.sink} @ {s.file}:{s.line} — 라우트/파라미터 정적 매핑 불가",
+            needed="XSS fixture(inject_path·inject_param) 또는 렌더 라우트 계약",
+        ))
+
+    return BridgeResult(candidates=cands, blocked=blocked)
