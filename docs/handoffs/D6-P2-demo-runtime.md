@@ -28,6 +28,14 @@ orchestration은 변경하지 않는다.
 
 - P2 runtime 회귀: `py -3.13 -m pytest tests/test_target_service.py tests/test_run_overlay.py tests/test_c1_05_runtime_contract.py tests/test_verifier_provisioning.py -q`
 - 결과: **24 passed, 3 subtests passed** (DeprecationWarning 218건은 기존 `utcnow()` 사용).
+- 로컬 clean-room lifecycle 실측(각 target별 승인 reset → build → start/health → readiness → 승인 reset):
+  - `c1-05`: **PASS**. 첫 시도는 필수 secret env 미설정으로 compose가 거부했으며, 저장하지 않은
+    프로세스 범위 일회성 DB/root/JWT 값을 주입한 재시도에서 build `READY`, health `True`, readiness
+    `ready=True`, 마지막 reset `True`를 확인했다.
+  - `c2-04`: **PASS**. build `READY`, health `True`, readiness `ready=True`, 마지막 reset `True`.
+  - `c3-09`: **PASS**. build `READY`, health `True`, readiness `ready=True`, 마지막 reset `True`.
+- 세 타겟 실측 직후 Docker container와 `14006/14007`, `14017/14018`, `14036/14037` listening
+  port가 남지 않음을 확인했다.
 - 세 GPU 20/20 runtime preflight와 c1-05/c2-04/c3-09 lifecycle 실측은 D5-P2에 기록된
   결과를 기준선으로 유지한다. 이번 세션에서는 원격 GPU를 재기동하지 않았다.
 
