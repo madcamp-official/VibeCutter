@@ -189,11 +189,11 @@ def run_codex(prompt: str, session_id: str | None) -> tuple[str, str | None]:
             cmd += CODEX_EXTRA_ARGS
             relay_prompt = CODEX_CONTEXT + "\n\nIncoming Discord message:\n" + prompt + NO_RE_MENTION_HINT
         result = subprocess_run(cmd + [relay_prompt])
-        new_session_id = _codex_session_id(result.stdout, session_id)
+        new_session_id = _codex_session_id(result.stdout or "", session_id)
         if result.returncode != 0:
             return (
                 f"(codex 실행 실패, exit={result.returncode})\n```\n"
-                f"{result.stderr[-1500:]}\n```",
+                f"{(result.stderr or '')[-1500:]}\n```",
                 new_session_id,
             )
         try:
@@ -220,7 +220,18 @@ def run_agent(prompt: str, session_id: str | None) -> tuple[str, str | None]:
 def subprocess_run(cmd: list[str]):
     import subprocess
 
-    return subprocess.run(cmd, cwd=PROJECT_DIR, capture_output=True, text=True, timeout=CLAUDE_TIMEOUT_SECONDS)
+    # Codex CLI emits UTF-8 JSONL. Windows otherwise decodes it using the
+    # active ANSI code page (often cp949), which can kill subprocess reader
+    # threads before a Discord reply is produced.
+    return subprocess.run(
+        cmd,
+        cwd=PROJECT_DIR,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=CLAUDE_TIMEOUT_SECONDS,
+    )
 
 
 def cmd_send(args: argparse.Namespace) -> None:
