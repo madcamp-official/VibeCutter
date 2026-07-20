@@ -19,7 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 DEFAULT_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"
 DEFAULT_EXPORT = ".vibecutter/trajectories/export/training_samples.jsonl"
@@ -88,7 +88,18 @@ def dataset_label_stats(samples: Iterable[dict]) -> dict:
     from collections import Counter
     samples = list(samples)
     by_label = Counter(str(s.get("label") or "unlabeled") for s in samples)
-    return {"rows": len(samples), "by_label": dict(sorted(by_label.items()))}
+    by_run = Counter(str(s.get("run_id") or "?") for s in samples)
+    return {"rows": len(samples), "by_label": dict(sorted(by_label.items())),
+            "by_run_id": dict(sorted(by_run.items()))}
+
+
+def filter_by_run_ids(samples: Iterable[dict], run_ids: Optional[set[str]]) -> list[dict]:
+    """실 run_id 로만 학습하도록 필터 (P3 데이터위생 요청: unittest 가 같은 trajectory
+    디렉토리에 test-생성 궤적을 섞으므로, run_ids 를 주면 그 run 만 남긴다). None 이면 전부."""
+    rows = list(samples)
+    if not run_ids:
+        return rows
+    return [s for s in rows if str(s.get("run_id")) in run_ids]
 
 
 # --- 학습 (GPU 전용, 지연 import) ------------------------------------------------------
@@ -103,6 +114,7 @@ def train(
     grad_accum: int = 16,
     lr: float = 2e-4,
     max_seq_len: int = 2048,
+    run_ids: Optional[set[str]] = None,
 ) -> str:
     """QLoRA(4bit) SFT. torch/transformers/peft/trl 필요(requirements-gpu.txt).
 
@@ -119,7 +131,10 @@ def train(
     )
     from trl import SFTConfig, SFTTrainer
 
-    rows = build_texts(load_sft_samples(export_path))
+    samples = filter_by_run_ids(load_sft_samples(export_path), run_ids)
+    rows = build_texts(samples)
+    if run_ids:
+        print(f"[train] run_id 필터 적용: {sorted(run_ids)} → {len(samples)} rows")
     if not rows:
         raise SystemExit(
             f"학습 샘플이 없다: {export_path}. 실제 verified/fixed evidence 가 나온 뒤 "
@@ -172,23 +187,29 @@ def _main() -> None:
     ap.add_argument("--base-model", default=DEFAULT_MODEL)
     ap.add_argument("--output-dir", default=".vibecutter/models/lora-7b")
     ap.add_argument("--epochs", type=float, default=3.0)
+    ap.add_argument("--run-ids", default=None,
+                    help="실 run_id 만 학습(쉼표구분). P3 데이터위생: test 궤적 배제")
     ap.add_argument("--dry-run", action="store_true",
                     help="학습 없이 데이터 준비만 검증(GPU 불필요)")
     args = ap.parse_args()
 
+    run_ids = {r.strip() for r in args.run_ids.split(",") if r.strip()} if args.run_ids else None
+
     if args.dry_run:
-        samples = load_sft_samples(args.export)
+        samples = filter_by_run_ids(load_sft_samples(args.export), run_ids)
         rows = build_texts(samples)
         st = dataset_label_stats(samples)
         # Task 3(팀 요청): 학습 시작 전 dataset row 수 + label 분포 공유.
-        print(f"[dry-run] dataset rows={st['rows']} (학습가능/completion有={len(rows)})")
+        print(f"[dry-run] dataset rows={st['rows']} (학습가능/completion有={len(rows)})"
+              + (f" | run_id 필터={sorted(run_ids)}" if run_ids else " | run_id 필터 없음(전체)"))
         print(f"[dry-run] label 분포: {st['by_label']}")
+        print(f"[dry-run] run_id별: {st['by_run_id']}")
         if rows:
             print("--- 첫 샘플 text ---")
             print(rows[0]["text"][:600])
         return
     train(args.export, base_model=args.base_model,
-          output_dir=args.output_dir, epochs=args.epochs)
+          output_dir=args.output_dir, epochs=args.epochs, run_ids=run_ids)
 
 
 if __name__ == "__main__":

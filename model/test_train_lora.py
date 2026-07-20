@@ -10,7 +10,13 @@ import json
 import tempfile
 from pathlib import Path
 
-from model.train_lora import build_texts, dataset_label_stats, load_sft_samples, sft_text
+from model.train_lora import (
+    build_texts,
+    dataset_label_stats,
+    filter_by_run_ids,
+    load_sft_samples,
+    sft_text,
+)
 
 # to_sft_sample() 이 내는 형태와 동일한 샘플.
 _SAMPLE = {
@@ -70,6 +76,24 @@ def test_dataset_label_stats() -> None:
     st = dataset_label_stats(samples)
     assert st["rows"] == 5
     assert st["by_label"] == {"fixed": 1, "rejected": 1, "unlabeled": 1, "verified": 2}
+
+
+def test_filter_by_run_ids_excludes_test_trajectories() -> None:
+    # P3 데이터위생: unittest 궤적(run-test-*)이 실 run(run-897ad65c68f)과 섞임.
+    samples = [
+        {"run_id": "run-897ad65c68f", "output": "verified", "label": "verified"},
+        {"run_id": "run-897ad65c68f", "output": "fixed", "label": "fixed"},
+        {"run_id": "run-test-xyz", "output": "test", "label": "verified"},   # test 궤적 → 배제
+        {"run_id": "batch-a", "output": "unit", "label": "fixed"},           # unittest 궤적 → 배제
+    ]
+    kept = filter_by_run_ids(samples, {"run-897ad65c68f"})
+    assert len(kept) == 2
+    assert {s["run_id"] for s in kept} == {"run-897ad65c68f"}
+    # run_ids None 이면 전부 통과
+    assert len(filter_by_run_ids(samples, None)) == 4
+    # stats 가 run_id별 분포도 낸다
+    st = dataset_label_stats(samples)
+    assert st["by_run_id"]["run-897ad65c68f"] == 2
 
 
 def _run() -> None:
