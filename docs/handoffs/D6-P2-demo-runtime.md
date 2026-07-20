@@ -46,6 +46,14 @@ orchestration은 변경하지 않는다.
   데모 우선순위로 고정한다.
 - P4: 발표 표에 필요한 runtime 필드(health/reset/replay 횟수 등)를 알려 달라.
 
+## 확정된 통합 계약(2026-07-20)
+
+- P1 원커맨드 순서: `register → build → start/health → scan → verify → (write 시 승인된 baseline restore) → patch overlay → 6-gate validation → reset_run → report export/teardown`.
+- `restore_baseline_after_write(target_id, approved=True)`는 write verifier가 shared baseline을 변경한 직후 호출한다. `reset_run`만으로 shared DB fixture를 원복한다고 가정하지 않는다.
+- `target_id`는 manifest ID이고, `run_id`는 orchestrator가 run 시작 시 발급하는 값이다. 최종 report/evidence/metric 조인은 `run_id`를 키로 한다.
+- P4 runtime metadata JSONL 필드: `run_id`, `target_id`, `source_commit`, `base_url`, `health`, `readiness`, `gpu_worker`, `llm_endpoint_status`, `reset_ok`, `residual_containers`, `residual_worktrees`, `residual_ports`. secret/token/password는 제외한다.
+- `health/readiness=false`, LLM endpoint fallback, 또는 residual resource가 있는 run은 fixed/모델 비교 통계에서 별도 플래그하거나 제외한다.
+
 ## 결정·가정·리스크
 
 - 20개 전체를 발표 데모에 동시에 올리지 않는다. 고정 host port 때문에 3~5개 후보를 순차 운용한다.
