@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Discord <-> local Claude Code relay (REST polling, stdlib only).
+"""Discord <-> local agent relay (REST polling, stdlib only).
 
 Lets teammates' Claude Code sessions talk to each other over a shared
 Discord channel. Each teammate runs `listen` with their own bot token
 in their own project directory; when someone @-mentions their bot,
-it invokes headless `claude -p` locally and posts the reply back.
+it invokes a local headless agent and posts the reply back. Set
+``RELAY_AGENT=codex`` for Codex CLI (the default remains ``claude``
+for compatibility with the original relay).
 `send` is a one-shot way to kick off a question.
 
 Only messages that @-mention *this* bot trigger a reply. That is what
@@ -29,12 +31,11 @@ Usage:
   DISCORD_BOT_TOKEN=... python tools/discord_relay.py send <channel_id> "@P2-Claude 이 스키마 필드명 맞춰줄래?"
   DISCORD_BOT_TOKEN=... python tools/discord_relay.py listen <channel_id>
 
-Security: whoever can @-mention this bot in that channel can make this
-Claude run tools (edit files, shell commands, hit targets) in this
-project -- keep the channel restricted to the team. Headless
-`claude -p` can't show interactive permission prompts; pass extra
-flags via CLAUDE_EXTRA_ARGS (e.g. to rely on a .claude/settings.json
-allowlist) rather than defaulting to --dangerously-skip-permissions.
+Security: whoever can @-mention this bot in that channel can make the
+configured agent run in this project -- keep the channel restricted to
+the team. Codex mode defaults to ``--sandbox read-only``. Do not add
+dangerous bypass flags to a Discord-controlled process without a
+separate allowlist and approval design.
 """
 from __future__ import annotations
 
@@ -42,6 +43,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -50,6 +52,10 @@ API_BASE = "https://discord.com/api/v10"
 
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 CLAUDE_EXTRA_ARGS = os.environ.get("CLAUDE_EXTRA_ARGS", "").split()
+CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
+CODEX_EXTRA_ARGS = os.environ.get("CODEX_EXTRA_ARGS", "").split()
+CODEX_SANDBOX = os.environ.get("CODEX_SANDBOX", "read-only")
+RELAY_AGENT = os.environ.get("RELAY_AGENT", "claude").lower()
 CLAUDE_TIMEOUT_SECONDS = int(os.environ.get("CLAUDE_TIMEOUT_SECONDS", "600"))
 PROJECT_DIR = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
 SENDER_LABEL = os.environ.get("DISCORD_SENDER_LABEL", "")
@@ -60,6 +66,16 @@ NO_RE_MENTION_HINT = (
     "\n\n(디스코드 팀 채널에서 온 메시지에 답하는 중이다. 새로 질문/요청할 대상이 "
     "있을 때만 그 사람을 @멘션하고, 단순 답장 끝에 습관적으로 다시 멘션하지 마라 "
     "-- 서로 멘션을 주고받으면 봇들이 끝없이 응답하게 된다.)"
+)
+
+CODEX_CONTEXT = os.environ.get(
+    "CODEX_RELAY_CONTEXT",
+    "You are the P2 agent for the VibeCutter project. Before answering, read "
+    "communication.md, plan.md, and the relevant docs/handoffs/D5-P2.md if they "
+    "exist. Preserve the P2 role boundary: focus on target runtime, provisioning, "
+    "fixtures, worktrees, overlays, reset, and test-runner work. Do not silently "
+    "modify another role's owned files. This is a Discord relay session, not the "
+    "desktop Codex conversation, so use repository files and handoffs as context.",
 )
 
 
@@ -119,6 +135,76 @@ def run_claude(prompt: str, session_id: str | None) -> tuple[str, str | None]:
     return (data.get("result") or "(빈 응답)"), new_session_id
 
 
+def _codex_session_id(stdout: str, fallback: str | None) -> str | None:
+    """Extract the persisted Codex thread ID from ``exec --json`` events."""
+    session_id = fallback
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "thread.started":
+            session_id = event.get("thread_id") or event.get("id") or session_id
+        session_id = event.get("thread_id", session_id)
+    return session_id
+
+
+def run_codex(prompt: str, session_id: str | None) -> tuple[str, str | None]:
+    """Run a separate, resumable Codex relay session in the project directory.
+
+    This is intentionally a *new* Codex session, not a clone of the desktop
+    conversation. The first prompt supplies repository/handoff context and
+    subsequent prompts use Codex's persisted thread ID.
+    """
+    with tempfile.NamedTemporaryFile(prefix="vibe-codex-relay-", suffix=".txt", delete=False) as handle:
+        output_path = handle.name
+    try:
+        if session_id:
+            cmd = [CODEX_BIN, "exec", "resume", "--json", "-o", output_path, session_id]
+            relay_prompt = prompt + NO_RE_MENTION_HINT
+        else:
+            cmd = [
+                CODEX_BIN,
+                "exec",
+                "--json",
+                "--sandbox",
+                CODEX_SANDBOX,
+                "-C",
+                PROJECT_DIR,
+                "-o",
+                output_path,
+            ]
+            cmd += CODEX_EXTRA_ARGS
+            relay_prompt = CODEX_CONTEXT + "\n\nIncoming Discord message:\n" + prompt + NO_RE_MENTION_HINT
+        result = subprocess_run(cmd + [relay_prompt])
+        new_session_id = _codex_session_id(result.stdout, session_id)
+        if result.returncode != 0:
+            return (
+                f"(codex 실행 실패, exit={result.returncode})\n```\n"
+                f"{result.stderr[-1500:]}\n```",
+                new_session_id,
+            )
+        try:
+            with open(output_path, encoding="utf-8") as saved:
+                answer = saved.read().strip()
+        except OSError:
+            answer = ""
+        return answer or "(Codex가 빈 응답을 반환했습니다.)", new_session_id
+    finally:
+        try:
+            os.unlink(output_path)
+        except OSError:
+            pass
+
+
+def run_agent(prompt: str, session_id: str | None) -> tuple[str, str | None]:
+    if RELAY_AGENT == "codex":
+        return run_codex(prompt, session_id)
+    if RELAY_AGENT == "claude":
+        return run_claude(prompt, session_id)
+    return f"(지원하지 않는 RELAY_AGENT: {RELAY_AGENT!r})", session_id
+
+
 def subprocess_run(cmd: list[str]):
     import subprocess
 
@@ -159,7 +245,7 @@ def cmd_listen(args: argparse.Namespace) -> None:
                 continue
             author_name = msg["author"].get("username", "?")
             print(f"[discord_relay] {author_name} mentioned me: {msg['content'][:120]!r}", file=sys.stderr)
-            reply, session_id = run_claude(msg["content"], session_id)
+            reply, session_id = run_agent(msg["content"], session_id)
             post_message(args.token, args.channel_id, reply, SENDER_LABEL)
 
         time.sleep(POLL_INTERVAL_SECONDS)
