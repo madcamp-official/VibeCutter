@@ -51,6 +51,39 @@ class AuditChangedFilesTests(unittest.TestCase):
         self.assertEqual(entry.changed_files, [])
 
 
+class AuditRunIdTests(unittest.TestCase):
+    """D5-P2: run_id 전용 컬럼 — run 단위 안전지표 집계용."""
+
+    def test_run_id_from_arguments(self) -> None:
+        @audited
+        def some_tool(run_id: str):
+            return "ok"
+
+        some_tool(run_id="run-abc123")
+        self.assertEqual(list_entries(1)[0].run_id, "run-abc123")
+
+    def test_run_id_from_output_when_not_in_args(self) -> None:
+        # localize/generate/apply처럼 finding_id/patch_id만 받는 tool은 반환 객체의 run_id로.
+        class _PatchLike:
+            run_id = "run-xyz789"
+            files = None
+
+        @audited
+        def patch_tool(patch_id: str):
+            return _PatchLike()
+
+        patch_tool("p1")
+        self.assertEqual(list_entries(1)[0].run_id, "run-xyz789")
+
+    def test_run_id_none_when_absent(self) -> None:
+        @audited
+        def read_tool(finding_id: str):
+            return "plain"
+
+        read_tool("f1")
+        self.assertIsNone(list_entries(1)[0].run_id)
+
+
 class AuditErrorRedactionTests(unittest.TestCase):
     def test_error_message_is_redacted(self) -> None:
         @audited

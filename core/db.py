@@ -32,6 +32,7 @@ DB_PATH = DATA_DIR / "evidence.db"
 # create_all이 못 만드는 것만 여기 등록한다. 새 additive 컬럼을 스키마에 넣을 때 함께 추가.
 _ADDITIVE_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "candidate": [("origin_candidate_id", "VARCHAR")],
+    "audit_log": [("run_id", "VARCHAR")],  # D5-P2 요청: run 단위 안전지표 집계용
 }
 
 _engine = None
