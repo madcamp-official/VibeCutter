@@ -67,6 +67,33 @@ class VcGeneratePatchWiringTests(unittest.TestCase):
         self.assertTrue(traj_path.exists())
         self.assertIn("vc_generate_patch", traj_path.read_text(encoding="utf-8"))
 
+    def test_reuses_stored_root_cause_without_recomputing(self) -> None:
+        # 2-3: vc_localize_root_cause가 이미 저장한 root_cause가 있으면 localize를 다시 안 부른다.
+        from contracts.schemas import RootCause
+
+        run = _run(status=RunState.VERIFIED)
+        finding = _finding(run.id)
+        finding.root_cause = RootCause(file="Stored.java", symbol="stored", rationale="from localize")
+        save(finding)
+
+        fake_patch = Patch(
+            id=f"patch-{uuid4().hex[:12]}", finding_id=finding.id, run_id=run.id, diff="d", files=["Stored.java"]
+        )
+        fake_service = MagicMock()
+        fake_service.catalog.source_root_for.return_value = Path(__file__).resolve().parent
+        with (
+            patch("mcp_server.tools_repair._service", return_value=fake_service),
+            patch("mcp_server.tools_repair.localize") as mock_localize,
+            patch("mcp_server.tools_repair.generate_patch", return_value=fake_patch) as mock_gen,
+        ):
+            self._call({"finding_id": finding.id})
+
+        mock_localize.assert_not_called()  # 저장된 root_cause 재사용
+        # generate_patch에 저장돼 있던 root_cause가 그대로 전달된다.
+        _, kwargs = mock_gen.call_args
+        (_, _, passed_root_cause) = mock_gen.call_args.args
+        self.assertEqual(passed_root_cause.file, "Stored.java")
+
     def test_repeat_call_on_patch_proposed_run_stays_patch_proposed(self) -> None:
         run = _run(status=RunState.PATCH_PROPOSED)
         finding = _finding(run.id)

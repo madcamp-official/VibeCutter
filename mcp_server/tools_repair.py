@@ -195,6 +195,15 @@ def _finalize_validation(run: Run, patch: Patch, validation: Validation) -> None
     run.status = transition(run.status, RunState(verdict))
     save(run)
 
+    # 2-3: verdict가 확정된 patch/validation을 Finding에 연결한다(부록 B "selected diff",
+    # validation). update_finding_status(FIXED)보다 먼저 set+save 해야 그 함수가 get으로
+    # 최신 finding을 읽어 selected_patch_id를 유지한다.
+    finding = get(Finding, patch.finding_id)
+    if finding is not None:
+        finding.selected_patch_id = patch.id
+        finding.validation_id = validation.id
+        save(finding)
+
     is_fixed = verdict == RunState.FIXED.value
     if is_fixed:
         summary = json.dumps(validation.model_dump(mode="json"), ensure_ascii=False).encode("utf-8")
@@ -237,7 +246,12 @@ def register(mcp: FastMCP) -> None:
             raise ValueError(f"run {finding.run_id} not found")
 
         source_root = _service().catalog.source_root_for(run.target_id)
-        return localize(finding, source_root=source_root)
+        root_cause = localize(finding, source_root=source_root)
+        # 2-3: 계산한 root_cause를 Finding에 저장해 리포트/SARIF가 실제 값을 싣게 하고,
+        # vc_generate_patch가 매번 재계산하지 않도록 한다(부록 B root cause 필드).
+        finding.root_cause = root_cause
+        save(finding)
+        return root_cause
 
     @mcp.tool()
     @audited
@@ -245,9 +259,9 @@ def register(mcp: FastMCP) -> None:
         """root cause 기반 patch 후보를 생성한다(원본 미변경, `approval=PENDING`).
 
         실제 합성·랭킹 로직은 P3 소유(`repair.patcher.generate_patch`) — P1은 finding → run →
-        target → source_root 조회, root_cause 계산(`repair.locator.localize` 재호출 —
-        `vc_localize_root_cause`와 별도 entry point, D3-P3.md 요청대로 이 tool 안에서 직접
-        계산한다), RunState 전이(VERIFIED/LOCALIZING/RETRY → PATCH_PROPOSED), Patch 저장,
+        target → source_root 조회, root_cause 확보(2-3: `vc_localize_root_cause`가 이미
+        `finding.root_cause`에 저장했으면 재사용, 없으면 `repair.locator.localize`로 계산 후
+        저장), RunState 전이(VERIFIED/LOCALIZING/RETRY → PATCH_PROPOSED), Patch 저장,
         trajectory 기록만 배선한다.
 
         **실패 처리**: 패치 후보를 하나도 합성 못 하면 `generate_patch()`가 `ValueError`를
@@ -273,7 +287,14 @@ def register(mcp: FastMCP) -> None:
         enforce_retry_budget(run, finding, next_attempt_no=attempt_no)
 
         source_root = _service().catalog.source_root_for(run.target_id)
-        root_cause = localize(finding, source_root=source_root)
+        # 2-3: vc_localize_root_cause가 먼저 불려 저장해 둔 root_cause가 있으면 재사용하고,
+        # 없으면(localize를 건너뛴 경우) 여기서 계산해 저장한다 — 중복 계산 제거.
+        if finding.root_cause is not None:
+            root_cause = finding.root_cause
+        else:
+            root_cause = localize(finding, source_root=source_root)
+            finding.root_cause = root_cause
+            save(finding)
         patch = generate_patch(
             run.id, finding, root_cause, source_root=source_root, attempt_no=attempt_no
         )
@@ -333,6 +354,12 @@ def register(mcp: FastMCP) -> None:
         _advance_to_patch_applied(run)
         patch.approval = ApprovalStatus.APPROVED
         save(patch)
+        # 2-3: 적용된 patch를 Finding에 연결한다(부록 B "patch candidates"). Finding 쪽엔
+        # patch_id를 안 들고 있어 리포트가 Patch.finding_id 역참조로 우회하던 것을 보강.
+        finding = get(Finding, patch.finding_id)
+        if finding is not None and patch.id not in finding.patch_ids:
+            finding.patch_ids = [*finding.patch_ids, patch.id]
+            save(finding)
         record_trajectory_step(
             run.id,
             state=run.status,

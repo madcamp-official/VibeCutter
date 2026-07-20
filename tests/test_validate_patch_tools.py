@@ -72,6 +72,9 @@ class GatePassingLeadsToFixedTests(unittest.TestCase):
         self.assertTrue(len(updated_finding.evidence_ids) >= 1)
         updated_patch = get(Patch, p.id)
         self.assertIsNotNone(updated_patch.validation_id)
+        # 2-3: verdict 확정 patch/validation이 Finding에도 연결된다(부록 B).
+        self.assertEqual(updated_finding.selected_patch_id, p.id)
+        self.assertEqual(updated_finding.validation_id, updated_patch.validation_id)
 
     def test_one_failing_gate_leads_to_retry_and_finding_stays_verified(self) -> None:
         run, finding, p = _setup()
