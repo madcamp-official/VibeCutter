@@ -88,7 +88,9 @@ CODEX_CONTEXT_FILES = (
     "docs/handoffs/D5-P2.md",
     "plan.md",
 )
-CONTEXT_FILE_MAX_CHARS = 12_000
+# Keep the first-turn context useful without making every new Discord thread
+# pay for tens of thousands of input characters.
+CONTEXT_FILE_MAX_CHARS = int(os.environ.get("CODEX_CONTEXT_FILE_MAX_CHARS", "6000"))
 
 
 def _api(token: str, method: str, path: str, body: dict | None = None) -> dict | list:
