@@ -80,6 +80,17 @@ def build_texts(samples: Iterable[dict]) -> list[dict]:
     return [r for r in rows if r["completion"].strip()]
 
 
+def dataset_label_stats(samples: Iterable[dict]) -> dict:
+    """학습셋 row 수 + label 분포 (팀 요청 Task 3: 학습 시작 전 공유용).
+
+    export(training_samples.jsonl)는 이미 `training_samples()`로 verified/fixed/rejected/
+    human_review 만 남긴 상태다 — 여기서 그 분포를 센다."""
+    from collections import Counter
+    samples = list(samples)
+    by_label = Counter(str(s.get("label") or "unlabeled") for s in samples)
+    return {"rows": len(samples), "by_label": dict(sorted(by_label.items()))}
+
+
 # --- 학습 (GPU 전용, 지연 import) ------------------------------------------------------
 
 def train(
@@ -136,10 +147,15 @@ def train(
                         "gate_proj", "up_proj", "down_proj"],
     )
     ds = Dataset.from_list([{"text": r["text"]} for r in rows])
+    # trl>=1.0 은 SFTConfig 인자가 max_seq_length → max_length 로 바뀌었다(GPU서버 실측:
+    # trl 1.8). 구/신 버전 모두 지원하도록 있는 인자로 넣는다.
+    import inspect
+    _seq_kw = "max_length" if "max_length" in inspect.signature(SFTConfig).parameters \
+        else "max_seq_length"
     cfg = SFTConfig(
         output_dir=output_dir, num_train_epochs=epochs,
         per_device_train_batch_size=batch_size, gradient_accumulation_steps=grad_accum,
-        learning_rate=lr, max_seq_length=max_seq_len, bf16=True,
+        learning_rate=lr, bf16=True, **{_seq_kw: max_seq_len},
         logging_steps=5, save_strategy="epoch", report_to=[],
     )
     trainer = SFTTrainer(model=model, args=cfg, train_dataset=ds, peft_config=peft_cfg)
@@ -161,8 +177,12 @@ def _main() -> None:
     args = ap.parse_args()
 
     if args.dry_run:
-        rows = build_texts(load_sft_samples(args.export))
-        print(f"[dry-run] 학습 가능 샘플 {len(rows)}개")
+        samples = load_sft_samples(args.export)
+        rows = build_texts(samples)
+        st = dataset_label_stats(samples)
+        # Task 3(팀 요청): 학습 시작 전 dataset row 수 + label 분포 공유.
+        print(f"[dry-run] dataset rows={st['rows']} (학습가능/completion有={len(rows)})")
+        print(f"[dry-run] label 분포: {st['by_label']}")
         if rows:
             print("--- 첫 샘플 text ---")
             print(rows[0]["text"][:600])

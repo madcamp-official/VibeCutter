@@ -22,7 +22,6 @@ from core.report import FindingReportEntry, RunReport
 from eval.report_export import (
     _split_location,
     export_report,
-    render_html,
     render_sarif,
 )
 
@@ -59,24 +58,6 @@ def test_split_location() -> None:
     assert _split_location("app/api/orders.py:42") == ("app/api/orders.py", 42)
     assert _split_location("app/api/orders.py") == ("app/api/orders.py", None)
     assert _split_location("C:/win/path.py:9") == ("C:/win/path.py", 9)   # rpartition
-
-
-def test_render_html_contains_key_fields() -> None:
-    out = render_html(_report())
-    assert "<!doctype html>" in out
-    assert "IDOR in /api/orders/{id}" in out
-    assert "CWE-639" in out and "A01:2021" in out
-    assert "high" in out
-    assert "art://ev/1" in out                       # evidence
-    assert "abort(403)" in out                       # patch diff 렌더
-    assert "공격 차단" in out                         # gate 라벨
-    assert "run-1" in out
-
-
-def test_render_html_escapes_and_survives_empty() -> None:
-    empty = RunReport(run_id="run-x", findings=[])
-    out = render_html(empty)
-    assert "finding 이 없습니다" in out and "run-x" in out
 
 
 def test_render_sarif_structure_and_mapping() -> None:

@@ -10,7 +10,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from model.train_lora import build_texts, load_sft_samples, sft_text
+from model.train_lora import build_texts, dataset_label_stats, load_sft_samples, sft_text
 
 # to_sft_sample() 이 내는 형태와 동일한 샘플.
 _SAMPLE = {
@@ -56,6 +56,20 @@ def test_load_sft_samples_reads_jsonl() -> None:
                      encoding="utf-8")
         rows = load_sft_samples(p)
         assert len(rows) == 2 and rows[0]["run_id"] == "run-1"   # 빈 줄은 건너뜀
+
+
+def test_dataset_label_stats() -> None:
+    # 팀 요청 Task 3: row 수 + label 분포. export 는 이미 검증된 것만 포함.
+    samples = [
+        {"input": {}, "output": "x", "label": "verified"},
+        {"input": {}, "output": "y", "label": "fixed"},
+        {"input": {}, "output": "z", "label": "verified"},
+        {"input": {}, "output": "w", "label": "rejected"},
+        {"input": {}, "output": "v"},   # label 없음 → unlabeled
+    ]
+    st = dataset_label_stats(samples)
+    assert st["rows"] == 5
+    assert st["by_label"] == {"fixed": 1, "rejected": 1, "unlabeled": 1, "verified": 2}
 
 
 def _run() -> None:
