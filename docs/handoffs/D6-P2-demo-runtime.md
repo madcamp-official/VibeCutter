@@ -74,10 +74,13 @@ orchestration은 변경하지 않는다.
   무인증 앱에서 IDOR 경계가 없어지는 true-negative 결과이며, `down --volumes`까지 완료됐다.
 - 위 두 결과는 P3의 별도 로컬 머신에서 실행돼 P2 runtime JSONL에 직접 조인하지 않는다. P4용
   co-located metadata가 필요하면 camp1에서 새 c1-05 run을 발급해야 한다.
-- camp1 준비 조건은 verifier venv의 `httpx/pydantic/semgrep` 등 requirements 설치와 c2-04 source
-  bootstrap이다. P2의 비대화형 SSH 시도(`root@172.10.5.178`)는 `Permission denied`
-  로 거부되어 원격 설치는 수행하지 못했다. camp1 로그인 가능한 팀원이 설치·bootstrap 후
-  새 run ID와 GPU worker를 P2에 전달해야 한다.
+- camp1 준비 조건은 해소됐다(2026-07-20). `/opt/VibeCutter`를 `main` 최신으로 fast-forward하고
+  `.venv-p2`에 `pip`를 bootstrap한 뒤 `requirements.txt`를 설치했다. `httpx 0.28.1`,
+  `pydantic 2.13.4`, `semgrep 1.90.0`을 확인했고, locked `c2-04` source bootstrap도
+  `ready`로 통과했다.
+- camp1의 기존 `c1-05` container는 healthy이며, 프로세스 범위 일회성 secret env를 주입한
+  worker-local preflight에서 `ready=True`, source lock `ready`, listening port를 확인했다.
+  secret 값은 저장·출력하지 않았다. 이제 P3가 camp1에서 fresh verifier run을 발급할 수 있다.
 
 ## 결정·가정·리스크
 
