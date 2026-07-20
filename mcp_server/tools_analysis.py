@@ -20,6 +20,7 @@ RunState 전이 + Candidate→Finding 승격 + evidence 기반 judge 판정
 
 from __future__ import annotations
 
+import os
 from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
@@ -182,16 +183,42 @@ def _prepare_scan(run_id: str, *, tool_name: str) -> Run:
     return run
 
 
+DEFAULT_MODEL_NAME = "Qwen/Qwen2.5-Coder-7B-Instruct"
+
+
+def _rerank_fn_from_env():
+    """LLM candidate 재랭킹 훅을 만든다(8.4절 "모델=가설 우선순위", RQ3, D4-P4 요청).
+
+    `VIBECUTTER_MODEL_ENDPOINT`(예: `http://127.0.0.1:8000/v1`)가 설정돼 있으면 P4 서빙
+    endpoint로 `make_rerank_fn(openai_chat_fn(...))`를 만들어 반환하고, 없으면 `None`을
+    돌려 aggregate의 휴리스틱 정렬을 그대로 쓴다 — GPU 없는 환경/CI에서도 스캔이 돈다.
+    `make_rerank_fn`은 네트워크/파싱 실패 시 입력을 그대로 돌려주므로(비파괴), endpoint가
+    죽어 있어도 후보를 잃지 않는다. endpoint를 env로 두면 loop을 GPU 서버에서 돌리든
+    로컬에서 돌리든 이 변수만 맞추면 된다(D4-P4 배포 결정과 독립).
+    """
+    base_url = os.environ.get("VIBECUTTER_MODEL_ENDPOINT")
+    if not base_url:
+        return None
+    model_name = os.environ.get("VIBECUTTER_MODEL_NAME", DEFAULT_MODEL_NAME)
+    from model.serving import make_rerank_fn, openai_chat_fn
+
+    return make_rerank_fn(openai_chat_fn(base_url, model_name))
+
+
 def _store_scan_candidates(
     run: Run, candidates: list[Candidate], *, tool: str
 ) -> ScanResult:
     """공통 후처리: FP reject+우선순위(`scanners.aggregate.aggregate`) → kept만 저장 → trajectory 기록.
 
+    우선순위 정렬은 `_rerank_fn_from_env()`가 만든 LLM 재랭킹 훅을 aggregate에 주입한다
+    (endpoint 미설정 시 None=휴리스틱). 후보가 우선순위순으로 저장되므로, 이후 driver/Host가
+    `list_by_run` 순서대로 verify하면 유력·심각한 후보부터 검증한다.
+
     **알려진 한계(D2-P4.md 요청 (b) 결정)**: 이 tool 자기 스캐너 결과만 aggregate하므로
     SAST·SCA 교차 중복 제거는 안 된다 — 두 tool이 독립 호출되기 때문. 스캔 완료 시점을
     묶는 별도 단계가 생기면 그때 cross-scanner aggregate로 바꾼다.
     """
-    result = aggregate(candidates)
+    result = aggregate(candidates, rerank_fn=_rerank_fn_from_env())
     for candidate in result.kept:
         save(candidate)
     record_trajectory_step(

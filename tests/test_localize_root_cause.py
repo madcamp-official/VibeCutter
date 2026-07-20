@@ -60,6 +60,28 @@ class VcLocalizeRootCauseWiringTests(unittest.TestCase):
         self.assertEqual(called_finding.id, finding.id)
         self.assertEqual(kwargs["source_root"], expected_root)
 
+    def test_persists_root_cause_on_finding(self) -> None:
+        # 2-3: 계산한 root_cause가 Finding에 저장돼 리포트가 실제 값을 싣게 한다.
+        from core.evidence_store import get
+
+        run = _run(target_id="fake-target")
+        finding = _finding(run.id)
+        self.assertIsNone(finding.root_cause)
+
+        fake_root_cause = RootCause(file="UserController.java", symbol="getProfile", rationale="no owner check")
+        fake_service = MagicMock()
+        fake_service.catalog.source_root_for.return_value = Path("/x")
+        with (
+            patch("mcp_server.tools_repair._service", return_value=fake_service),
+            patch("mcp_server.tools_repair.localize", return_value=fake_root_cause),
+        ):
+            self._call({"finding_id": finding.id})
+
+        reloaded = get(Finding, finding.id)
+        self.assertIsNotNone(reloaded.root_cause)
+        self.assertEqual(reloaded.root_cause.file, "UserController.java")
+        self.assertEqual(reloaded.root_cause.symbol, "getProfile")
+
     def test_unknown_finding_raises(self) -> None:
         from mcp.server.fastmcp.exceptions import ToolError
 

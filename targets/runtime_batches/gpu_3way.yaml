@@ -1,0 +1,37 @@
+# P2-owned target runtime deployment queue.
+#
+# Each worker runs this queue on its own host.  Target manifests intentionally
+# retain 127.0.0.1 base URLs: P1/P3 audit processes run on the same worker as
+# the target and never expose an app port on the campus network.
+#
+# The 20 IDs below are exactly policies/scope.yaml's allowlisted executable
+# runtime set.  Manifests kept outside that policy (c1-01 and c2-03) are not
+# deployable batch members.
+queue_version: 1
+workers:
+  gpu-1:
+    targets:
+      - 26s-w1-c1-02
+      - 26s-w1-c1-05
+      - 26s-w1-c2-02
+      - 26s-w1-c2-07
+      - 26s-w1-c3-03
+      - 26s-w1-c3-06
+      - 26s-w1-c3-09
+  gpu-2:
+    targets:
+      - 26s-w1-c1-03
+      - 26s-w1-c1-06
+      - 26s-w1-c2-01
+      - 26s-w1-c2-04
+      - 26s-w1-c2-08
+      - 26s-w1-c3-04
+      - 26s-w1-c3-08
+  gpu-3:
+    targets:
+      - 26s-w1-c1-04
+      - 26s-w1-c1-07
+      - 26s-w1-c2-05
+      - 26s-w1-c2-06
+      - 26s-w1-c3-02
+      - 26s-w1-c3-05

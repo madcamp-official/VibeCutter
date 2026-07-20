@@ -1,145 +1,58 @@
 """vibecutter:// MCP resources (6.4절).
 
-target/run/evidence 관련 resource는 아직 최종 스키마 모양을 보여주는 더미 데이터로
-응답한다(target manifest 조회 배선과 run/evidence 목록 조회 배선은 Day2 범위 밖 — 아직
-할 일로 남아 있다). `vibecutter://policies/scope`는 예외적으로 실제 policies/scope.yaml을
-그대로 읽어 반환한다 — 이건 mock이 아니라 진짜 정책 상태다.
+전부 실데이터를 반환한다(Extra Day 2-1에 더미 제거):
+- `vibecutter://targets` — P2 catalog의 checked-in target(Target projection) 목록.
+- `vibecutter://targets/{target_id}/manifest` — P2 catalog의 실제 manifest(9.3절).
+- `vibecutter://runs/{run_id}/state` — evidence_store의 실제 Run(없으면 ValueError).
+- `vibecutter://runs/{run_id}/evidence` — evidence_store의 실제 Observation 목록.
+- `vibecutter://findings/{finding_id}` — evidence_store의 실제 Finding(부록 B).
+- `vibecutter://policies/scope` — policies/scope.yaml 실제 내용.
+- `vibecutter://reports/{run_id}` — vc_generate_report가 저장하는 실제 리포트 경로.
 
-`vibecutter://findings/{finding_id}`는 Day2에 evidence_store 연동으로 "완성"됐다 —
-`core.evidence_store.get(Finding, finding_id)`로 실제 Finding을 조회해 부록 B 스키마
-형태로 반환한다(아직 채워지지 않은 필드는 Finding 모델 기본값대로 null/빈 값).
+Day1 Notion 완료 기준("Host에서 상태·artifact 조회 가능") + 11.5 P0("Host에서 run 상태와
+artifact 조회")를 실제로 충족시킨다 — 예전엔 run state가 항상 REGISTERED 더미를 반환해
+"틀린 상태를 자신 있게 보고"하는 문제가 있었다.
 """
 
 from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
-from pydantic import BaseModel, Field
 
-from contracts.schemas import Finding, Observation, Run, RunState, Target
+from contracts.schemas import Finding, Observation, Run, Target
 from core.db import DATA_DIR
-from core.evidence_store import get
+from core.evidence_store import get, list_by_run
 from core.policy_engine import load_scope
+from mcp_server.tools_inventory import _service
 from mcp_server.tools_repair import ReportResult
-
-
-# --- target manifest 형태 (9.3절). P2가 실제 manifest 작성 규격을 확정하면 맞춰 조정한다. ---
-
-
-class AuthFixture(BaseModel):
-    role: str
-
-
-class BuildSpec(BaseModel):
-    command_id: str
-
-
-class RunSpec(BaseModel):
-    command_id: str
-    healthcheck: str | None = None
-
-
-class NetworkPolicy(BaseModel):
-    allowed_hosts: list[str] = Field(default_factory=list)
-    internet_egress: bool = False
-
-
-class AuthSpec(BaseModel):
-    fixtures: list[AuthFixture] = Field(default_factory=list)
-
-
-class TestsSpec(BaseModel):
-    regression_command_id: str | None = None
-
-
-class ScopeSpec(BaseModel):
-    writable_paths: list[str] = Field(default_factory=list)
-
-
-class TargetManifest(BaseModel):
-    version: int = 1
-    id: str
-    source_root: str
-    stack: list[str] = Field(default_factory=list)
-    build: BuildSpec
-    run: RunSpec
-    network: NetworkPolicy
-    auth: AuthSpec
-    tests: TestsSpec
-    scope: ScopeSpec
-
-
-# --- 더미 데이터 (evidence_store 연동 전까지) --------------------------------------------
-
-
-def _dummy_target() -> Target:
-    return Target(
-        id="scrum-helper",
-        manifest_hash="dummy-hash",
-        adapter="spring-boot",
-        allowed_hosts=["127.0.0.1"],
-    )
-
-
-def _dummy_manifest(target_id: str) -> TargetManifest:
-    return TargetManifest(
-        id=target_id,
-        source_root=f"/lab/targets/{target_id}",
-        stack=["react", "spring-boot", "mysql"],
-        build=BuildSpec(command_id="spring-react-compose-build"),
-        run=RunSpec(
-            command_id="docker-compose-up",
-            healthcheck="http://127.0.0.1:${PORT}/api/health",
-        ),
-        network=NetworkPolicy(allowed_hosts=["127.0.0.1", "target-db"], internet_egress=False),
-        auth=AuthSpec(
-            fixtures=[
-                AuthFixture(role="USER_A"),
-                AuthFixture(role="USER_B"),
-                AuthFixture(role="ADMIN"),
-            ]
-        ),
-        tests=TestsSpec(regression_command_id="gradle-test-plus-playwright"),
-        scope=ScopeSpec(writable_paths=["backend/src", "frontend/src", "tests"]),
-    )
-
-
-def _dummy_run(run_id: str) -> Run:
-    return Run(id=run_id, target_id="scrum-helper", status=RunState.REGISTERED)
-
-
-def _dummy_evidence(run_id: str) -> list[Observation]:
-    return [
-        Observation(
-            id="obs-1",
-            run_id=run_id,
-            type="http_exchange",
-            artifact_uri=f"file://.vibecutter/runs/{run_id}/obs-1.json",
-            hash="0" * 64,
-            producer="vc_verify_access_control",
-        )
-    ]
+from runtime.manifest import TargetManifest
 
 
 def register(mcp: FastMCP) -> None:
     @mcp.resource("vibecutter://targets")
     def list_targets() -> list[Target]:
-        """등록된 target 목록. evidence_store 연동 전까지 예시 1건을 반환한다."""
-        return [_dummy_target()]
+        """checked-in target 목록(P1-facing Target projection). P2 catalog가 진실 소스다."""
+        return [rt.contract_target for rt in _service().catalog.list()]
 
     @mcp.resource("vibecutter://targets/{target_id}/manifest")
     def get_target_manifest(target_id: str) -> TargetManifest:
-        """target manifest(9.3절 형식). P2 manifest 저장소 연동 전까지 예시를 반환한다."""
-        return _dummy_manifest(target_id)
+        """target manifest(9.3절). P2 catalog의 checked-in manifest를 그대로 반환한다."""
+        try:
+            return _service().catalog.get(target_id).manifest
+        except KeyError as exc:
+            raise ValueError(f"target {target_id} not found") from exc
 
     @mcp.resource("vibecutter://runs/{run_id}/state")
     def get_run_state(run_id: str) -> Run:
-        """run의 현재 RunState. evidence_store 연동 전까지 예시를 반환한다."""
-        return _dummy_run(run_id)
+        """run의 현재 RunState. evidence_store에서 실제 Run을 조회한다."""
+        run = get(Run, run_id)
+        if run is None:
+            raise ValueError(f"run {run_id} not found")
+        return run
 
     @mcp.resource("vibecutter://runs/{run_id}/evidence")
     def get_run_evidence(run_id: str) -> list[Observation]:
-        """run에 쌓인 evidence(Observation) 목록. evidence_store 연동 전까지 예시를 반환한다."""
-        return _dummy_evidence(run_id)
+        """run에 쌓인 evidence(Observation) 목록. 없으면 빈 목록."""
+        return list_by_run(Observation, run_id)
 
     @mcp.resource("vibecutter://findings/{finding_id}")
     def get_finding(finding_id: str) -> Finding:

@@ -109,6 +109,23 @@ class VcApplyPatchWiringTests(unittest.TestCase):
         traj_path = TRAJECTORY_DIR / f"{run.id}.jsonl"
         self.assertIn("vc_apply_patch", traj_path.read_text(encoding="utf-8"))
 
+    def test_links_applied_patch_to_finding(self) -> None:
+        # 2-3: apply 성공 후 patch.id가 Finding.patch_ids에 연결된다(부록 B patch candidates).
+        from contracts.schemas import Finding
+        from core.evidence_store import save
+
+        run = self._run()
+        finding = Finding(id=f"finding-{uuid4().hex[:12]}", run_id=run.id, title="t")
+        save(finding)
+        diff = "--- a/Foo.java\n+++ b/Foo.java\n@@ -1,3 +1,3 @@\n line1\n-line2\n+CHANGED\n line3\n"
+        p = Patch(id=f"patch-{uuid4().hex[:12]}", finding_id=finding.id, run_id=run.id, diff=diff)
+        save(p)
+
+        with patch("mcp_server.tools_repair._service", return_value=self._fake_service()):
+            self._call({"patch_id": p.id, "confirmed": True})
+
+        self.assertIn(p.id, get(Finding, finding.id).patch_ids)
+
     def test_applies_diff_when_source_dir_is_nested_under_repo_root(self) -> None:
         """26s-w1-c3-09 스타일: manifest source_dir(예: backend/server)가 git toplevel의
         하위 디렉터리인 target. patcher는 diff 경로를 source_dir 기준 상대경로로 내므로
