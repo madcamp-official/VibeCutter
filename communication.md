@@ -38,11 +38,14 @@ export RELAY_AGENT=codex
 export CODEX_MODEL=gpt-5.6-luna
 export CODEX_REASONING_EFFORT=medium
 export CODEX_SANDBOX=workspace-write
+export CODEX_CONTEXT_MODE=on-demand
 python3 tools/discord_relay.py listen 1528661803381297213
 ```
 
 Codex relay는 모델과 추론 레벨을 환경변수로 고정한다. 현재 설치된 CLI에서
 `gpt-5.6-luna`가 확인되며, 다른 모델이 필요하면 `CODEX_MODEL`만 바꿔 재시작한다.
+`CODEX_CONTEXT_MODE=on-demand`가 기본값이며, 요청과 관련된 파일만 Codex가 직접
+탐색한다. sandbox 시작 실패 시에는 제한된 handoff 발췌를 한 번 자동 fallback한다.
 
 포그라운드 프로세스라 터미널을 계속 띄워두거나 `nohup .../listen ... &`, tmux 등으로 백그라운드에 둬야 한다. 이 세션(대화형 VSCode 세션)은 사람이 있을 때만 켜져 있으므로, 지금은 주로 `send`만 쓰고 `listen`은 필요할 때 켜는 걸 권장.
 

@@ -62,6 +62,7 @@ CODEX_SANDBOX = os.environ.get("CODEX_SANDBOX", "read-only")
 # CODEX_MODEL when a different model is needed.
 CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.6-luna")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
+CODEX_CONTEXT_MODE = os.environ.get("CODEX_CONTEXT_MODE", "on-demand").lower()
 RELAY_AGENT = os.environ.get("RELAY_AGENT", "claude").lower()
 CLAUDE_TIMEOUT_SECONDS = int(os.environ.get("CLAUDE_TIMEOUT_SECONDS", "600"))
 PROJECT_DIR = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
@@ -198,6 +199,18 @@ def _codex_relay_context() -> str:
     return CODEX_CONTEXT + "\n\nRepository context:\n" + "\n\n".join(excerpts)
 
 
+def _codex_on_demand_context() -> str:
+    """Give Codex a small map and let it inspect only relevant files."""
+    return (
+        CODEX_CONTEXT
+        + "\n\nUse on-demand repository inspection: first identify the files relevant to the "
+        "incoming request, then read only those files with the available shell tools. "
+        "Useful starting points are communication.md, plan.md, docs/handoffs/, "
+        "core/, runtime/, targets/, and tests/. Do not scan the whole repository "
+        "unless the request explicitly requires it."
+    )
+
+
 def run_codex(prompt: str, session_id: str | None) -> tuple[str, str | None]:
     """Run a separate, resumable Codex relay session in the project directory.
 
@@ -227,10 +240,20 @@ def run_codex(prompt: str, session_id: str | None) -> tuple[str, str | None]:
                 *model_args,
             ]
             cmd += CODEX_EXTRA_ARGS
-            relay_prompt = _codex_relay_context() + "\n\nIncoming Discord message:\n" + prompt + NO_RE_MENTION_HINT
+            context = _codex_on_demand_context() if CODEX_CONTEXT_MODE == "on-demand" else _codex_relay_context()
+            relay_prompt = context + "\n\nIncoming Discord message:\n" + prompt + NO_RE_MENTION_HINT
         # Pass the prompt through stdin: Windows ``cmd /c`` has an 8191-char
         # command-line limit, while the attached handoff context can be larger.
         result = subprocess_run(cmd, input_text=relay_prompt)
+        # If an on-demand run cannot start its sandbox shell, retry once with
+        # the bounded handoff context so the answer can still be produced.
+        if (
+            not session_id
+            and CODEX_CONTEXT_MODE == "on-demand"
+            and result.returncode != 0
+        ):
+            fallback_prompt = _codex_relay_context() + "\n\nIncoming Discord message:\n" + prompt + NO_RE_MENTION_HINT
+            result = subprocess_run(cmd, input_text=fallback_prompt)
         new_session_id = _codex_session_id(result.stdout or "", session_id)
         if result.returncode != 0:
             return (
