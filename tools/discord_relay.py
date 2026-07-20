@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 import shutil
 import sys
 import tempfile
@@ -71,13 +72,18 @@ NO_RE_MENTION_HINT = (
 
 CODEX_CONTEXT = os.environ.get(
     "CODEX_RELAY_CONTEXT",
-    "You are the P2 agent for the VibeCutter project. Before answering, read "
-    "communication.md, plan.md, and the relevant docs/handoffs/D5-P2.md if they "
-    "exist. Preserve the P2 role boundary: focus on target runtime, provisioning, "
+    "You are the P2 agent for the VibeCutter project. Preserve the P2 role "
+    "boundary: focus on target runtime, provisioning, "
     "fixtures, worktrees, overlays, reset, and test-runner work. Do not silently "
     "modify another role's owned files. This is a Discord relay session, not the "
-    "desktop Codex conversation, so use repository files and handoffs as context.",
+    "desktop Codex conversation. The relevant repository context is attached below.",
 )
+CODEX_CONTEXT_FILES = (
+    "communication.md",
+    "docs/handoffs/D5-P2.md",
+    "plan.md",
+)
+CONTEXT_FILE_MAX_CHARS = 12_000
 
 
 def _api(token: str, method: str, path: str, body: dict | None = None) -> dict | list:
@@ -162,6 +168,29 @@ def _codex_session_id(stdout: str, fallback: str | None) -> str | None:
     return session_id
 
 
+def _codex_relay_context() -> str:
+    """Attach small, allowlisted project context without asking Codex to shell out.
+
+    A background Windows Codex process may not receive a sandbox shell token. The
+    relay itself can safely read public project docs and include bounded excerpts,
+    so coordination answers still have the P2 context in that situation.
+    """
+    excerpts: list[str] = []
+    root = Path(PROJECT_DIR)
+    for relative_path in CODEX_CONTEXT_FILES:
+        path = root / relative_path
+        try:
+            body = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if len(body) > CONTEXT_FILE_MAX_CHARS:
+            body = body[:CONTEXT_FILE_MAX_CHARS] + "\n[excerpt truncated]"
+        excerpts.append(f"--- {relative_path} ---\n{body}")
+    if not excerpts:
+        return CODEX_CONTEXT
+    return CODEX_CONTEXT + "\n\nRepository context:\n" + "\n\n".join(excerpts)
+
+
 def run_codex(prompt: str, session_id: str | None) -> tuple[str, str | None]:
     """Run a separate, resumable Codex relay session in the project directory.
 
@@ -187,8 +216,10 @@ def run_codex(prompt: str, session_id: str | None) -> tuple[str, str | None]:
                 output_path,
             ]
             cmd += CODEX_EXTRA_ARGS
-            relay_prompt = CODEX_CONTEXT + "\n\nIncoming Discord message:\n" + prompt + NO_RE_MENTION_HINT
-        result = subprocess_run(cmd + [relay_prompt])
+            relay_prompt = _codex_relay_context() + "\n\nIncoming Discord message:\n" + prompt + NO_RE_MENTION_HINT
+        # Pass the prompt through stdin: Windows ``cmd /c`` has an 8191-char
+        # command-line limit, while the attached handoff context can be larger.
+        result = subprocess_run(cmd, input_text=relay_prompt)
         new_session_id = _codex_session_id(result.stdout or "", session_id)
         if result.returncode != 0:
             return (
@@ -217,7 +248,7 @@ def run_agent(prompt: str, session_id: str | None) -> tuple[str, str | None]:
     return f"(지원하지 않는 RELAY_AGENT: {RELAY_AGENT!r})", session_id
 
 
-def subprocess_run(cmd: list[str]):
+def subprocess_run(cmd: list[str], *, input_text: str | None = None):
     import subprocess
 
     # Codex CLI emits UTF-8 JSONL. Windows otherwise decodes it using the
@@ -230,6 +261,7 @@ def subprocess_run(cmd: list[str]):
         text=True,
         encoding="utf-8",
         errors="replace",
+        input=input_text,
         timeout=CLAUDE_TIMEOUT_SECONDS,
     )
 
