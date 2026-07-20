@@ -65,6 +65,20 @@ orchestration은 변경하지 않는다.
 - camp1 신규 run은 GPU runtime의 3.13 venv와 취약 target 준비가 끝난 뒤 P3가 발급한다.
   P2는 그 전까지 baseline/reset 및 runtime metadata를 지원한다.
 
+## P3 실행 결과 및 camp1 blocker
+
+- `c1-05` local gold `run-897ad65c686f`: candidate 1, verified 1, `FIXED`, 6개 gate 모두 통과.
+  P3가 run-scoped overlay reset까지 완료했다. report는 P3 로컬 `camp1:/root/demo_report_897.*`
+  경로에 있다.
+- `c2-04` local scan `run-567d4d06e7e9`: worker 3개, candidate 3, verified 0/rejected 3.
+  무인증 앱에서 IDOR 경계가 없어지는 true-negative 결과이며, `down --volumes`까지 완료됐다.
+- 위 두 결과는 P3의 별도 로컬 머신에서 실행돼 P2 runtime JSONL에 직접 조인하지 않는다. P4용
+  co-located metadata가 필요하면 camp1에서 새 c1-05 run을 발급해야 한다.
+- camp1 준비 조건은 verifier venv의 `httpx/pydantic/semgrep` 등 requirements 설치와 c2-04 source
+  bootstrap이다. P2의 비대화형 SSH 시도(`root@172.10.5.178`)는 `Permission denied`
+  로 거부되어 원격 설치는 수행하지 못했다. camp1 로그인 가능한 팀원이 설치·bootstrap 후
+  새 run ID와 GPU worker를 P2에 전달해야 한다.
+
 ## 결정·가정·리스크
 
 - 20개 전체를 발표 데모에 동시에 올리지 않는다. 고정 host port 때문에 3~5개 후보를 순차 운용한다.
