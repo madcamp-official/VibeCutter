@@ -8,12 +8,23 @@ from .manifest import TargetManifest, load_manifest
 from .provisioning import ProvisioningStrategy, VerifierProvisioning
 from .readiness import TargetReadiness, TargetRuntimeInspector
 from .registration import load_contract_target, manifest_sha256, to_contract_target
+from .source_bootstrap import (
+    SourceBootstrapError,
+    SourceCheck,
+    TargetSourceBootstrapper,
+)
+from .source_lock import SourceLock, SourceRevision
 from .test_runner import RunScopedTestRunner, TestRunSummary
-from .target_service import TargetOperationError, TargetRuntimeService
+from .target_service import (
+    BaselineRestoreResult,
+    TargetOperationError,
+    TargetRuntimeService,
+)
 
 __all__ = [
     "ApprovalRequired",
     "RuntimeBatchQueue",
+    "BaselineRestoreResult",
     "ComposeIsolationInspector",
     "ComposeIsolationReport",
     "LifecycleManager",
@@ -30,6 +41,11 @@ __all__ = [
     "VerifierProvisioning",
     "TargetRuntimeInspector",
     "RunScopedTestRunner",
+    "SourceBootstrapError",
+    "SourceCheck",
+    "SourceLock",
+    "SourceRevision",
+    "TargetSourceBootstrapper",
     "TestRunSummary",
     "TargetOperationError",
     "TargetRuntimeService",

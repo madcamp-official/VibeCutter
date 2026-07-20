@@ -1,0 +1,27 @@
+# P2-owned target source identity lock. Source contents stay gitignored under
+# .vibecutter/targets/sources; only canonical repository identities and exact
+# commits are checked in. Bootstrap callers accept target_id only.
+lock_version: 1
+targets:
+  26s-w1-c1-01: {repository: https://github.com/madcamp-official/26s-w1-c1-01.git, revision: ca63e4202f077e4fb479f274f2600aacf7314fe8}
+  26s-w1-c1-02: {repository: https://github.com/madcamp-official/26s-w1-c1-02.git, revision: 4396df04cef1025afede5cf36721883833373d78}
+  26s-w1-c1-03: {repository: https://github.com/madcamp-official/26s-w1-c1-03.git, revision: 09793959e654c4f9708188b6b33a18aefa61418c}
+  26s-w1-c1-04: {repository: https://github.com/madcamp-official/26s-w1-c1-04.git, revision: e479f311258d0264cd4cc3e1d01f4ea89e72ff7a}
+  26s-w1-c1-05: {repository: https://github.com/madcamp-official/26s-w1-c1-05.git, revision: 74aeb1dd51e067a7c3cf43f2e88d78ecd2261f53}
+  26s-w1-c1-06: {repository: https://github.com/madcamp-official/26s-w1-c1-06.git, revision: 08c57bdab20d6a13918804ffc94af061e3f7044f}
+  26s-w1-c1-07: {repository: https://github.com/madcamp-official/26s-w1-c1-07.git, revision: 9ddcb8f99cacbbc540d9935f1ed206c27e1e2c73}
+  26s-w1-c2-01: {repository: https://github.com/madcamp-official/26s-w1-c2-01.git, revision: 3202381acba75d3cf798c2aec0ff1b6549b660c6}
+  26s-w1-c2-02: {repository: https://github.com/madcamp-official/26s-w1-c2-02.git, revision: 366b63f9c908c664fec375bb0f91e62426d34d75}
+  26s-w1-c2-03: {repository: https://github.com/madcamp-official/26s-w1-c2-03.git, revision: 8988bdc28c3d798329a5a6dbc380d178d289742d}
+  26s-w1-c2-04: {repository: https://github.com/madcamp-official/26s-w1-c2-04.git, revision: 63c1f2c77e1e98db57dcb16a826c7046f3a7fcf8}
+  26s-w1-c2-05: {repository: https://github.com/madcamp-official/26s-w1-c2-05.git, revision: 880b783d67721f7012ece85cd3ee9017d512493f}
+  26s-w1-c2-06: {repository: https://github.com/madcamp-official/26s-w1-c2-06.git, revision: 34d6e08566a488053c761163b0780c3d6cd4a9d6}
+  26s-w1-c2-07: {repository: https://github.com/madcamp-official/26s-w1-c2-07.git, revision: e6788adea9cb7fda5bfc2c416f63850b2a7d47f6}
+  26s-w1-c2-08: {repository: https://github.com/madcamp-official/26s-w1-c2-08.git, revision: 406b0d08ca35f540d3a1a6ff8e3cdfa48449af80}
+  26s-w1-c3-02: {repository: https://github.com/madcamp-official/26s-w1-c3-02.git, revision: 0e3b65b819061c2eeb9e9fc98757de15f8859b2f}
+  26s-w1-c3-03: {repository: https://github.com/madcamp-official/26s-w1-c3-03.git, revision: afcd7f536762fde55e83cf00ed22330320b64363}
+  26s-w1-c3-04: {repository: https://github.com/madcamp-official/26s-w1-c3-04.git, revision: 6b59a839fb24579f1ff28bf71f494e2cf0dc9957}
+  26s-w1-c3-05: {repository: https://github.com/madcamp-official/26s-w1-c3-05.git, revision: bfe11015f5341f6c77ecebb06fe2a190ee2184d8}
+  26s-w1-c3-06: {repository: https://github.com/madcamp-official/26s-w1-c3-06.git, revision: 3e1b6cd49b6290939f8c537bfee288f099031fdb}
+  26s-w1-c3-08: {repository: https://github.com/madcamp-official/26s-w1-c3-08.git, revision: c163fd51b287106039977f928b7a84e022c6a6d7}
+  26s-w1-c3-09: {repository: https://github.com/madcamp-official/26s-w1-c3-09.git, revision: 2f7522116fe8e8fe8b5184fb21fd79b73719b8a5}

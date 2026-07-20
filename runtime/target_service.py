@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -45,6 +46,35 @@ class StaleRunSweepResult:
     skipped_active_run_ids: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class BaselineRestoreResult:
+    """Sanitized outcome of restoring a shared target after a write replay.
+
+    Write-capable verification must not leave its mutations in the baseline
+    instance used by the next candidate. The result contains only lifecycle
+    verdicts; command output and fixture contents deliberately remain local.
+    """
+
+    target_id: str
+    strategy: ProvisioningStrategy
+    base_url: str
+    status: Literal[
+        "restored",
+        "reset_failed",
+        "start_failed",
+        "health_failed",
+        "fixture_failed",
+    ]
+    reset_succeeded: bool
+    start_succeeded: bool
+    healthy: bool
+    fixture_prepared: bool
+
+    @property
+    def restored(self) -> bool:
+        return self.status == "restored"
+
+
 class TargetRuntimeService:
     """P2 implementation behind inventory/lifecycle MCP tools.
 
@@ -70,7 +100,11 @@ class TargetRuntimeService:
     @classmethod
     def from_repository_root(cls, repository_root: Path) -> "TargetRuntimeService":
         root = repository_root.resolve()
-        catalog = TargetCatalog(manifest_root=root / "targets" / "manifests", repository_root=root)
+        catalog = TargetCatalog(
+            manifest_root=root / "targets" / "manifests",
+            repository_root=root,
+            source_lock_path=root / "targets" / "source-lock.yaml",
+        )
         catalog.load()
         return cls(catalog)
 
@@ -78,8 +112,12 @@ class TargetRuntimeService:
         """Register only a byte-for-byte equivalent checked-in target configuration."""
         submitted = TargetManifest.model_validate(dict(submitted_manifest))
         registered = self._require_authorized(submitted.id)
-        if submitted.model_dump(mode="json") != registered.manifest.model_dump(mode="json"):
-            raise PolicyViolation("submitted manifest differs from the checked-in approved manifest")
+        if submitted.model_dump(mode="json") != registered.manifest.model_dump(
+            mode="json"
+        ):
+            raise PolicyViolation(
+                "submitted manifest differs from the checked-in approved manifest"
+            )
         self._save_target(registered.contract_target)
         return registered.contract_target
 
@@ -127,14 +165,18 @@ class TargetRuntimeService:
         self._require_operation(target_id, "reset_target")
         if not approved:
             raise ApprovalRequired("vc_reset_target requires explicit approval")
-        return self.catalog.adapter_for(target_id).reset(approved=True).status == "passed"
+        return (
+            self.catalog.adapter_for(target_id).reset(approved=True).status == "passed"
+        )
 
     def verifier_provisioning(self, target_id: str) -> VerifierProvisioning:
         """Expose only checked-in verifier replay metadata for an allowed target."""
         self._require_authorized(target_id)
         return self.catalog.verifier_provisioning_for(target_id)
 
-    def prepare_verifier_fixture(self, target_id: str, *, approved: bool) -> VerifierProvisioning:
+    def prepare_verifier_fixture(
+        self, target_id: str, *, approved: bool
+    ) -> VerifierProvisioning:
         """Run a fixed, approved fixture command when the target declares one.
 
         This is intentionally unavailable for self-signup targets: P3's verifier
@@ -142,20 +184,157 @@ class TargetRuntimeService:
         """
         self._require_operation(target_id, "provision_target")
         if not approved:
-            raise ApprovalRequired("verifier fixture preparation requires explicit approval")
+            raise ApprovalRequired(
+                "verifier fixture preparation requires explicit approval"
+            )
         provisioning = self.catalog.verifier_provisioning_for(target_id)
         if provisioning.strategy is not ProvisioningStrategy.FIXTURE_FILE:
             raise TargetOperationError(
                 f"target {target_id} has no P2-managed fixture-file provisioning path"
             )
         assert provisioning.fixture_command_id is not None
-        result = self.catalog.lifecycle_for(target_id).execute(provisioning.fixture_command_id)
+        self._remove_stale_fixture_artifact(provisioning)
+        result = self.catalog.lifecycle_for(target_id).execute(
+            provisioning.fixture_command_id
+        )
         if result.status != "passed":
-            raise TargetOperationError(f"verifier fixture preparation failed for target {target_id}")
+            raise TargetOperationError(
+                f"verifier fixture preparation failed for target {target_id}"
+            )
         refreshed = self.catalog.verifier_provisioning_for(target_id)
         if not refreshed.fixture_available:
-            raise TargetOperationError(f"verifier fixture artifact missing for target {target_id}")
+            raise TargetOperationError(
+                f"verifier fixture artifact missing for target {target_id}"
+            )
         return refreshed
+
+    def restore_baseline_after_write(
+        self,
+        target_id: str,
+        *,
+        approved: bool,
+    ) -> BaselineRestoreResult:
+        """Restore one shared target after an approved write verifier replay.
+
+        The provisioning contract and every policy command are validated before
+        the first reset so an incomplete contract cannot partially mutate a
+        shared baseline. ``fixture_file`` targets are reset, restarted,
+        health-checked, and reseeded through their fixed fixture command.
+        ``self_signup`` targets deliberately stop after the fresh reset/start:
+        P3 creates ephemeral accounts during the next replay.
+        """
+        if not approved:
+            raise ApprovalRequired(
+                "write-verifier baseline restore requires explicit approval"
+            )
+
+        # Validate the full lifecycle path before changing shared state.
+        target = self._require_operation(target_id, "reset_target")
+        self._require_operation(target_id, "start_target")
+        provisioning = self.catalog.verifier_provisioning_for(target_id)
+        if provisioning.strategy is ProvisioningStrategy.FIXTURE_FILE:
+            self._require_operation(target_id, "provision_target")
+            if provisioning.fixture_command_id is None:
+                raise TargetOperationError(
+                    f"target {target_id} fixture-file provisioning has no registered fixture command"
+                )
+        elif provisioning.strategy is not ProvisioningStrategy.SELF_SIGNUP:
+            raise TargetOperationError(
+                f"target {target_id} has no P2-managed provisioning contract for baseline restore"
+            )
+
+        adapter = self.catalog.adapter_for(target_id)
+        reset = adapter.reset(approved=True)
+        if reset.status != "passed":
+            return BaselineRestoreResult(
+                target_id=target_id,
+                strategy=provisioning.strategy,
+                base_url=target.manifest.base_url,
+                status="reset_failed",
+                reset_succeeded=False,
+                start_succeeded=False,
+                healthy=False,
+                fixture_prepared=False,
+            )
+
+        started = adapter.start()
+        if started.status != "passed":
+            return BaselineRestoreResult(
+                target_id=target_id,
+                strategy=provisioning.strategy,
+                base_url=target.manifest.base_url,
+                status="start_failed",
+                reset_succeeded=True,
+                start_succeeded=False,
+                healthy=False,
+                fixture_prepared=False,
+            )
+
+        health = adapter.health()
+        if health.status != "ready":
+            return BaselineRestoreResult(
+                target_id=target_id,
+                strategy=provisioning.strategy,
+                base_url=target.manifest.base_url,
+                status="health_failed",
+                reset_succeeded=True,
+                start_succeeded=True,
+                healthy=False,
+                fixture_prepared=False,
+            )
+
+        if provisioning.strategy is ProvisioningStrategy.FIXTURE_FILE:
+            assert provisioning.fixture_command_id is not None
+            self._remove_stale_fixture_artifact(provisioning)
+            fixture = self.catalog.lifecycle_for(target_id).execute(
+                provisioning.fixture_command_id
+            )
+            refreshed = self.catalog.verifier_provisioning_for(target_id)
+            if fixture.status != "passed" or not refreshed.fixture_available:
+                return BaselineRestoreResult(
+                    target_id=target_id,
+                    strategy=provisioning.strategy,
+                    base_url=target.manifest.base_url,
+                    status="fixture_failed",
+                    reset_succeeded=True,
+                    start_succeeded=True,
+                    healthy=True,
+                    fixture_prepared=False,
+                )
+            fixture_prepared = True
+        else:
+            fixture_prepared = False
+
+        return BaselineRestoreResult(
+            target_id=target_id,
+            strategy=provisioning.strategy,
+            base_url=target.manifest.base_url,
+            status="restored",
+            reset_succeeded=True,
+            start_succeeded=True,
+            healthy=True,
+            fixture_prepared=fixture_prepared,
+        )
+
+    def _remove_stale_fixture_artifact(
+        self, provisioning: VerifierProvisioning
+    ) -> None:
+        """Ensure a previous ignored fixture cannot satisfy a new preparation run."""
+        if provisioning.fixture_path is None:
+            return
+        fixture_root = (
+            self.catalog.repository_root / ".vibecutter" / "fixtures"
+        ).resolve()
+        fixture_path = (
+            self.catalog.repository_root / provisioning.fixture_path
+        ).resolve()
+        if fixture_path != fixture_root and fixture_root not in fixture_path.parents:
+            raise TargetOperationError(
+                "verifier fixture path escapes the managed fixture directory"
+            )
+        if fixture_path.is_dir():
+            raise TargetOperationError("verifier fixture artifact path must be a file")
+        fixture_path.unlink(missing_ok=True)
 
     def reset_run(self, target_id: str, run_id: str, *, approved: bool) -> bool:
         """Remove one approved patched runtime and its target-source worktree.
@@ -218,7 +397,10 @@ class TargetRuntimeService:
         failed: list[str] = []
         skipped: list[str] = []
         for artifact_dir in sorted(overlay_root.iterdir(), key=lambda path: path.name):
-            if not artifact_dir.is_dir() or not (artifact_dir / "compose.yaml").is_file():
+            if (
+                not artifact_dir.is_dir()
+                or not (artifact_dir / "compose.yaml").is_file()
+            ):
                 continue
             run_id = artifact_dir.name
             try:
@@ -241,7 +423,9 @@ class TargetRuntimeService:
             tuple(skipped),
         )
 
-    def _require_operation(self, target_id: str, command_id: str) -> RegisteredRuntimeTarget:
+    def _require_operation(
+        self, target_id: str, command_id: str
+    ) -> RegisteredRuntimeTarget:
         target = self._require_authorized(target_id)
         self._require_command(command_id, {"target_id": target_id})
         return target

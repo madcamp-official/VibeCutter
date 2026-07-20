@@ -33,7 +33,23 @@ def manifest_with_tests() -> TargetManifest:
 
 
 def _git(repository: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(repository), *args], check=True, capture_output=True, text=True, shell=False)
+    subprocess.run(
+        ["git", "-C", str(repository), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+
+
+def _git_output(repository: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repository), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    ).stdout.strip()
 
 
 class RunScopedTestRunnerTests(unittest.TestCase):
@@ -49,7 +65,9 @@ class RunScopedTestRunnerTests(unittest.TestCase):
             worktrees = WorktreeManager(repository)
             worktrees.create("run-1")
             try:
-                summary = RunScopedTestRunner(manifest_with_tests(), repository).run("run-1")
+                summary = RunScopedTestRunner(manifest_with_tests(), repository).run(
+                    "run-1"
+                )
             finally:
                 worktrees.remove("run-1", approved=True)
         self.assertTrue(summary.passed)
@@ -81,3 +99,33 @@ class RunScopedTestRunnerTests(unittest.TestCase):
                 worktrees.remove("run-2", approved=True)
         self.assertFalse(summary.passed)
         self.assertEqual(summary.status, "not_configured")
+
+    def test_locked_worktree_uses_pinned_commit_and_rejects_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = Path(temp_dir)
+            _git(repository, "init")
+            _git(repository, "config", "user.email", "p2@example.test")
+            _git(repository, "config", "user.name", "P2 Test")
+            tracked = repository / "tracked.txt"
+            tracked.write_text("locked", encoding="utf-8")
+            _git(repository, "add", "tracked.txt")
+            _git(repository, "commit", "-m", "locked")
+            locked_revision = _git_output(repository, "rev-parse", "HEAD")
+            tracked.write_text("new head", encoding="utf-8")
+            _git(repository, "add", "tracked.txt")
+            _git(repository, "commit", "-m", "new head")
+            new_revision = _git_output(repository, "rev-parse", "HEAD")
+            worktrees = WorktreeManager(repository, locked_revision=locked_revision)
+
+            with self.assertRaisesRegex(ValueError, "locked target source revision"):
+                worktrees.create("run-new", revision=new_revision)
+            path = worktrees.create("run-locked")
+            try:
+                self.assertEqual(
+                    _git_output(path, "rev-parse", "HEAD"), locked_revision
+                )
+                self.assertEqual(
+                    (path / "tracked.txt").read_text(encoding="utf-8"), "locked"
+                )
+            finally:
+                worktrees.remove("run-locked", approved=True)
