@@ -16,6 +16,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from contracts.schemas import Finding, Observation, Run, RunState, Target
+from core.db import DATA_DIR
 from core.evidence_store import get
 from core.policy_engine import load_scope
 from mcp_server.tools_repair import ReportResult
@@ -160,9 +161,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.resource("vibecutter://reports/{run_id}")
     def get_report(run_id: str) -> ReportResult:
-        """run의 최종 리포트 위치. report 인프라(Day3) 연동 전까지 예시를 반환한다."""
-        return ReportResult(
-            run_id=run_id,
-            artifact_uri=f".vibecutter/runs/{run_id}/report.html",
-            format="html",
-        )
+        """run의 최종 리포트 위치. `vc_generate_report`가 저장하는 실제 경로를 반환한다
+        (아직 생성 전이면 그 경로가 어디일지를 알려준다 — 파일 존재는 별개)."""
+        report_path = DATA_DIR / "runs" / run_id / "report.html"
+        return ReportResult(run_id=run_id, artifact_uri=f"file://{report_path}", format="html")

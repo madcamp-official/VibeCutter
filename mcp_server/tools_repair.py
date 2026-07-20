@@ -43,8 +43,10 @@ from core.judge import (
     check_static,
     compute_verdict,
 )
+from core.db import DATA_DIR
 from core.kill_switch import check_not_paused
 from core.planner import enforce_retry_budget, patch_attempt_count
+from core.report import build_run_report, render_html
 from core.state_machine import transition
 from core.trajectory import record_trajectory_step
 from mcp_server.tools_inventory import _service
@@ -475,13 +477,19 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     @audited
     def vc_generate_report(run_id: str) -> ReportResult:
-        """부록 B Finding Report Schema 기준 HTML 리포트를 생성한다. P1/P4 소유.
+        """부록 B Finding Report Schema 기준 HTML 리포트를 생성한다(REPORT.html, DoD C-7).
 
-        입력 데이터 조인은 `core.report.build_run_report(run_id)`로 준비했다(D2-P4.md 요청
-        (c) 응답) — finding+evidence+patch+validation을 run 단위로 이미 묶어 낸다. 실제
-        HTML 렌더링(P4 Day3 소유)은 아직 이 데이터 소스를 소비하도록 배선하지 않았다.
+        `core.report.build_run_report(run_id)`로 finding+evidence+patch+validation을 조인하고
+        `render_html()`로 self-contained HTML을 만들어 `.vibecutter/runs/{run_id}/report.html`에
+        저장한다. SARIF export(`vc_export_sarif`)는 P4가 같은 데이터 소스로 별도 배선한다.
         """
-        raise NotImplementedError("Day3에 P4 HTML export로 구현 — core.report.build_run_report가 입력 데이터")
+        report = build_run_report(run_id)
+        document = render_html(report)
+        out_dir = DATA_DIR / "runs" / run_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        report_path = out_dir / "report.html"
+        report_path.write_text(document, encoding="utf-8")
+        return ReportResult(run_id=run_id, artifact_uri=f"file://{report_path}", format="html")
 
     @mcp.tool()
     @audited
