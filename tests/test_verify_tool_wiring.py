@@ -173,6 +173,33 @@ class VcVerifyAccessControlToolTests(unittest.TestCase):
 
         self.assertEqual(get(Run, run.id).status, RunState.VERIFYING)
 
+    def _trajectory_labels(self, run_id: str) -> list:
+        # record_trajectory_step은 evidence.db가 아니라 .vibecutter/trajectories/<run>.jsonl에
+        # append한다 — P4 학습 배치가 읽는 그 파일에서 label을 확인한다.
+        from core.trajectory import TRAJECTORY_DIR
+        from model.trajectory import load_trajectories
+
+        path = TRAJECTORY_DIR / f"{run_id}.jsonl"
+        self.addCleanup(path.unlink, missing_ok=True)
+        return [t.label for t in load_trajectories(path)] if path.exists() else []
+
+    def test_verify_records_learnable_label_in_trajectory(self) -> None:
+        """P4 학습 배치 전제(2-4): verify가 verified/rejected label을 trajectory에 남긴다 —
+        이게 없으면 export_training_dataset()이 0줄이 된다(P2/P4 보고)."""
+        for verified, expected in ((True, "verified"), (False, "rejected")):
+            with self.subTest(verified=verified):
+                run = _run()
+                candidate = _candidate(run.id)
+                obs = write_artifact(
+                    run.id, observation_type="http_exchange", producer="test", data=b"mock"
+                )
+                fake = VerificationResult(verified=verified, evidence_ids=[obs.id], reason="m")
+                with patch("mcp_server.tools_analysis.verify_access_control", return_value=fake):
+                    self._call(
+                        {"run_id": run.id, "candidate_id": candidate.id, "approved": True}
+                    )
+                self.assertIn(expected, self._trajectory_labels(run.id))
+
     def test_second_candidate_after_run_verified_is_rejected(self) -> None:
         from mcp.server.fastmcp.exceptions import ToolError
 

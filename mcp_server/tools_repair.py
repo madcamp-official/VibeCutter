@@ -174,6 +174,12 @@ def _finalize_validation(run: Run, patch: Patch, validation: Validation) -> None
     `FIXED`로 승격한다. `RETRY`면 Finding은 그대로 두고(다음 patch 재시도를 기다림) Run만
     전이한다 — 3회 실패 후 human review로 보내는 재시도 횟수 상한은 `core/planner.py`
     (Day4) 소관이다.
+
+    **trajectory label(2-4, P4 학습 배치 전제)**: verdict가 확정되면 그 판정을 label/reward로
+    남긴다. FIXED는 `label="fixed"`, `reward=1.0`(성공 학습 샘플). RETRY는 학습 label에
+    해당하지 않지만 `reward=0.0`을 남겨 "실패 trajectory도 보존"(4.6절) — 두 경우 다
+    `model.trajectory.training_samples()` 필터를 통과해 `export_training_dataset()`이 샘플을
+    낸다.
     """
     verdict = compute_verdict(validation)
     if verdict is None:
@@ -187,12 +193,23 @@ def _finalize_validation(run: Run, patch: Patch, validation: Validation) -> None
     run.status = transition(run.status, RunState(verdict))
     save(run)
 
-    if verdict == RunState.FIXED.value:
+    is_fixed = verdict == RunState.FIXED.value
+    if is_fixed:
         summary = json.dumps(validation.model_dump(mode="json"), ensure_ascii=False).encode("utf-8")
         artifact = write_artifact(
             run.id, observation_type="log", producer="vc_validate_patch:verdict", data=summary
         )
         update_finding_status(patch.finding_id, FindingStatus.FIXED, evidence_ids=[artifact.id])
+
+    record_trajectory_step(
+        run.id,
+        state=run.status,
+        action={"tool": "judge_verdict", "patch_id": patch.id},
+        result={"verdict": verdict, "validation_id": validation.id},
+        next_state=run.status,
+        label="fixed" if is_fixed else None,  # RETRY는 학습 label이 아니라 reward로만 보존.
+        reward=1.0 if is_fixed else 0.0,
+    )
 
 
 def register(mcp: FastMCP) -> None:

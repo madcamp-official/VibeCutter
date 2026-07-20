@@ -105,25 +105,37 @@ def _prepare_verification(
     return run, candidate, finding
 
 
-def _finalize_verification_run(run: Run, *, verified: bool) -> None:
-    """verify tool 판정 이후 Run 상태를 마무리한다: verified일 때만 VERIFYING→VERIFIED.
+def _finalize_verification_run(
+    run: Run, *, verified: bool, tool_name: str, finding_id: str
+) -> None:
+    """verify tool 판정 이후 Run 상태를 마무리하고 trajectory에 판정 label을 남긴다.
 
-    스캔 tool의 `_prepare_scan()`이 READY→MAPPING→CANDIDATE_SCAN을 멱등 전이하는 것과
-    같은 패턴 — 이미 VERIFIED면 다시 전이하지 않는다(멱등). 이 전이가 없으면
-    `vc_generate_patch`(Run이 VERIFIED 이상이어야 함)가 항상 막혀 드라이버가 직접
-    `transition(run, VERIFIED)`를 수동 호출해 우회해야 했다(D4-P3-closed-loop.md,
-    라이브 run `run-e32346b2a4b0`에서 실측).
+    verified일 때만 VERIFYING→VERIFIED로 전이한다(스캔 tool `_prepare_scan()`의 멱등 전이와
+    같은 패턴 — 이미 VERIFIED면 다시 전이하지 않는다). 이 전이가 없으면 `vc_generate_patch`
+    (Run이 VERIFIED 이상이어야 함)가 항상 막혀 드라이버가 직접 `transition(run, VERIFIED)`를
+    수동 호출해 우회해야 했다(D4-P3-closed-loop.md, 라이브 run `run-e32346b2a4b0` 실측).
 
-    rejected는 의도적으로 Run에 반영하지 않는다 — REJECTED는 RunState 종료 상태라,
-    같은 run에서 다른 candidate를 마저 검증할 길(`_prepare_verification`이 이미 지원하는
-    "여러 candidate를 같은 run에서 검증 가능" 설계)이 막히기 때문이다. 어떤 candidate가
-    실제로 VERIFIED되면 그 run은 그 finding 하나를 끝까지 끌고 가는 것으로 확정되므로,
-    이후 같은 run으로 다른 candidate를 검증하려는 시도는 (Run이 더 이상 VERIFYING이
-    아니므로) 자연히 거부된다 — 이것도 의도된 동작이다.
+    rejected는 의도적으로 Run에 반영하지 않는다 — REJECTED는 RunState 종료 상태라, 같은
+    run에서 다른 candidate를 마저 검증할 길이 막히기 때문이다.
+
+    **trajectory label(2-4, P4 학습 배치 전제)**: verified/rejected 판정을 label과 reward로
+    남긴다 — `model.trajectory.training_samples()`가 `label in {verified,fixed,rejected,
+    human_review}` 또는 `reward is not None`인 스텝만 학습에 쓰므로, 이 기록이 없으면
+    `export_training_dataset()`이 0줄이 된다(P4 D4 밤 QLoRA 입력 0건). verified=1.0/
+    rejected=0.0 reward는 이후 preference 데이터(8.2절 Phase 2)에도 쓸 수 있다.
     """
     if verified and run.status != RunState.VERIFIED:
         run.status = transition(run.status, RunState.VERIFIED)
         save(run)
+    record_trajectory_step(
+        run.id,
+        state=run.status,
+        action={"tool": tool_name, "finding_id": finding_id},
+        result={"verified": verified},
+        next_state=run.status,
+        label="verified" if verified else "rejected",
+        reward=1.0 if verified else 0.0,
+    )
 
 
 def _prepare_scan(run_id: str, *, tool_name: str) -> Run:
@@ -351,7 +363,9 @@ def register(mcp: FastMCP) -> None:
         result = verify_access_control(run_id, candidate, max_requests=max_requests)
         target_status = FindingStatus.VERIFIED if result.verified else FindingStatus.REJECTED
         update_finding_status(finding.id, target_status, evidence_ids=result.evidence_ids)
-        _finalize_verification_run(run, verified=result.verified)
+        _finalize_verification_run(
+            run, verified=result.verified, tool_name="vc_verify_access_control", finding_id=finding.id
+        )
         return result
 
     @mcp.tool()
@@ -381,7 +395,12 @@ def register(mcp: FastMCP) -> None:
         result = verify_mutation_access_control(run_id, candidate, max_requests=max_requests)
         target_status = FindingStatus.VERIFIED if result.verified else FindingStatus.REJECTED
         update_finding_status(finding.id, target_status, evidence_ids=result.evidence_ids)
-        _finalize_verification_run(run, verified=result.verified)
+        _finalize_verification_run(
+            run,
+            verified=result.verified,
+            tool_name="vc_verify_mutation_access_control",
+            finding_id=finding.id,
+        )
         return result
 
     @mcp.tool()
@@ -405,7 +424,9 @@ def register(mcp: FastMCP) -> None:
         result = verify_injection(run_id, candidate, max_requests=max_requests)
         target_status = FindingStatus.VERIFIED if result.verified else FindingStatus.REJECTED
         update_finding_status(finding.id, target_status, evidence_ids=result.evidence_ids)
-        _finalize_verification_run(run, verified=result.verified)
+        _finalize_verification_run(
+            run, verified=result.verified, tool_name="vc_verify_injection", finding_id=finding.id
+        )
         return result
 
     @mcp.tool()
@@ -430,5 +451,7 @@ def register(mcp: FastMCP) -> None:
         result = verify_xss(run_id, candidate, max_requests=max_requests)
         target_status = FindingStatus.VERIFIED if result.verified else FindingStatus.REJECTED
         update_finding_status(finding.id, target_status, evidence_ids=result.evidence_ids)
-        _finalize_verification_run(run, verified=result.verified)
+        _finalize_verification_run(
+            run, verified=result.verified, tool_name="vc_verify_xss", finding_id=finding.id
+        )
         return result
