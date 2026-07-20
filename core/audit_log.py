@@ -37,6 +37,12 @@ class AuditEntry(SQLModel, table=True):
     args_hash: str
     actor: str
     target: str | None = None
+    # run_id 전용 컬럼(D5-P2 요청): 12.3절 안전 지표(범위 밖 접속/원본 branch 변경/secret
+    # 로그 목표 0건)를 run 단위로 뽑으려면 필요하다. `target`은 target_id/run_id/finding_id가
+    # 섞여 부정확해 run별 집계에 못 쓴다. event_type은 별도 컬럼을 두지 않는다 — `tool` 필드가
+    # 이벤트를 유일하게 식별하고, 카테고리는 tool prefix(vc_verify_*/vc_run_*/vc_apply_*)로
+    # 조회 시 파생할 수 있어 중복 컬럼은 유지보수만 늘린다.
+    run_id: str | None = Field(default=None, index=True)
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     result: str  # "ok" | "error"
     error: str | None = None
@@ -62,6 +68,7 @@ def record(
     result: str,
     error: str | None = None,
     changed_files: list[str] | None = None,
+    run_id: str | None = None,
     actor: str = "mcp_host",
 ) -> AuditEntry:
     """actor는 아직 고정값이다 — stdio MCP에는 사용자별 인증이 없어 Day1엔 구분하지 않는다."""
@@ -70,6 +77,7 @@ def record(
         args_hash=_hash_args(arguments),
         actor=actor,
         target=_guess_target(arguments),
+        run_id=run_id,
         result=result,
         error=error,
         changed_files=changed_files or [],
@@ -120,13 +128,28 @@ def audited(fn: Callable) -> Callable:
         except Exception as exc:
             # 예외 메시지에 git stderr/토큰 섞인 URL 등이 들어올 수 있으므로 redaction한다
             # (write_artifact는 거치는데 audit log만 구멍이던 부분, 10.2절 Secret handling).
-            record(tool=fn.__name__, arguments=arguments, result="error", error=redact(str(exc)))
+            record(
+                tool=fn.__name__,
+                arguments=arguments,
+                result="error",
+                error=redact(str(exc)),
+                run_id=arguments.get("run_id"),
+            )
             raise
         # 부록 C-6: "변경 파일"을 audit log에 남긴다. Patch를 반환하는 tool(vc_apply_patch 등)의
         # `files`가 그 tool이 다룬 파일 목록이다 — 있으면 changed_files로 기록한다.
         files = getattr(output, "files", None)
         changed_files = list(files) if isinstance(files, list) else None
-        record(tool=fn.__name__, arguments=arguments, result="ok", changed_files=changed_files)
+        # run_id 전용 컬럼: 인자에 run_id가 있으면 그것, 없으면(finding_id/patch_id만 받는
+        # tool) 반환 객체의 run_id(Patch/Validation/Run 등)에서 채운다 — run 단위 집계용.
+        run_id = arguments.get("run_id") or getattr(output, "run_id", None)
+        record(
+            tool=fn.__name__,
+            arguments=arguments,
+            result="ok",
+            changed_files=changed_files,
+            run_id=run_id if isinstance(run_id, str) else None,
+        )
         return output
 
     return wrapper

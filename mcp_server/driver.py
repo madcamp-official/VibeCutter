@@ -177,12 +177,26 @@ def _audit_one_candidate(
                 result.overlay_reset = False
 
 
+# 3개 취약점군을 모두 수집하는 scan tool 묶음(D5-P2 요청 "injection/xss를 단일 경로에"):
+#   - vc_scan_access_control : IDOR/BOLA 프리필터(read/write)
+#   - vc_run_sast            : Semgrep이 vuln_class=idor/xss/injection candidate 생성
+#   - vc_run_sca             : dependency/SBOM candidate
+# 셋 다 같은 scan Run에 후보를 쌓고, worker materialize 후 verify tool은 candidate의
+# vuln_class로 자동 선택된다(`_verify_tool_for`). 한 스캐너 실패(예: semgrep 미설치)는
+# 배치를 죽이지 않고 로깅만 한다 — 나머지 스캐너 후보는 그대로 진행.
+DEFAULT_SCAN_TOOLS: tuple[str, ...] = (
+    "vc_scan_access_control",
+    "vc_run_sast",
+    "vc_run_sca",
+)
+
+
 def run_target_audit(
     target_id: str,
     *,
     service=None,
     invoke: Callable[..., None] | None = None,
-    scan_tool: str = "vc_scan_access_control",
+    scan_tools: tuple[str, ...] = DEFAULT_SCAN_TOOLS,
 ) -> AuditReport:
     """target 하나에 대한 candidate-per-worker-Run 감사를 순차 실행한다.
 
@@ -191,10 +205,12 @@ def run_target_audit(
          — 이전 배치가 남긴 관리 overlay를 정리한다(임의 `vc-*` project는 안 건드림).
       2. `vc_build_target`→`vc_start_target`으로 격리 환경에서 target을 띄운다(프롬프트 step 2와
          동일 — 이게 없으면 verify가 Connection refused로 막힌다, 1B-5 라이브 실측).
-      3. scan Run 1개를 만들어 `scan_tool`로 후보를 수집한다. scan Run은 `CANDIDATE_SCAN`에서
+      3. scan Run 1개를 만들어 `scan_tools`(IDOR+SAST+SCA)로 3개 취약점군 후보를 모두
+         수집한다. 한 스캐너 실패는 로깅만 하고 나머지로 계속. scan Run은 `CANDIDATE_SCAN`에서
          종료하고 이후 전이시키지 않는다(계약 ①).
       4. 후보마다 **순차로**(고정 host port라 병렬 불가, 계약 ④) worker Run을 materialize해
-         verify→(verified면)localize→patch→apply→build/replay/validate를 돌린다(계약 ②③).
+         verify(vuln_class로 tool 자동 선택)→(verified면)localize→patch→apply→build/replay/
+         validate를 돌린다(계약 ②③).
       5. overlay를 만든 worker Run만 종료 시 `reset_run`으로 정리한다.
 
     `service`/`invoke`는 테스트에서 주입한다(기본값은 실제 P2 서비스 + 실제 MCP tool 호출).
@@ -212,7 +228,18 @@ def run_target_audit(
 
     scan_run = Run(id=f"run-{uuid4().hex[:12]}", target_id=target_id, status=RunState.READY)
     save(scan_run)
-    invoke(scan_tool, run_id=scan_run.id)
+    for scan_tool in scan_tools:
+        try:
+            invoke(scan_tool, run_id=scan_run.id)
+        except Exception as exc:  # noqa: BLE001 — 한 스캐너 실패가 전체 감사를 죽이면 안 된다
+            logger.warning(
+                "scan tool %s failed for run %s (target %s): %s",
+                scan_tool,
+                scan_run.id,
+                target_id,
+                exc,
+                exc_info=True,
+            )
 
     scan_candidates = list_by_run(Candidate, scan_run.id)
     worker_results = [
