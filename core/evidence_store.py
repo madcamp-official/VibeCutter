@@ -103,6 +103,7 @@ class CandidateRow(SQLModel, table=True):
     signals: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     vuln_class: str | None = None
     attack_params: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    origin_candidate_id: str | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
