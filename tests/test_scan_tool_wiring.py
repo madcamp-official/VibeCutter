@@ -143,5 +143,38 @@ class ScanToolWiringTests(unittest.TestCase):
         mock_run.assert_not_called()
 
 
+class RerankHookTests(unittest.TestCase):
+    """D4-P4: LLM candidate 재랭킹 훅을 aggregate에 주입한다(8.4절 가설 우선순위)."""
+
+    def test_no_endpoint_yields_none(self) -> None:
+        import os
+        from mcp_server.tools_analysis import _rerank_fn_from_env
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VIBECUTTER_MODEL_ENDPOINT", None)
+            self.assertIsNone(_rerank_fn_from_env())
+
+    def test_endpoint_yields_callable_rerank_fn(self) -> None:
+        import os
+        from mcp_server.tools_analysis import _rerank_fn_from_env
+
+        with patch.dict(os.environ, {"VIBECUTTER_MODEL_ENDPOINT": "http://127.0.0.1:8000/v1"}):
+            self.assertTrue(callable(_rerank_fn_from_env()))
+
+    def test_store_scan_candidates_passes_rerank_fn_to_aggregate(self) -> None:
+        from mcp_server import tools_analysis
+
+        run = _run(status=RunState.CANDIDATE_SCAN)
+        sentinel = object()
+        with (
+            patch.object(tools_analysis, "_rerank_fn_from_env", return_value=sentinel),
+            patch.object(tools_analysis, "aggregate") as mock_agg,
+        ):
+            mock_agg.return_value = MagicMock(kept=[], summary={})
+            tools_analysis._store_scan_candidates(run, [], tool="vc_run_sast")
+        mock_agg.assert_called_once()
+        self.assertIs(mock_agg.call_args.kwargs["rerank_fn"], sentinel)
+
+
 if __name__ == "__main__":
     unittest.main()
