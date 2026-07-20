@@ -30,7 +30,7 @@ from core.audit_log import audited
 from core.evidence_store import find_or_create_finding, get, save, update_finding_status
 from core.kill_switch import check_not_paused
 from core.orchestrator import materialize_worker_run
-from core.policy_engine import require_target_allowed
+from core.policy_engine import require_host_allowed, require_target_allowed
 from core.state_machine import transition
 from core.trajectory import record_trajectory_step
 from mcp_server.tools_inventory import _service
@@ -79,10 +79,12 @@ def _prepare_verification(
     verifier 호출과 최종 Finding 판정(update_finding_status)은 각 tool 본문이 이어서 한다
     (verifier마다 실제 재현 로직이 다르므로 여기서 하지 않는다).
 
-    **알려진 한계**: 여기서는 `run.target_id`가 정책에 등록됐는지만 확인한다(`require_target_allowed`).
-    verifier가 실제로 요청을 보낼 host/port까지 이 계층에서 검사하려면 Candidate에 typed
-    공격 파라미터가 있어야 하는데 아직 없다(오늘 계약 이견 섹션의 `vuln_class`/`attack_params`
-    항목, D1-P3.md 이견 1) — 스키마가 개선되면 여기서 `require_host_allowed`도 추가한다.
+    **host 정책 검증(부록 C-2, 1-1)**: `run.target_id`가 등록됐는지뿐 아니라, verifier가
+    실제로 요청을 보낼 `candidate.attack_params["base_url"]`의 host가 그 target의
+    `allowed_hosts` 안인지도 검사한다(`require_host_allowed`). Candidate에 typed
+    `attack_params`가 생기면서(Day2) 가능해진 검사로, DoD "미등록 IP/URL 거부"의 URL/IP
+    절반을 verify 경로에서 강제한다. `base_url`이 없는 candidate(hand-built 등)는 종전대로
+    target 등록만 확인한다. 정책 위반은 VERIFYING 전이·Finding 생성 전에 거부한다.
     """
     check_not_paused()
     if not approved:
@@ -91,15 +93,21 @@ def _prepare_verification(
     run = get(Run, run_id)
     if run is None:
         raise ValueError(f"run {run_id} not found")
-    require_target_allowed(run.target_id)
-
-    if run.status != RunState.VERIFYING:
-        run.status = transition(run.status, RunState.VERIFYING)
-        save(run)
 
     candidate = get(Candidate, candidate_id)
     if candidate is None:
         raise ValueError(f"candidate {candidate_id} not found")
+
+    base_url = candidate.attack_params.get("base_url")
+    if base_url:
+        # require_host_allowed는 target 등록 검사(require_target_allowed)를 내부에 포함한다.
+        require_host_allowed(run.target_id, base_url)
+    else:
+        require_target_allowed(run.target_id)
+
+    if run.status != RunState.VERIFYING:
+        run.status = transition(run.status, RunState.VERIFYING)
+        save(run)
 
     finding = find_or_create_finding(run_id, candidate)
     return run, candidate, finding

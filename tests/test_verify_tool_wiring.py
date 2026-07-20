@@ -54,6 +54,33 @@ class PrepareVerificationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _prepare_verification(run.id, "cand-does-not-exist", approved=True, tool_name="t")
 
+    def test_rejects_base_url_outside_allowed_hosts(self) -> None:
+        # 부록 C-2 (1-1): verifier가 때릴 base_url의 host가 allowed_hosts 밖이면 거부.
+        run = _run()  # 26s-w1-c1-03, allowed_hosts=[127.0.0.1]
+        candidate = Candidate(
+            id=f"cand-{uuid4().hex[:12]}",
+            run_id=run.id,
+            cwe="CWE-639",
+            attack_params={"base_url": "http://10.0.0.5:8080"},
+        )
+        save(candidate)
+        with self.assertRaises(PolicyViolation):
+            _prepare_verification(run.id, candidate.id, approved=True, tool_name="t")
+        # 정책 위반은 VERIFYING 전이 전에 거부돼야 한다.
+        self.assertEqual(get(Run, run.id).status, RunState.CANDIDATE_SCAN)
+
+    def test_allows_base_url_within_allowed_hosts(self) -> None:
+        run = _run()
+        candidate = Candidate(
+            id=f"cand-{uuid4().hex[:12]}",
+            run_id=run.id,
+            cwe="CWE-639",
+            attack_params={"base_url": "http://127.0.0.1:14005"},
+        )
+        save(candidate)
+        _prepare_verification(run.id, candidate.id, approved=True, tool_name="t")
+        self.assertEqual(get(Run, run.id).status, RunState.VERIFYING)
+
     def test_transitions_run_to_verifying_and_creates_finding(self) -> None:
         run = _run()
         candidate = _candidate(run.id)

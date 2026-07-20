@@ -26,6 +26,7 @@ from typing import Any, Callable
 from sqlmodel import JSON, Column, Field, Session, SQLModel, select
 
 from core.db import get_engine
+from core.redaction import redact
 
 
 class AuditEntry(SQLModel, table=True):
@@ -117,9 +118,15 @@ def audited(fn: Callable) -> Callable:
         try:
             output = fn(*args, **kwargs)
         except Exception as exc:
-            record(tool=fn.__name__, arguments=arguments, result="error", error=str(exc))
+            # 예외 메시지에 git stderr/토큰 섞인 URL 등이 들어올 수 있으므로 redaction한다
+            # (write_artifact는 거치는데 audit log만 구멍이던 부분, 10.2절 Secret handling).
+            record(tool=fn.__name__, arguments=arguments, result="error", error=redact(str(exc)))
             raise
-        record(tool=fn.__name__, arguments=arguments, result="ok")
+        # 부록 C-6: "변경 파일"을 audit log에 남긴다. Patch를 반환하는 tool(vc_apply_patch 등)의
+        # `files`가 그 tool이 다룬 파일 목록이다 — 있으면 changed_files로 기록한다.
+        files = getattr(output, "files", None)
+        changed_files = list(files) if isinstance(files, list) else None
+        record(tool=fn.__name__, arguments=arguments, result="ok", changed_files=changed_files)
         return output
 
     return wrapper
