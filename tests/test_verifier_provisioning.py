@@ -31,7 +31,7 @@ class CheckedInVerifierProvisioningTests(unittest.TestCase):
         self.assertIsNone(plan.fixture_path)
 
     def test_p2_declares_new_self_signup_targets_without_credentials(self) -> None:
-        for target_id in ("26s-w1-c2-01", "26s-w1-c2-02"):
+        for target_id in ("26s-w1-c2-01", "26s-w1-c2-02", "26s-w1-c1-06"):
             with self.subTest(target_id=target_id):
                 plan = self.catalog.verifier_provisioning_for(target_id)
                 self.assertEqual(plan.strategy, ProvisioningStrategy.SELF_SIGNUP)

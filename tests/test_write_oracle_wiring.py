@@ -176,10 +176,44 @@ class VcVerifyMutationAccessControlToolTests(unittest.TestCase):
                 self._call({"run_id": run.id, "candidate_id": candidate.id, "approved": False})
         mock_verify.assert_not_called()
 
+    def test_verified_result_transitions_run_to_verified(self) -> None:
+        run = _run()
+        candidate = _mutation_candidate(run.id)
+        obs = write_artifact(
+            run.id, observation_type="http_exchange", producer="test", data=b"mock exchange"
+        )
+        fake_result = VerificationResult(
+            verified=True, evidence_ids=[obs.id], reason="mocked: victim resource mutated"
+        )
+        with patch("mcp_server.tools_analysis.verify_mutation_access_control", return_value=fake_result):
+            self._call(
+                {"run_id": run.id, "candidate_id": candidate.id, "max_requests": 5, "approved": True}
+            )
+
+        self.assertEqual(get(Run, run.id).status, RunState.VERIFIED)
+
+    def test_rejected_result_leaves_run_in_verifying(self) -> None:
+        run = _run()
+        candidate = _mutation_candidate(run.id)
+        obs = write_artifact(
+            run.id, observation_type="http_exchange", producer="test", data=b"mock exchange"
+        )
+        fake_result = VerificationResult(
+            verified=False, evidence_ids=[obs.id], reason="mocked: victim resource unchanged"
+        )
+        with patch("mcp_server.tools_analysis.verify_mutation_access_control", return_value=fake_result):
+            self._call(
+                {"run_id": run.id, "candidate_id": candidate.id, "max_requests": 5, "approved": True}
+            )
+
+        self.assertEqual(get(Run, run.id).status, RunState.VERIFYING)
+
 
 class CheckAttackAutoDispatchTests(unittest.TestCase):
-    """`check_attack`가 verifier를 명시하지 않으면 candidate 모양으로 read/write oracle을
-    자동 선택하는지 확인한다(자동 재현 루프에는 Host가 tool을 골라줄 수 없어서 필요)."""
+    """`check_attack`가 verifier를 명시하지 않으면 `verifiers.dispatch.verify_candidate`에
+    위임하는지 확인한다(자동 재현 루프에는 Host가 tool을 골라줄 수 없어서 필요). vuln_class로
+    idor(read/write)/xss/injection을 실제로 라우팅하는 정확성은 verifier 단위 테스트
+    (test_injection_verifier/test_xss_verifier의 dispatch 케이스) 몫이라 여기서는 위임만 본다."""
 
     def _finding_for(self, candidate: Candidate) -> Finding:
         finding = Finding(
@@ -189,33 +223,51 @@ class CheckAttackAutoDispatchTests(unittest.TestCase):
         save(finding)
         return finding
 
-    def test_picks_mutation_verifier_for_mutation_shaped_candidate(self) -> None:
-        run_id = f"run-{uuid4().hex[:12]}"
-        candidate = _mutation_candidate(run_id)
-        finding = self._finding_for(candidate)
+    def _xss_candidate(self, run_id: str) -> Candidate:
+        candidate = Candidate(
+            id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-79", vuln_class="xss",
+        )
+        save(candidate)
+        return candidate
 
-        with patch(
-            "core.judge.verify_mutation_access_control",
-            return_value=VerificationResult(verified=False, evidence_ids=[], reason="patched"),
-        ) as mock_mutation, patch("core.judge.verify_access_control") as mock_read:
-            self.assertTrue(check_attack(run_id, finding.id))
+    def _injection_candidate(self, run_id: str) -> Candidate:
+        candidate = Candidate(
+            id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-89", vuln_class="injection",
+        )
+        save(candidate)
+        return candidate
 
-        mock_mutation.assert_called_once()
-        mock_read.assert_not_called()
+    def test_delegates_to_verify_candidate_when_verifier_not_given(self) -> None:
+        # idor(read/write)·xss·injection 모두 dispatch.verify_candidate 한 곳으로 위임된다.
+        for make in (_read_candidate, _mutation_candidate, self._xss_candidate, self._injection_candidate):
+            with self.subTest(candidate=make.__name__):
+                run_id = f"run-{uuid4().hex[:12]}"
+                candidate = make(run_id)
+                finding = self._finding_for(candidate)
 
-    def test_picks_read_oracle_verifier_for_ordinary_candidate(self) -> None:
+                with patch(
+                    "core.judge.verify_candidate",
+                    return_value=VerificationResult(
+                        verified=False, evidence_ids=[], reason="patched"
+                    ),
+                ) as mock_dispatch:
+                    self.assertTrue(check_attack(run_id, finding.id))
+
+                mock_dispatch.assert_called_once()
+                # candidate가 그대로 dispatch로 넘어가야 라우팅이 vuln_class를 볼 수 있다.
+                _, called_candidate = mock_dispatch.call_args.args
+                self.assertEqual(called_candidate.id, candidate.id)
+
+    def test_still_vulnerable_candidate_fails_attack_gate(self) -> None:
+        # verified=True(패치가 못 막음)면 attack gate는 False.
         run_id = f"run-{uuid4().hex[:12]}"
         candidate = _read_candidate(run_id)
         finding = self._finding_for(candidate)
-
         with patch(
-            "core.judge.verify_access_control",
-            return_value=VerificationResult(verified=False, evidence_ids=[], reason="patched"),
-        ) as mock_read, patch("core.judge.verify_mutation_access_control") as mock_mutation:
-            self.assertTrue(check_attack(run_id, finding.id))
-
-        mock_read.assert_called_once()
-        mock_mutation.assert_not_called()
+            "core.judge.verify_candidate",
+            return_value=VerificationResult(verified=True, evidence_ids=["e"], reason="still vuln"),
+        ):
+            self.assertFalse(check_attack(run_id, finding.id))
 
     def test_explicit_verifier_override_still_wins(self) -> None:
         run_id = f"run-{uuid4().hex[:12]}"

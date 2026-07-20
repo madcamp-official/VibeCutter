@@ -29,6 +29,7 @@ from contracts.schemas import Candidate, Finding, FindingStatus, Run, RunState, 
 from core.audit_log import audited
 from core.evidence_store import find_or_create_finding, get, save, update_finding_status
 from core.kill_switch import check_not_paused
+from core.orchestrator import materialize_worker_run
 from core.policy_engine import require_target_allowed
 from core.state_machine import transition
 from core.trajectory import record_trajectory_step
@@ -39,6 +40,8 @@ from scanners.sca import run_osv
 from surface.candidates import candidates_for_target
 from verifiers.access_control import verify as verify_access_control
 from verifiers.access_control import verify_mutation_access_control
+from verifiers.injection import verify as verify_injection
+from verifiers.xss import verify as verify_xss
 from verifiers.types import MAX_REQUESTS_DEFAULT, MAX_REQUESTS_MAX, MAX_REQUESTS_MIN
 
 # 부록 A `max_requests` 입력 제약(`{"type":"integer","minimum":1,"maximum":20}`)을 실제
@@ -57,6 +60,14 @@ class ScanResult(BaseModel):
     run_id: str
     tool: str
     candidate_ids: list[str] = Field(default_factory=list)
+
+
+class WorkerRunResult(BaseModel):
+    """`vc_materialize_worker_run` 출력: scan 후보를 검증용 worker Run으로 분리한 결과."""
+
+    worker_run_id: str
+    worker_candidate_id: str
+    origin_candidate_id: str
 
 
 def _prepare_verification(
@@ -92,6 +103,39 @@ def _prepare_verification(
 
     finding = find_or_create_finding(run_id, candidate)
     return run, candidate, finding
+
+
+def _finalize_verification_run(
+    run: Run, *, verified: bool, tool_name: str, finding_id: str
+) -> None:
+    """verify tool 판정 이후 Run 상태를 마무리하고 trajectory에 판정 label을 남긴다.
+
+    verified일 때만 VERIFYING→VERIFIED로 전이한다(스캔 tool `_prepare_scan()`의 멱등 전이와
+    같은 패턴 — 이미 VERIFIED면 다시 전이하지 않는다). 이 전이가 없으면 `vc_generate_patch`
+    (Run이 VERIFIED 이상이어야 함)가 항상 막혀 드라이버가 직접 `transition(run, VERIFIED)`를
+    수동 호출해 우회해야 했다(D4-P3-closed-loop.md, 라이브 run `run-e32346b2a4b0` 실측).
+
+    rejected는 의도적으로 Run에 반영하지 않는다 — REJECTED는 RunState 종료 상태라, 같은
+    run에서 다른 candidate를 마저 검증할 길이 막히기 때문이다.
+
+    **trajectory label(2-4, P4 학습 배치 전제)**: verified/rejected 판정을 label과 reward로
+    남긴다 — `model.trajectory.training_samples()`가 `label in {verified,fixed,rejected,
+    human_review}` 또는 `reward is not None`인 스텝만 학습에 쓰므로, 이 기록이 없으면
+    `export_training_dataset()`이 0줄이 된다(P4 D4 밤 QLoRA 입력 0건). verified=1.0/
+    rejected=0.0 reward는 이후 preference 데이터(8.2절 Phase 2)에도 쓸 수 있다.
+    """
+    if verified and run.status != RunState.VERIFIED:
+        run.status = transition(run.status, RunState.VERIFIED)
+        save(run)
+    record_trajectory_step(
+        run.id,
+        state=run.status,
+        action={"tool": tool_name, "finding_id": finding_id},
+        result={"verified": verified},
+        next_state=run.status,
+        label="verified" if verified else "rejected",
+        reward=1.0 if verified else 0.0,
+    )
 
 
 def _prepare_scan(run_id: str, *, tool_name: str) -> Run:
@@ -241,6 +285,55 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     @audited
+    def vc_materialize_worker_run(scan_run_id: str, candidate_id: str) -> WorkerRunResult:
+        """scan Run의 후보 하나를 검증용 worker Run으로 분리한다 (candidate-per-worker-Run 계약).
+
+        scan Run은 여러 후보를 수집하는 부모이고 `CANDIDATE_SCAN`에서 멈춘다. 후보 하나를
+        verify→patch loop로 독립 진행하려면 이 tool로 별도 worker Run을 만든 뒤, 반환된
+        `worker_run_id`/`worker_candidate_id`로 `vc_verify_*`→`vc_localize_root_cause`→
+        `vc_generate_patch`→…를 부른다. 원본 scan 후보는 `origin_candidate_id` lineage로
+        보존되고 그 `run_id`는 바뀌지 않는다(D5-P2.md 계약 ②).
+
+        `Run.status`가 candidate 하나당 하나의 검증 흐름만 담도록 고정돼 있어(VERIFIED는
+        LOCALIZING으로만 진행) scan Run에서 여러 후보를 직접 검증할 수 없기 때문에 필요하다.
+        밤 배치(`mcp_server/driver.py:run_target_audit`)는 같은 `materialize_worker_run`을
+        코드로 부르고, 대화형 Host는 이 tool로 같은 경계를 만든다.
+        """
+        check_not_paused()
+        scan_run = get(Run, scan_run_id)
+        if scan_run is None:
+            raise ValueError(f"scan run {scan_run_id} not found")
+        require_target_allowed(scan_run.target_id)
+
+        candidate = get(Candidate, candidate_id)
+        if candidate is None:
+            raise ValueError(f"candidate {candidate_id} not found")
+        if candidate.run_id != scan_run_id:
+            raise ValueError(
+                f"candidate {candidate_id}는 scan run {scan_run_id} 소속이 아닙니다"
+                f"(run_id={candidate.run_id})"
+            )
+
+        worker_run, worker_candidate = materialize_worker_run(scan_run, candidate)
+        record_trajectory_step(
+            worker_run.id,
+            state=worker_run.status,
+            action={
+                "tool": "vc_materialize_worker_run",
+                "scan_run_id": scan_run_id,
+                "origin_candidate_id": candidate.id,
+            },
+            result={"worker_candidate_id": worker_candidate.id},
+            next_state=worker_run.status,
+        )
+        return WorkerRunResult(
+            worker_run_id=worker_run.id,
+            worker_candidate_id=worker_candidate.id,
+            origin_candidate_id=candidate.id,
+        )
+
+    @mcp.tool()
+    @audited
     def vc_run_secret_scan(run_id: str) -> ScanResult:
         """secret exposure를 스캔한다. P4 소유."""
         raise NotImplementedError("P4 secret scanner 통합 대기")
@@ -264,12 +357,15 @@ def register(mcp: FastMCP) -> None:
         policy 검사/승인 게이트/RunState 전이/Finding 판정은 P1이 배선했다. 실제 재현·판정
         로직(`verifiers.access_control.verify`)은 P3 소유 — Day2에 WebGoat로 검증 완료.
         """
-        _, candidate, finding = _prepare_verification(
+        run, candidate, finding = _prepare_verification(
             run_id, candidate_id, approved=approved, tool_name="vc_verify_access_control"
         )
         result = verify_access_control(run_id, candidate, max_requests=max_requests)
         target_status = FindingStatus.VERIFIED if result.verified else FindingStatus.REJECTED
         update_finding_status(finding.id, target_status, evidence_ids=result.evidence_ids)
+        _finalize_verification_run(
+            run, verified=result.verified, tool_name="vc_verify_access_control", finding_id=finding.id
+        )
         return result
 
     @mcp.tool()
@@ -293,12 +389,18 @@ def register(mcp: FastMCP) -> None:
         따라야 한다(`attack_params`에 `observe_path`/`mutation_method`/`mutation_path`/
         `mutation_marker` 필수, `extra_body_json`/`marker_field` 선택).
         """
-        _, candidate, finding = _prepare_verification(
+        run, candidate, finding = _prepare_verification(
             run_id, candidate_id, approved=approved, tool_name="vc_verify_mutation_access_control"
         )
         result = verify_mutation_access_control(run_id, candidate, max_requests=max_requests)
         target_status = FindingStatus.VERIFIED if result.verified else FindingStatus.REJECTED
         update_finding_status(finding.id, target_status, evidence_ids=result.evidence_ids)
+        _finalize_verification_run(
+            run,
+            verified=result.verified,
+            tool_name="vc_verify_mutation_access_control",
+            finding_id=finding.id,
+        )
         return result
 
     @mcp.tool()
@@ -309,15 +411,23 @@ def register(mcp: FastMCP) -> None:
         max_requests: MaxRequests = MAX_REQUESTS_DEFAULT,
         approved: bool = False,
     ) -> VerificationResult:
-        """SQL/Command Injection 후보를 제한된 fixture에서 검증한다.
+        """SQL/Command Injection 후보를 제한된 fixture에서 불리언 차등으로 검증한다.
 
-        policy 검사/승인 게이트/RunState 전이/Finding 지연 생성까지는 P1이 배선했다.
-        verifier 본문(`verifiers/injection.py`)은 P3가 아직 구현하지 않아 그 앞에서 멈춘다.
+        policy 검사/승인 게이트/RunState 전이/Finding 판정은 `vc_verify_access_control`과
+        같은 배선. 실제 재현·판정 로직(`verifiers.injection.verify` — 참/거짓 payload의
+        응답 차이로 쿼리 제어 여부를 판정, OS 외부 영향 없음)은 P3 소유로, 실앱 4개
+        (c2-04/c2-05/c3-08/c1-05)로 오탐 저항까지 검증 완료(D4-P3-verifier-validation.md).
         """
-        _prepare_verification(
+        run, candidate, finding = _prepare_verification(
             run_id, candidate_id, approved=approved, tool_name="vc_verify_injection"
         )
-        raise NotImplementedError("P3 injection verifier 구현 대기 (policy/승인/상태 전이는 배선 완료)")
+        result = verify_injection(run_id, candidate, max_requests=max_requests)
+        target_status = FindingStatus.VERIFIED if result.verified else FindingStatus.REJECTED
+        update_finding_status(finding.id, target_status, evidence_ids=result.evidence_ids)
+        _finalize_verification_run(
+            run, verified=result.verified, tool_name="vc_verify_injection", finding_id=finding.id
+        )
+        return result
 
     @mcp.tool()
     @audited
@@ -329,8 +439,19 @@ def register(mcp: FastMCP) -> None:
     ) -> VerificationResult:
         """XSS 후보를 격리 브라우저의 benign marker로 검증한다.
 
-        policy 검사/승인 게이트/RunState 전이/Finding 지연 생성까지는 P1이 배선했다.
-        verifier 본문(`verifiers/xss.py`)은 P3가 아직 구현하지 않아 그 앞에서 멈춘다.
+        policy 검사/승인 게이트/RunState 전이/Finding 판정은 `vc_verify_access_control`과
+        같은 배선. 실제 재현·판정 로직(`verifiers.xss.verify` — 격리 브라우저에서 지정된
+        benign marker가 실제로 실행/DOM 삽입되는지 판정, reflected/escaped 구분)은 P3
+        소유로, 실앱 4개(c2-04/c2-05/c3-08/c1-05)로 오탐 저항까지 검증 완료
+        (D4-P3-verifier-validation.md).
         """
-        _prepare_verification(run_id, candidate_id, approved=approved, tool_name="vc_verify_xss")
-        raise NotImplementedError("P3 XSS verifier 구현 대기 (policy/승인/상태 전이는 배선 완료)")
+        run, candidate, finding = _prepare_verification(
+            run_id, candidate_id, approved=approved, tool_name="vc_verify_xss"
+        )
+        result = verify_xss(run_id, candidate, max_requests=max_requests)
+        target_status = FindingStatus.VERIFIED if result.verified else FindingStatus.REJECTED
+        update_finding_status(finding.id, target_status, evidence_ids=result.evidence_ids)
+        _finalize_verification_run(
+            run, verified=result.verified, tool_name="vc_verify_xss", finding_id=finding.id
+        )
+        return result

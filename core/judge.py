@@ -26,8 +26,7 @@ from repair.validators import validate_patch
 from scanners.aggregate import aggregate
 from scanners.sast import run_semgrep
 from scanners.vocab import candidate_severity
-from verifiers.access_control import verify as verify_access_control
-from verifiers.access_control import verify_mutation_access_control
+from verifiers.dispatch import verify_candidate
 from verifiers.types import MAX_REQUESTS_DEFAULT
 
 # `+++ b/<path>` 헤더에서 diff가 실제로 건드리는 파일 경로를 뽑는다. `repair.patcher`가
@@ -89,17 +88,6 @@ def _patch_and_worktree(run_id: str, patch_id: str) -> tuple[Patch, Run, Path, P
     return patch, run, worktree_path, run_source_root
 
 
-def _is_mutation_candidate(candidate: Candidate) -> bool:
-    """`verify_mutation_access_control`(write-oracle)이 필요한 candidate인지 판별한다.
-
-    read-oracle candidate는 `victim_marker`/`baseline_path`/`attack_path` 같은
-    `IdorProbe` 필드를 쓰고, write-oracle candidate는 `mutation_probe_from_candidate()`
-    계약대로 `mutation_marker`+`observe_path`를 쓴다(`verifiers/access_control.py`).
-    """
-    params = candidate.attack_params
-    return "mutation_marker" in params and "observe_path" in params
-
-
 def check_attack(
     run_id: str,
     finding_id: str,
@@ -113,18 +101,18 @@ def check_attack(
     나오는지 확인한다 — verifier가 실제로 요청을 다시 보내고 evidence를 다시 남기므로,
     "패치가 통했다"는 판단도 judge의 다른 게이트와 마찬가지로 evidence 기반이다.
 
-    `verifier`가 None이면 candidate 모양으로 read-oracle(`verify_access_control`)과
-    write-oracle(`verify_mutation_access_control`)을 자동 선택한다(`_is_mutation_candidate`)
-    — `vc_replay_attack`처럼 자동 재검증 루프에서는 사람이 tool을 골라줄 수 없으므로
-    필요하다. 명시적으로 넘기면(테스트 등) 그 값을 그대로 쓴다.
+    `verifier`가 None이면 `verifiers.dispatch.verify_candidate`에 위임한다 — candidate의
+    `vuln_class`(idor/xss/injection, IDOR은 다시 `attack_params.idor_mode`로 read/write)를
+    보고 알맞은 verifier를 자동 선택한다. `vc_replay_attack`처럼 자동 재검증 루프에서는
+    사람이 tool을 골라줄 수 없으므로 필요하다. 명시적으로 넘기면(테스트 등) 그 값을 그대로
+    쓴다. (예전엔 read/write IDOR 사이에서만 고르는 `_is_mutation_candidate` 분기를 직접
+    들고 있어 XSS/Injection finding의 attack gate가 IDOR 파라미터를 찾다 터졌다 — dispatch로
+    일원화해 3개 취약점군 모두 자동 재현된다.)
 
-    이 함수가 재현하는 인스턴스는 `verifier`가 candidate의 `base_url`로 찌르는 그대로다 —
+    이 함수가 재현하는 인스턴스는 verifier가 candidate의 `base_url`로 찌르는 그대로다 —
     patch 적용 후 이 gate를 호출하기 전에 호출부(`check_build`/`_repoint_to_patched_runtime`)가
     같은 포트에서 patched worktree 인스턴스가 응답하도록 원본을 stop하고 overlay를
     start해 둬야 한다(그렇지 않으면 원본을 재공격하는 셈이라 "패치가 막았나"를 볼 수 없다).
-
-    injection/xss verifier로도 바뀌어야 하지만(아직 access_control만 구현됨), `verifier`
-    파라미터로 주입 가능하게 열어뒀다.
     """
     finding = get(Finding, finding_id)
     if finding is None:
@@ -137,7 +125,7 @@ def check_attack(
         raise ValueError(f"candidate {finding.candidate_id} not found")
 
     if verifier is None:
-        verifier = verify_mutation_access_control if _is_mutation_candidate(candidate) else verify_access_control
+        verifier = verify_candidate
 
     result = verifier(run_id, candidate, max_requests=max_requests)
     return not result.verified
@@ -160,8 +148,8 @@ def check_build(run_id: str, patch_id: str) -> bool:
 
     source-native target(Gradle/npm처럼 `working_dir` override 없이 그냥 소스 디렉터리에서
     도는 build)은 여전히 `runtime.test_runner.RunScopedTestRunner`(P2)가 test suite에 쓰는
-    것과 같은 패턴 — manifest의 `source_dir`를 worktree 자신을 가리키는 `"."`로 바꿔서
-    (`model_copy`) build command를 worktree 안에서 직접 재실행한다. 현재 checked-in manifest
+    것과 같은 패턴 — manifest의 `source_dir`를 run source root 자신을 가리키는 `"."`로 바꿔서
+    (`model_copy`) build command를 patched source root 안에서 직접 재실행한다. 현재 checked-in manifest
     22개가 전부 `docker_isolation`을 선언하므로 이 분기에는 아직 repoint가 없다 — 그런
     target이 생기면 같은 패턴(원본 stop → worktree 기준 start → health)을 추가해야 한다.
     """

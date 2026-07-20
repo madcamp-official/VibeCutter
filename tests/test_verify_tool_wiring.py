@@ -141,37 +141,179 @@ class VcVerifyAccessControlToolTests(unittest.TestCase):
                 self._call({"run_id": run.id, "candidate_id": candidate.id, "approved": False})
         mock_verify.assert_not_called()
 
-
-class VcVerifyInjectionXssStubTests(unittest.TestCase):
-    """verifier가 아직 없는 injection/xss도 policy/승인/상태 전이까지는 동일하게 배선됐는지 확인."""
-
-    def _call(self, tool: str, args: dict) -> object:
-        from mcp.server.fastmcp.exceptions import ToolError
-        from mcp_server.server import mcp
-
-        with self.assertRaises(ToolError) as ctx:
-            asyncio.run(mcp.call_tool(tool, args))
-        return ctx.exception
-
-    def test_injection_stub_wires_policy_and_state_before_notimplemented(self) -> None:
+    def test_verified_result_transitions_run_to_verified(self) -> None:
         run = _run()
         candidate = _candidate(run.id)
-        exc = self._call(
-            "vc_verify_injection",
-            {"run_id": run.id, "candidate_id": candidate.id, "approved": True},
+        obs = write_artifact(
+            run.id, observation_type="http_exchange", producer="test", data=b"mock exchange"
         )
-        self.assertIn("NotImplementedError", str(exc) + repr(exc.__cause__))
+        fake_result = VerificationResult(
+            verified=True, evidence_ids=[obs.id], reason="mocked: victim marker exposed"
+        )
+        with patch("mcp_server.tools_analysis.verify_access_control", return_value=fake_result):
+            self._call(
+                {"run_id": run.id, "candidate_id": candidate.id, "max_requests": 5, "approved": True}
+            )
+
+        self.assertEqual(get(Run, run.id).status, RunState.VERIFIED)
+
+    def test_rejected_result_leaves_run_in_verifying(self) -> None:
+        run = _run()
+        candidate = _candidate(run.id)
+        obs = write_artifact(
+            run.id, observation_type="http_exchange", producer="test", data=b"mock exchange"
+        )
+        fake_result = VerificationResult(
+            verified=False, evidence_ids=[obs.id], reason="mocked: no access control violation"
+        )
+        with patch("mcp_server.tools_analysis.verify_access_control", return_value=fake_result):
+            self._call(
+                {"run_id": run.id, "candidate_id": candidate.id, "max_requests": 5, "approved": True}
+            )
+
         self.assertEqual(get(Run, run.id).status, RunState.VERIFYING)
 
-    def test_injection_stub_still_enforces_approval_gate(self) -> None:
+    def _trajectory_labels(self, run_id: str) -> list:
+        # record_trajectory_step은 evidence.db가 아니라 .vibecutter/trajectories/<run>.jsonl에
+        # append한다 — P4 학습 배치가 읽는 그 파일에서 label을 확인한다.
+        from core.trajectory import TRAJECTORY_DIR
+        from model.trajectory import load_trajectories
+
+        path = TRAJECTORY_DIR / f"{run_id}.jsonl"
+        self.addCleanup(path.unlink, missing_ok=True)
+        return [t.label for t in load_trajectories(path)] if path.exists() else []
+
+    def test_verify_records_learnable_label_in_trajectory(self) -> None:
+        """P4 학습 배치 전제(2-4): verify가 verified/rejected label을 trajectory에 남긴다 —
+        이게 없으면 export_training_dataset()이 0줄이 된다(P2/P4 보고)."""
+        for verified, expected in ((True, "verified"), (False, "rejected")):
+            with self.subTest(verified=verified):
+                run = _run()
+                candidate = _candidate(run.id)
+                obs = write_artifact(
+                    run.id, observation_type="http_exchange", producer="test", data=b"mock"
+                )
+                fake = VerificationResult(verified=verified, evidence_ids=[obs.id], reason="m")
+                with patch("mcp_server.tools_analysis.verify_access_control", return_value=fake):
+                    self._call(
+                        {"run_id": run.id, "candidate_id": candidate.id, "approved": True}
+                    )
+                self.assertIn(expected, self._trajectory_labels(run.id))
+
+    def test_second_candidate_after_run_verified_is_rejected(self) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
         run = _run()
-        candidate = _candidate(run.id)
-        self._call(
-            "vc_verify_injection",
-            {"run_id": run.id, "candidate_id": candidate.id, "approved": False},
+        first_candidate = _candidate(run.id)
+        second_candidate = _candidate(run.id)
+        obs = write_artifact(
+            run.id, observation_type="http_exchange", producer="test", data=b"mock exchange"
         )
-        # 승인 없이는 VERIFYING까지도 못 간다.
-        self.assertEqual(get(Run, run.id).status, RunState.CANDIDATE_SCAN)
+        fake_result = VerificationResult(verified=True, evidence_ids=[obs.id], reason="mocked")
+        with patch("mcp_server.tools_analysis.verify_access_control", return_value=fake_result):
+            self._call(
+                {
+                    "run_id": run.id,
+                    "candidate_id": first_candidate.id,
+                    "max_requests": 5,
+                    "approved": True,
+                }
+            )
+        self.assertEqual(get(Run, run.id).status, RunState.VERIFIED)
+
+        # run이 이미 VERIFIED로 확정된 뒤에는 같은 run으로 다른 candidate를 검증할 수 없다
+        # (VERIFIED의 유일한 목적지는 LOCALIZING뿐 — VERIFYING으로 되돌아가는 전이가 없다).
+        with patch("mcp_server.tools_analysis.verify_access_control", return_value=fake_result):
+            with self.assertRaises(ToolError):
+                self._call(
+                    {
+                        "run_id": run.id,
+                        "candidate_id": second_candidate.id,
+                        "max_requests": 5,
+                        "approved": True,
+                    }
+                )
+
+
+class VcVerifyInjectionXssToolTests(unittest.TestCase):
+    """injection/xss verify tool이 access_control과 동일한 배선(policy/승인/RunState/Finding)을
+    타는지 실제 MCP call_tool 경로로 확인한다. P3 verifier 본문(verifiers/injection.py,
+    verifiers/xss.py)은 이미 실앱 4개로 검증됐으므로(D4-P3-verifier-validation.md) 여기서는
+    mock으로 대체하고 "P1이 배선한 부분"만 본다."""
+
+    # (tool 이름, tools_analysis의 mock 대상, candidate CWE)
+    CASES = [
+        ("vc_verify_injection", "mcp_server.tools_analysis.verify_injection", "CWE-89"),
+        ("vc_verify_xss", "mcp_server.tools_analysis.verify_xss", "CWE-79"),
+    ]
+
+    def _call(self, tool: str, args: dict) -> object:
+        from mcp_server.server import mcp
+
+        return asyncio.run(mcp.call_tool(tool, args))
+
+    def test_verified_result_promotes_finding_and_transitions_run(self) -> None:
+        for tool, mockpath, cwe in self.CASES:
+            with self.subTest(tool=tool):
+                run = _run()
+                candidate = _candidate(run.id)
+                candidate.cwe = cwe
+                save(candidate)
+                obs = write_artifact(
+                    run.id, observation_type="http_exchange", producer="test", data=b"mock"
+                )
+                fake = VerificationResult(verified=True, evidence_ids=[obs.id], reason="mocked")
+                with patch(mockpath, return_value=fake):
+                    self._call(
+                        tool, {"run_id": run.id, "candidate_id": candidate.id, "approved": True}
+                    )
+
+                from core.evidence_store import list_by_run
+
+                finding = next(
+                    f for f in list_by_run(Finding, run.id) if f.candidate_id == candidate.id
+                )
+                self.assertEqual(finding.verification_state, FindingStatus.VERIFIED)
+                self.assertIn(obs.id, finding.evidence_ids)
+                self.assertEqual(get(Run, run.id).status, RunState.VERIFIED)
+
+    def test_rejected_result_does_not_promote_and_keeps_verifying(self) -> None:
+        for tool, mockpath, _cwe in self.CASES:
+            with self.subTest(tool=tool):
+                run = _run()
+                candidate = _candidate(run.id)
+                obs = write_artifact(
+                    run.id, observation_type="http_exchange", producer="test", data=b"mock"
+                )
+                fake = VerificationResult(verified=False, evidence_ids=[obs.id], reason="mocked")
+                with patch(mockpath, return_value=fake):
+                    self._call(
+                        tool, {"run_id": run.id, "candidate_id": candidate.id, "approved": True}
+                    )
+
+                from core.evidence_store import list_by_run
+
+                finding = next(
+                    f for f in list_by_run(Finding, run.id) if f.candidate_id == candidate.id
+                )
+                self.assertEqual(finding.verification_state, FindingStatus.REJECTED)
+                self.assertEqual(get(Run, run.id).status, RunState.VERIFYING)
+
+    def test_unapproved_call_is_rejected_before_verifier_runs(self) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        for tool, mockpath, _cwe in self.CASES:
+            with self.subTest(tool=tool):
+                run = _run()
+                candidate = _candidate(run.id)
+                with patch(mockpath) as mock_verify:
+                    with self.assertRaises(ToolError):
+                        self._call(
+                            tool, {"run_id": run.id, "candidate_id": candidate.id, "approved": False}
+                        )
+                mock_verify.assert_not_called()
+                # 승인 없이는 VERIFYING까지도 못 간다.
+                self.assertEqual(get(Run, run.id).status, RunState.CANDIDATE_SCAN)
 
 
 if __name__ == "__main__":

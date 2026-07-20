@@ -130,6 +130,12 @@ class Candidate(BaseModel):
     있어(verifier 파싱, SAST/SCA candidate의 `focus:`/`severity:` 태그) 제거하면 깨진다.
     새 typed 필드는 추가적(additive)이며, `signals` 우회를 실제로 걷어내는 건 verifier를
     다시 쓰는 작업이라 P3와 조율 후 별도로 진행한다.
+
+    `origin_candidate_id`는 Extra Day에 추가했다(D5-P2.md candidate-per-worker-Run 계약 ②,
+    additive). scan Run이 만든 후보를 검증용 worker Run으로 materialize할 때, 그 worker
+    Candidate가 자신이 유래한 원본 scan Candidate id를 여기 보존한다 — 원본 후보의 `run_id`는
+    절대 덮어쓰지 않고, report/dataset에서 scan↔worker lineage를 추적할 수 있게 한다.
+    원본 scan Candidate 자신은 이 필드가 None이다.
     """
 
     id: str
@@ -141,6 +147,7 @@ class Candidate(BaseModel):
     signals: list[str] = Field(default_factory=list)
     vuln_class: Optional[str] = None
     attack_params: dict[str, str] = Field(default_factory=dict)
+    origin_candidate_id: Optional[str] = None
     created_at: datetime = Field(default_factory=_now)
 
 

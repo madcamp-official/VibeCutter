@@ -1,0 +1,62 @@
+[
+  {
+    "file": "mcp_server/tools_analysis.py",
+    "line": 83,
+    "summary": "verify tool 경로가 require_host_allowed를 한 번도 호출하지 않아, verifier가 실제로 때리는 URL/IP가 정책 검증 없이 통과한다 (Definition of Done 위반).",
+    "failure_scenario": "Candidate.attack_params['base_url']에 'http://127.0.0.1:9999' 또는 외부 호스트가 담긴 candidate로 vc_verify_access_control을 호출하면, _prepare_verification은 run.target_id만 확인하고 verifiers/access_control.py:219가 그 base_url로 그대로 HTTP 요청을 보낸다. DoD '미등록 target_id, IP, URL, command_id가 모두 거부된다' 중 IP/URL 절반이 verify 경로에서 미강제 — require_host_allowed의 유일한 호출처는 P2의 target_service뿐이다. 이 tool의 docstring(:71-74)이 '스키마가 개선되면 require_host_allowed를 추가한다'고 적어둔 전제(attack_params)는 Day2에 이미 충족됐다."
+  },
+  {
+    "file": "core/trajectory.py",
+    "line": 87,
+    "summary": "record_trajectory_step 호출 8곳 전부가 label/reward를 넘기지 않아, export_training_dataset()이 항상 빈 JSONL을 만든다 — P4의 D4 밤 QLoRA 배치 입력이 0건이다.",
+    "failure_scenario": "실제 run을 완주시킨 뒤 export_training_dataset()을 부르면, training_samples()가 require_label=True 기본값으로 'label in LEARNABLE_LABELS or reward is not None'인 스텝만 남기는데(model/trajectory.py:123), tools_analysis.py:166/252와 tools_repair.py:263/317/349/379/407/449 어디도 label을 채우지 않아 모든 스텝이 탈락 → training_samples.jsonl이 0줄. run-e32346b2a4b0처럼 실제 verified→fixed까지 간 trajectory도 학습 샘플로 안 나온다. 테스트(test_trajectory_export.py)는 label을 직접 심어 통과하므로 이 격차를 못 잡는다."
+  },
+  {
+    "file": "mcp_server/tools_analysis.py",
+    "line": 97,
+    "summary": "Run 레벨 VERIFIED 전이 때문에 run 하나당 candidate 하나만 검증 가능해졌는데, audit_local_target 프롬프트는 Host에게 모든 candidate를 순회하라고 지시한다.",
+    "failure_scenario": "vc_scan_access_control이 c2-04에서 read 5 + write 1 = 6개 candidate를 만든 상태에서(D4-P3.md), 프롬프트 step 4('각 candidate를 ... 검증한다')를 따라 Host가 첫 candidate를 verify하면 Run이 VERIFIED로 전이되고, 두 번째 candidate에서 _prepare_verification:86이 transition(VERIFIED, VERIFYING)으로 InvalidTransitionError를 던진다(RUN_TRANSITIONS[VERIFIED]={LOCALIZING}). 나머지 5개 candidate는 영원히 검증되지 않고, Host는 원인을 알 수 없는 전이 에러만 받는다. Run-per-candidate로 갈지 Run을 candidate 루프의 컨테이너로 둘지는 P2/P3와 먼저 합의해야 하는 공통 계약 결정이다."
+  },
+  {
+    "file": "core/judge.py",
+    "line": 194,
+    "summary": "_repoint_to_patched_runtime이 원본 인스턴스를 stop시킨 뒤 실패해도 복구하지 않고, 성공해도 patched overlay를 아무도 teardown하지 않는다.",
+    "failure_scenario": "check_build에서 overlay.execute('start')가 실패하면 :194의 stop()으로 이미 내려간 원본 target이 그대로 방치돼, 같은 target을 쓰는 이후 모든 run/verify가 connection refused로 죽는다. 성공 경로에서도 patched overlay가 승인된 loopback 포트(:14006/:14007)를 계속 점유한 채 남아 P3가 실측한 '15분+ 포트 leak'(D4-P3-closed-loop.md P2 항목 2)이 재발한다 — P1 코드 어디에도 run 종료 시 reset_run()을 부르는 지점이 없어(vc_kill_run은 Host가 명시 호출해야 함) 배치가 앱마다 이 문제에 걸린다."
+  },
+  {
+    "file": "core/audit_log.py",
+    "line": 122,
+    "summary": "audit log가 changed_files를 한 번도 채우지 않고, 에러 메시지를 redaction 없이 저장한다.",
+    "failure_scenario": "vc_apply_patch가 worktree 파일을 실제로 변경해도 record(tool=..., result='ok')가 changed_files 기본값 []로 기록해, DoD 항목 '모든 tool call과 변경 파일이 audit log에 기록'이 미충족 상태다(patch.files가 바로 옆에 있는데 안 넘긴다). 또한 :120의 error=str(exc)는 core.redaction.redact를 거치지 않아, _git_apply가 git stderr(파일 내용 일부 포함)나 verifier가 토큰 섞인 URL로 예외를 내면 secret이 audit_log 테이블에 평문으로 남는다 — write_artifact는 redaction을 거치는데 audit log만 구멍이다."
+  },
+  {
+    "file": "mcp_server/tools_repair.py",
+    "line": 467,
+    "summary": "vc_generate_report가 NotImplementedError인데 audit_local_target 프롬프트 step 9가 이 tool을 호출하라고 지시한다 — 프롬프트를 그대로 따르면 마지막 단계에서 항상 실패한다.",
+    "failure_scenario": "Host가 프롬프트대로 완주해 verdict까지 낸 뒤 step 9의 vc_generate_report(run_id)를 부르면 NotImplementedError로 끝난다. P2가 이전에 지적한 'prompt가 step 3에서 멈춘다'와 정확히 같은 종류의 미배선이 마지막 단계에 남아 있는 것이고, core.report.build_run_report()는 이미 완성돼 있어 렌더링만 없다. DoD '홀드아웃 결과와 실패 사례가 최종 보고서 포함'이 여기 걸려 있으므로 P4와 HTML/SARIF 렌더러 소유·마감을 지금 확정해야 한다."
+  },
+  {
+    "file": "core/evidence_store.py",
+    "line": 230,
+    "summary": "부록 B Finding Report Schema 필드 대부분(root_cause/impact/reproduction_steps/preconditions/affected_roles/patch_ids/selected_patch_id/validation_id/target_commit/limitations)이 코드 어디에서도 채워지지 않는다.",
+    "failure_scenario": "vc_localize_root_cause와 vc_generate_patch가 localize()로 RootCause를 계산하지만(tools_repair.py:221,257) Finding.root_cause에 저장하지 않고 버려, 리포트/SARIF에 근본 원인이 영원히 null로 나간다(같은 이유로 vc_generate_patch가 localize를 매번 다시 계산한다). Finding.patch_ids도 비어 있어 core/report.py:40이 Patch.finding_id 역참조로 우회하는 중이고, IDOR의 핵심 정보인 affected_roles는 grep 결과 스키마 정의 외 참조 0건이다. 최종 보고서 품질이 P1 저장 계층에서 결정되는데 지금은 껍데기만 나간다."
+  },
+  {
+    "file": "mcp_server/resources.py",
+    "line": 134,
+    "summary": "MCP resource 7개 중 4개가 Day5까지 여전히 하드코딩 더미를 반환한다 — 특히 runs/{run_id}/state가 실제 run과 무관하게 항상 REGISTERED를 보고한다.",
+    "failure_scenario": "Host가 라이브 감사 중 vibecutter://runs/run-e32346b2a4b0/state를 읽으면 _dummy_run()이 target_id='scrum-helper', status=REGISTERED인 가짜 Run을 돌려준다 — 실제 run이 FIXED여도 그렇다. runs/{id}/evidence도 hash='0'*64인 가짜 obs-1 한 건, targets/manifest/reports도 전부 더미. Day1 Notion 완료 기준('Host에서 상태·artifact 조회 가능')이 실제로는 미충족이고, evidence_store.get(Run, run_id)/list_by_run(Observation, run_id)로 즉시 대체 가능한데 남겨져 있다. 틀린 상태를 자신 있게 보고하는 쪽이 미구현 에러보다 위험하다."
+  },
+  {
+    "file": "core/redaction.py",
+    "line": 19,
+    "summary": "redaction 규칙이 Java 계열(JSESSIONID)과 JWT 형태만 커버해, Express/Django/FastAPI target의 세션 쿠키와 비-JWT 토큰이 evidence artifact에 평문으로 남는다.",
+    "failure_scenario": "c3-08(express)의 'Set-Cookie: connect.sid=s%3A...' 나 c2-08(Django)의 'sessionid=...', 그리고 c2-02/c1-06 provisioning이 쓰는 JSON 응답의 {\"accessToken\":\"...\"}/{\"token\":\"...\"}(eyJ로 시작하지 않는 opaque 토큰)은 _REDACTIONS 4개 패턴 어디에도 안 걸려 write_artifact가 .vibecutter/runs/*/artifacts/*.bin에 그대로 쓴다. P3가 이미 4개 실앱(c2-04/c2-05/c3-08/c1-05)에 verifier를 돌린 상태라 이미 저장된 artifact에도 남아 있을 수 있고, cowork_rule 4절 'secret/token은 evidence 저장 전에 제거' 및 D5 안전 지표 'secret 로그 0건'에 직접 걸린다."
+  },
+  {
+    "file": "core/db.py",
+    "line": 31,
+    "summary": "get_engine()이 호출마다 create_all을 재실행하고, WAL/busy_timeout 설정이 없어 배치 동시 실행 시 'database is locked'가 난다.",
+    "failure_scenario": "모든 get/save/list_by_run이 get_engine()을 거치므로 매 DB 접근마다 9개 테이블에 대한 CREATE TABLE IF NOT EXISTS 라운드트립이 추가로 발생한다 — find_or_create_finding처럼 list_by_run을 루프에서 부르는 경로에서 증폭된다. 더 큰 문제는 P2/P3의 밤 배치 드라이버와 MCP 서버가 같은 .vibecutter/evidence.db에 동시에 쓸 때로, journal_mode=WAL과 busy_timeout이 없어 기본 5초 후 OperationalError로 배치가 죽는다(모듈 docstring은 '데이터베이스 잠금 위험을 줄인다'고 주장하지만 실제 PRAGMA 설정은 없다). D3-밤 8~10개 앱 audit 배치가 이 위에서 돈다."
+  }
+]

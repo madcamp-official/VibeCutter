@@ -81,6 +81,26 @@ class CandidateTypedFieldsAreAdditiveTests(unittest.TestCase):
         self.assertEqual(reloaded.vuln_class, "idor")
         self.assertEqual(reloaded.attack_params, {"method": "GET", "victim_id": "42"})
 
+    def test_origin_candidate_id_defaults_none_and_round_trips(self) -> None:
+        """Extra Day 1B-1: candidate-per-worker-Run lineage 필드(additive)."""
+        # scan candidate: origin_candidate_id 없이 생성하는 기존 패턴 그대로 동작.
+        scan = Candidate(id=f"cand-{uuid4().hex[:12]}", run_id="scan-run", cwe="CWE-639")
+        self.assertIsNone(scan.origin_candidate_id)
+        save(scan)
+        self.assertIsNone(get(Candidate, scan.id).origin_candidate_id)
+
+        # worker candidate: 원본 scan candidate id를 lineage로 보존.
+        worker = Candidate(
+            id=f"cand-{uuid4().hex[:12]}",
+            run_id="worker-run",
+            cwe="CWE-639",
+            origin_candidate_id=scan.id,
+        )
+        save(worker)
+        reloaded = get(Candidate, worker.id)
+        self.assertEqual(reloaded.origin_candidate_id, scan.id)
+        self.assertEqual(reloaded.run_id, "worker-run")  # 원본 run_id를 덮어쓰지 않는다
+
 
 class FindingAffectedRolesTests(unittest.TestCase):
     def test_affected_roles_is_a_list_and_round_trips(self) -> None:

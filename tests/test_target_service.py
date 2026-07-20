@@ -140,6 +140,7 @@ class TargetRuntimeServiceTests(unittest.TestCase):
         self.assertTrue(self.service.reset_run("demo-api", "run-1", approved=True))
         overlay.execute.assert_called_once_with("reset")
         worktrees.remove.assert_called_once_with("run-1", approved=True)
+        overlay.remove_artifact.assert_called_once_with()
 
     def test_reset_run_failure_keeps_worktree_for_retry(self) -> None:
         overlay = MagicMock()
@@ -152,6 +153,49 @@ class TargetRuntimeServiceTests(unittest.TestCase):
 
         self.assertFalse(self.service.reset_run("demo-api", "run-1", approved=True))
         worktrees.remove.assert_not_called()
+
+    def test_reset_run_allows_overlay_cleanup_after_worktree_was_pruned(self) -> None:
+        overlay = MagicMock()
+        overlay.execute.return_value = CommandResult(
+            command_id="reset", status="passed", exit_code=0, duration_ms=1, stdout="", stderr=""
+        )
+        worktrees = MagicMock()
+        worktrees.path_for.return_value = self.root / "missing-worktree"
+        self.service.catalog.run_overlay_for = MagicMock(return_value=overlay)  # type: ignore[method-assign]
+        self.service.catalog.worktree_manager_for = MagicMock(return_value=worktrees)  # type: ignore[method-assign]
+
+        self.assertTrue(self.service.reset_run("demo-api", "run-1", approved=True))
+        worktrees.remove.assert_not_called()
+        overlay.remove_artifact.assert_called_once_with()
+
+    def test_sweep_stale_run_overlays_resets_only_inactive_managed_artifacts(self) -> None:
+        overlay_root = self.root / ".vibecutter" / "run-overlays" / "demo-api"
+        for run_id in ("run-old", "run-live"):
+            artifact = overlay_root / run_id
+            artifact.mkdir(parents=True)
+            (artifact / "compose.yaml").write_text("name: test\nservices: {}\n", encoding="utf-8")
+
+        old_overlay = MagicMock()
+        old_overlay.execute.return_value = CommandResult(
+            command_id="reset", status="passed", exit_code=0, duration_ms=1, stdout="", stderr=""
+        )
+        worktrees = MagicMock()
+        worktrees.path_for.side_effect = lambda run_id: self.root / ".vibecutter" / "worktrees" / run_id
+        self.service.catalog.run_overlay_for = MagicMock(return_value=old_overlay)  # type: ignore[method-assign]
+        self.service.catalog.worktree_manager_for = MagicMock(return_value=worktrees)  # type: ignore[method-assign]
+
+        result = self.service.sweep_stale_run_overlays(
+            "demo-api", active_run_ids={"run-live"}, approved=True
+        )
+
+        self.assertEqual(result.cleaned_run_ids, ("run-old",))
+        self.assertEqual(result.failed_run_ids, ())
+        self.assertEqual(result.skipped_active_run_ids, ("run-live",))
+        self.service.catalog.run_overlay_for.assert_called_once_with("demo-api", "run-old")
+
+    def test_sweep_stale_run_overlays_requires_approval(self) -> None:
+        with self.assertRaises(PermissionError):
+            self.service.sweep_stale_run_overlays("demo-api", approved=False)
 
     def test_reset_run_requires_explicit_approval_before_runtime_cleanup(self) -> None:
         with self.assertRaises(PermissionError):

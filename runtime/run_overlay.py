@@ -14,6 +14,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+import shutil
 import subprocess
 
 import yaml
@@ -56,6 +57,11 @@ class RunComposeOverlay:
             / "compose.yaml"
         )
 
+    @property
+    def project_name(self) -> str:
+        """Deterministic Docker Compose project name for this target/run overlay."""
+        return f"vc-{sha256(f'{self.manifest.id}:{self.run_id}'.encode()).hexdigest()[:16]}"
+
     def prepare(self) -> Path:
         """Generate and statically validate a worktree-only Compose projection."""
         source_repository = self.source_repository.resolve()
@@ -87,7 +93,7 @@ class RunComposeOverlay:
             source_repository=source_repository,
             worktree_path=worktree_path,
         )
-        generated["name"] = f"vc-{sha256(f'{self.manifest.id}:{self.run_id}'.encode()).hexdigest()[:16]}"
+        generated["name"] = self.project_name
         output_path = self.output_path
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(yaml.safe_dump(generated, allow_unicode=True, sort_keys=False), encoding="utf-8")
@@ -100,6 +106,21 @@ class RunComposeOverlay:
         return ComposeIsolationInspector(
             self.manifest, self.repository_root, compose_path=self.output_path
         ).inspect()
+
+    def remove_artifact(self) -> None:
+        """Remove this generated run artifact after its Compose project is down."""
+        artifact_dir = self.output_path.parent.resolve()
+        expected = (
+            self.repository_root.resolve()
+            / ".vibecutter"
+            / "run-overlays"
+            / self.manifest.id
+            / self.run_id
+        ).resolve()
+        if artifact_dir != expected:
+            raise ValueError("run overlay artifact path is outside its target/run root")
+        if artifact_dir.is_dir():
+            shutil.rmtree(artifact_dir)
 
     def execute(self, command_id: str) -> CommandResult:
         """Run a checked-in lifecycle command against the generated Compose file only."""

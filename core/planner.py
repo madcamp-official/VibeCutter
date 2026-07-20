@@ -20,6 +20,7 @@ import json
 from contracts.schemas import Finding, FindingStatus, Patch, Run, RunState
 from core.evidence_store import list_by_run, save, update_finding_status, write_artifact
 from core.state_machine import transition
+from core.trajectory import record_trajectory_step
 
 MAX_PATCH_ATTEMPTS = 3
 
@@ -61,6 +62,16 @@ def enforce_retry_budget(run: Run, finding: Finding, *, next_attempt_no: int) ->
     update_finding_status(finding.id, FindingStatus.HUMAN_REVIEW, evidence_ids=[artifact.id])
     run.status = transition(run.status, RunState.HUMAN_REVIEW)
     save(run)
+    # trajectory label(2-4, P4 학습 배치 전제): 재시도 소진 → human_review 학습 샘플.
+    record_trajectory_step(
+        run.id,
+        state=run.status,
+        action={"tool": "retry_budget", "finding_id": finding.id},
+        result={"attempts": next_attempt_no - 1, "reason": "retry budget exhausted"},
+        next_state=run.status,
+        label="human_review",
+        reward=0.0,
+    )
     raise RetryBudgetExhausted(
         f"finding {finding.id}는 patch {MAX_PATCH_ATTEMPTS}회 실패로 human review로 넘어갔습니다"
     )
