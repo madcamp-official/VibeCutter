@@ -83,22 +83,55 @@ generated Compose는 원본의 loopback port mapping을 보존한다. baseline i
 공통 manifest 계약을 변경해 별도 port projection을 도입하기 전에는 동시 실행을 가정하지 않는다.
 
 write verifier가 shared baseline DB를 변경한 경우 `reset_run()`은 그 데이터를 원복하지 않는다.
-`reset_run()`은 patched worktree/overlay 전용이므로, write worker 종료 뒤에는 별도 승인을 받아
-manifest reset을 실행하고 fixture를 다시 준비해야 한다.
+`reset_run()`은 patched worktree/overlay 전용이다. write worker 종료 뒤에는 별도 승인 gate에서
+`TargetRuntimeService.restore_baseline_after_write(target_id, approved=True)`를 호출한다. 이 API는
+provisioning 계약과 reset/start policy를 mutation 전에 모두 검사한 뒤 reset → start → health를
+수행하고, `fixture_file`이면 stale artifact를 제거해 다시 생성하며 `self_signup`이면 fresh baseline만
+남긴다.
 
-## Source bootstrap 및 verifier coverage
+## Source lock/bootstrap 및 verifier coverage
 
 - `.vibecutter/targets/sources/`는 외부 target clone과 runtime artifact가 놓이는 로컬 경로다.
   `.vibecutter/` 전체는 gitignore에 유지하며 source 전문·credential·DB·trajectory를 main에
   커밋하지 않는다.
-- 현재 P2 workspace에는 manifest 22개의 managed Git source가 있고, GPU queue의 20개 target은
-  세 서버에 bootstrap돼 build/start/health를 통과한 이력이 있다. 새 host에서는 repository와
-  revision을 별도로 bootstrap해야 한다.
+- `targets/source-lock.yaml`은 manifest 22개 각각을
+  `https://github.com/madcamp-official/<target_id>.git`과 exact 40자 commit에 고정한다.
+  `TargetRuntimeService.from_repository_root()`는 lock과 manifest의 1:1 coverage를 강제하고,
+  P1 contract `Target.source_commit`, run worktree, regression runner가 같은 revision을 사용한다.
+- 현재 P2 workspace의 22개 source는 모두 lock과 일치한다. 새 host에서 누락 clone은
+  `catalog.bootstrap_source(target_id, approved=True)`로만 생성한다. 이 함수는 caller URL/path/revision을
+  받지 않으며, 기존 clone이 dirty/origin mismatch/revision mismatch이면 fetch/reset/checkout 없이
+  거부한다. MCP 노출은 P1이 typed `bootstrap_target` policy를 추가한 뒤에만 한다.
 - 20개 코딩캠프 target은 모두 허가된 scan/verify 범위다. Injection/XSS candidate 0은 권한 거부가
   아니라 검사한 앱에서 prefilter 패턴을 찾지 못한 결과다.
 - repeatable role-based provisioning은 `c1-05`, `c1-06`, `c2-01`, `c2-02` self-signup과
   `c2-04` fixture-file까지 5개다. 나머지는 P3가 실제 endpoint/resource/role boundary를 찾은 뒤
   P2가 안전한 seed/reset 계약을 추가한다.
+
+## GPU worker-local preflight
+
+`runtime/gpu_preflight.py`는 원격 dispatcher가 아니다. 각 GPU에서 자기 `worker_id`만 지정해
+queue assignment, locked source revision, static readiness/isolation, Docker daemon, loopback port를
+읽기 전용으로 검사한다.
+
+```bash
+# P3 audit 직전: 배정된 모든 runtime이 실제 listen 중인지 확인
+cd /opt/VibeCutter
+.venv-p2/bin/python -m runtime.gpu_preflight \
+  --worker-id gpu-1 --expect-port-state listening
+
+# build/start 전: 고정 포트가 비어 있는지 확인
+.venv-p2/bin/python -m runtime.gpu_preflight \
+  --worker-id gpu-1 --expect-port-state available
+```
+
+잘못된 worker/target 조합은 Docker나 source probe 전에 거부한다. role fixture secret env 누락은
+runtime 기동 실패와 구분해 `warnings`로 출력한다. 실제 verifier provisioning 가능 여부는
+`targets/verifier_provisioning.yaml`의 `fixture_file`/`self_signup` 계약으로 별도 판단한다.
+
+2026-07-20 실측에서 세 서버 checkout은 main `63e5ffc`, P2 전용 Python은 3.13.14이며
+listening preflight는 GPU-1 7/7, GPU-2 7/7, GPU-3 6/6, 총 20/20 통과했다. 모델 serving의
+Python 3.10 환경은 분리 유지한다.
 
 ## 승인된 clean-room 순서
 
@@ -131,14 +164,14 @@ run 종료는 `TargetRuntimeService.reset_run(target_id, run_id, approved=True)`
   우선 사용한다. 기존 `authentication` 및 victim/attacker 분리 필드는 하위호환 목적으로 유지한다.
 - 세 GPU 서버는 RTX 3090 24GB이며 P2 runtime 20개가 7/7/6으로 배치돼 있다. 서버 접속 정보나
   자격 증명은 이 runbook에 기록하지 않는다.
-- 팀 로컬 스캐너/runtime 기준은 Python 3.13이다. GPU vLLM 환경은 서버 기본 호환성 때문에
-  Python 3.10을 사용하며, 두 환경을 같은 venv로 취급하지 않는다.
+- 팀 로컬 스캐너/runtime 기준은 Python 3.13이다. GPU에는 `/opt/VibeCutter/.venv-p2`를 별도로
+  두고, vLLM의 Python 3.10 환경과 같은 venv로 취급하지 않는다.
 
 ## P2 종료 전 체크리스트
 
-1. clean host source bootstrap/revision 계약을 남긴다.
-2. P3 audit 전에 해당 target이 배정된 GPU에서 source/readiness/port를 확인한다.
+1. [완료] clean host source lock/bootstrap과 locked worktree 계약을 유지한다.
+2. [완료] P3 audit 전에 배정 GPU의 listening preflight를 실행한다.
 3. write fixture 요청은 safe method/path/body, observe path, rollback이 모두 있을 때만 받는다.
-4. patch worker 종료에는 `reset_run`, shared baseline mutation 뒤에는 승인된 manifest reset과
-   fixture 재준비를 적용한다.
+4. patch worker 종료에는 `reset_run`, shared baseline mutation 뒤에는 승인된
+   `restore_baseline_after_write`를 적용한다.
 5. 최종 실앱 run에서 report 생성과 teardown 후 port·overlay·worktree 잔여 0을 확인한다.
