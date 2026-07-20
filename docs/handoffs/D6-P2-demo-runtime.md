@@ -54,6 +54,17 @@ orchestration은 변경하지 않는다.
 - P4 runtime metadata JSONL 필드: `run_id`, `target_id`, `source_commit`, `base_url`, `health`, `readiness`, `gpu_worker`, `llm_endpoint_status`, `reset_ok`, `residual_containers`, `residual_worktrees`, `residual_ports`. secret/token/password는 제외한다.
 - `health/readiness=false`, LLM endpoint fallback, 또는 residual resource가 있는 run은 fixed/모델 비교 통계에서 별도 플래그하거나 제외한다.
 
+## P3 closed-loop 대상 확정
+
+- 주력 gold: `26s-w1-c1-05`, local reference run `run-897ad65c686f`; `self_signup/bearer`라
+  P2 fixture는 만들지 않고 verifier가 ephemeral 계정을 생성한다.
+- 음성 IDOR: `26s-w1-c2-04`; 승인된 `prepare_idor_fixture`로 fixture-file을 재생성한다.
+  write-IDOR 계약은 `PUT /vocabs/{id}/description`, observe
+  `/vocabs/?owner_id={owner}`, rollback은 target reset이다. 토큰·비밀번호는 저장하지 않는다.
+- holdout: `26s-w1-c3-09`; runtime clean-room 용도로만 사용한다.
+- camp1 신규 run은 GPU runtime의 3.13 venv와 취약 target 준비가 끝난 뒤 P3가 발급한다.
+  P2는 그 전까지 baseline/reset 및 runtime metadata를 지원한다.
+
 ## 결정·가정·리스크
 
 - 20개 전체를 발표 데모에 동시에 올리지 않는다. 고정 host port 때문에 3~5개 후보를 순차 운용한다.
