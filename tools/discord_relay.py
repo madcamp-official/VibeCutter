@@ -58,9 +58,9 @@ CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
 CODEX_EXTRA_ARGS = os.environ.get("CODEX_EXTRA_ARGS", "").split()
 CODEX_SANDBOX = os.environ.get("CODEX_SANDBOX", "read-only")
 # Keep the relay's model/effort explicit instead of inheriting a user's global
-# desktop config.  ``gpt-5.6-luna`` is not exposed by the installed CLI; the
-# currently available 5.6 model is terra (override with CODEX_MODEL if needed).
-CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.6-terra")
+# desktop config.  Luna is available in the installed Codex CLI; override with
+# CODEX_MODEL when a different model is needed.
+CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.6-luna")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 RELAY_AGENT = os.environ.get("RELAY_AGENT", "claude").lower()
 CLAUDE_TIMEOUT_SECONDS = int(os.environ.get("CLAUDE_TIMEOUT_SECONDS", "600"))
