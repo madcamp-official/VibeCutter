@@ -39,6 +39,8 @@ from scanners.sca import run_osv
 from surface.candidates import candidates_for_target
 from verifiers.access_control import verify as verify_access_control
 from verifiers.access_control import verify_mutation_access_control
+from verifiers.injection import verify as verify_injection
+from verifiers.xss import verify as verify_xss
 from verifiers.types import MAX_REQUESTS_DEFAULT, MAX_REQUESTS_MAX, MAX_REQUESTS_MIN
 
 # 부록 A `max_requests` 입력 제약(`{"type":"integer","minimum":1,"maximum":20}`)을 실제
@@ -332,15 +334,21 @@ def register(mcp: FastMCP) -> None:
         max_requests: MaxRequests = MAX_REQUESTS_DEFAULT,
         approved: bool = False,
     ) -> VerificationResult:
-        """SQL/Command Injection 후보를 제한된 fixture에서 검증한다.
+        """SQL/Command Injection 후보를 제한된 fixture에서 불리언 차등으로 검증한다.
 
-        policy 검사/승인 게이트/RunState 전이/Finding 지연 생성까지는 P1이 배선했다.
-        verifier 본문(`verifiers/injection.py`)은 P3가 아직 구현하지 않아 그 앞에서 멈춘다.
+        policy 검사/승인 게이트/RunState 전이/Finding 판정은 `vc_verify_access_control`과
+        같은 배선. 실제 재현·판정 로직(`verifiers.injection.verify` — 참/거짓 payload의
+        응답 차이로 쿼리 제어 여부를 판정, OS 외부 영향 없음)은 P3 소유로, 실앱 4개
+        (c2-04/c2-05/c3-08/c1-05)로 오탐 저항까지 검증 완료(D4-P3-verifier-validation.md).
         """
-        _prepare_verification(
+        run, candidate, finding = _prepare_verification(
             run_id, candidate_id, approved=approved, tool_name="vc_verify_injection"
         )
-        raise NotImplementedError("P3 injection verifier 구현 대기 (policy/승인/상태 전이는 배선 완료)")
+        result = verify_injection(run_id, candidate, max_requests=max_requests)
+        target_status = FindingStatus.VERIFIED if result.verified else FindingStatus.REJECTED
+        update_finding_status(finding.id, target_status, evidence_ids=result.evidence_ids)
+        _finalize_verification_run(run, verified=result.verified)
+        return result
 
     @mcp.tool()
     @audited
@@ -352,8 +360,17 @@ def register(mcp: FastMCP) -> None:
     ) -> VerificationResult:
         """XSS 후보를 격리 브라우저의 benign marker로 검증한다.
 
-        policy 검사/승인 게이트/RunState 전이/Finding 지연 생성까지는 P1이 배선했다.
-        verifier 본문(`verifiers/xss.py`)은 P3가 아직 구현하지 않아 그 앞에서 멈춘다.
+        policy 검사/승인 게이트/RunState 전이/Finding 판정은 `vc_verify_access_control`과
+        같은 배선. 실제 재현·판정 로직(`verifiers.xss.verify` — 격리 브라우저에서 지정된
+        benign marker가 실제로 실행/DOM 삽입되는지 판정, reflected/escaped 구분)은 P3
+        소유로, 실앱 4개(c2-04/c2-05/c3-08/c1-05)로 오탐 저항까지 검증 완료
+        (D4-P3-verifier-validation.md).
         """
-        _prepare_verification(run_id, candidate_id, approved=approved, tool_name="vc_verify_xss")
-        raise NotImplementedError("P3 XSS verifier 구현 대기 (policy/승인/상태 전이는 배선 완료)")
+        run, candidate, finding = _prepare_verification(
+            run_id, candidate_id, approved=approved, tool_name="vc_verify_xss"
+        )
+        result = verify_xss(run_id, candidate, max_requests=max_requests)
+        target_status = FindingStatus.VERIFIED if result.verified else FindingStatus.REJECTED
+        update_finding_status(finding.id, target_status, evidence_ids=result.evidence_ids)
+        _finalize_verification_run(run, verified=result.verified)
+        return result
