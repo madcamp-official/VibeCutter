@@ -23,7 +23,7 @@ Setup (per teammate, ~2 minutes):
   2. OAuth2 -> URL Generator -> scope "bot", permissions: View
      Channels, Send Messages, Read Message History. Open the
      generated URL and invite it to the shared server.
-  3. Everyone joins the same channel, e.g. #claude-relay. Turn on
+  3. Everyone joins the same channel, e.g. #클로드만. Turn on
      Developer Mode (User Settings -> Advanced), right-click the
      channel -> Copy Channel ID.
 
