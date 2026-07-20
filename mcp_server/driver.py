@@ -42,6 +42,7 @@ class WorkerResult(BaseModel):
     verified: bool
     verdict: Optional[str] = None  # RunState.FIXED / RETRY / HUMAN_REVIEW 값 또는 None(미확정)
     overlay_reset: Optional[bool] = None  # overlay를 만든 worker만: reset_run 결과, 아니면 None
+    error: Optional[str] = None  # 이 worker 파이프라인이 실패한 사유(다음 후보는 계속 진행)
 
 
 class AuditReport(BaseModel):
@@ -107,6 +108,11 @@ def _audit_one_candidate(
     `reset_run`으로 정리한다(D5-P2.md: `reset_run`은 run-scoped patched overlay 전용이라
     scan/verify-only worker엔 호출하면 안 된다). reset 실패는 예외로 죽이지 않고 로깅만 한다
     (P2가 artifact/worktree를 진단용으로 보존).
+
+    **worker 단위 예외 격리**: 파이프라인 어느 단계가 실패해도(예: verify HTTP 연결 실패,
+    build timeout) 그 사유를 `result.error`에 담아 반환하고 배치는 다음 후보로 계속한다 —
+    한 후보의 실패가 target 전체 audit(밤 배치)를 죽이면 안 되기 때문(1B-5 라이브 실측:
+    target 미기동 시 verify가 Connection refused로 전체 배치를 중단시켰다).
     """
     worker_run, worker_candidate = materialize_worker_run(scan_run, scan_candidate)
     # 결과 객체를 미리 만들어 두면 finally에서 overlay_reset을 그대로 채워 반환할 수 있다
@@ -146,6 +152,16 @@ def _audit_one_candidate(
         final_run = get(Run, worker_run.id)
         result.verdict = final_run.status.value if final_run is not None else None
         return result
+    except Exception as exc:  # noqa: BLE001 — 한 후보 실패가 배치를 죽이면 안 된다
+        result.error = f"{type(exc).__name__}: {exc}"
+        logger.warning(
+            "worker run %s (target %s) pipeline failed: %s",
+            worker_run.id,
+            target_id,
+            exc,
+            exc_info=True,
+        )
+        return result
     finally:
         if overlay_created:
             try:
@@ -173,19 +189,26 @@ def run_target_audit(
     순서(D5-P2.md P2 호출 조건 + candidate-per-worker-Run 계약):
       1. batch 시작 전 `sweep_stale_run_overlays(target_id, active_run_ids=(), approved=True)`
          — 이전 배치가 남긴 관리 overlay를 정리한다(임의 `vc-*` project는 안 건드림).
-      2. scan Run 1개를 만들어 `scan_tool`로 후보를 수집한다. scan Run은 `CANDIDATE_SCAN`에서
+      2. `vc_build_target`→`vc_start_target`으로 격리 환경에서 target을 띄운다(프롬프트 step 2와
+         동일 — 이게 없으면 verify가 Connection refused로 막힌다, 1B-5 라이브 실측).
+      3. scan Run 1개를 만들어 `scan_tool`로 후보를 수집한다. scan Run은 `CANDIDATE_SCAN`에서
          종료하고 이후 전이시키지 않는다(계약 ①).
-      3. 후보마다 **순차로**(고정 host port라 병렬 불가, 계약 ④) worker Run을 materialize해
+      4. 후보마다 **순차로**(고정 host port라 병렬 불가, 계약 ④) worker Run을 materialize해
          verify→(verified면)localize→patch→apply→build/replay/validate를 돌린다(계약 ②③).
-      4. overlay를 만든 worker Run만 종료 시 `reset_run`으로 정리한다.
+      5. overlay를 만든 worker Run만 종료 시 `reset_run`으로 정리한다.
 
     `service`/`invoke`는 테스트에서 주입한다(기본값은 실제 P2 서비스 + 실제 MCP tool 호출).
+    build/start 실패는 audit할 target 자체가 없다는 뜻이라 그대로 전파한다(worker 단위 격리와
+    달리 여기서 잡지 않는다).
     """
     service = service if service is not None else _service()
     invoke = invoke if invoke is not None else _default_invoke
 
     require_target_allowed(target_id)  # 미등록 target은 스캔 시작 전에 조기 거부.
     service.sweep_stale_run_overlays(target_id, active_run_ids=(), approved=True)
+
+    invoke("vc_build_target", target_id=target_id)
+    invoke("vc_start_target", target_id=target_id)
 
     scan_run = Run(id=f"run-{uuid4().hex[:12]}", target_id=target_id, status=RunState.READY)
     save(scan_run)

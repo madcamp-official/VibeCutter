@@ -44,6 +44,12 @@ class FakeToolRuntime:
         if handler is not None:
             handler(**args)
 
+    def _on_vc_build_target(self, *, target_id: str) -> None:
+        pass  # no-op — 실제로는 Docker build.
+
+    def _on_vc_start_target(self, *, target_id: str) -> None:
+        pass  # no-op — 실제로는 Docker start + health.
+
     def _on_vc_scan_access_control(self, *, run_id: str) -> None:
         # 실제 tool의 _prepare_scan이 READY→MAPPING→CANDIDATE_SCAN까지 전이시킨다.
         run = get(Run, run_id)
@@ -118,6 +124,30 @@ class RunTargetAuditTests(unittest.TestCase):
         self.service.sweep_stale_run_overlays.assert_called_once_with(
             REGISTERED_TARGET_ID, active_run_ids=(), approved=True
         )
+
+    def test_builds_and_starts_target_before_scan(self) -> None:
+        self._run()
+        tools = [t for t, _a in self.runtime.calls]
+        # build → start → scan 순서(verify가 Connection refused로 막히지 않도록).
+        self.assertLess(tools.index("vc_build_target"), tools.index("vc_start_target"))
+        self.assertLess(tools.index("vc_start_target"), tools.index("vc_scan_access_control"))
+
+    def test_worker_pipeline_error_is_isolated_and_batch_continues(self) -> None:
+        # verify가 예외를 던져도(target 미기동 등) 배치가 죽지 않고 그 worker만 error로 남는다.
+        original_verify = self.runtime._on_vc_verify_access_control
+
+        def boom(**args):
+            raise ConnectionError("[Errno 61] Connection refused")
+
+        self.runtime._on_vc_verify_access_control = boom
+        report = self._run()
+        # 두 후보 모두 결과가 남고(배치 완주), 둘 다 error가 채워진다.
+        self.assertEqual(len(report.worker_results), 2)
+        self.assertTrue(all(r.error is not None for r in report.worker_results))
+        self.assertTrue(all("Connection refused" in r.error for r in report.worker_results))
+        # 실패 worker는 apply까지 못 가 overlay가 없으니 reset_run도 안 부른다.
+        self.service.reset_run.assert_not_called()
+        self.runtime._on_vc_verify_access_control = original_verify
 
     def test_one_worker_run_per_candidate(self) -> None:
         report = self._run()
