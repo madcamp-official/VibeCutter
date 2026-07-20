@@ -50,6 +50,18 @@ _SELF_SIGNUP_HINTS: dict[str, dict[str, str]] = {
         "path_template": "/api/v1/workspaces/{id}",
         "candidate_handlers": "get_detail",
     },
+    # P2가 D4-P2/D5-P2 handoff로 준 no-secret 계약(source·local runtime에서 확인). signup 응답에서
+    # 토큰이 바로 나와 login 단계 불필요. username/nickname이 marker(ident)로 프로필에 노출된다.
+    "26s-w1-c2-02": {
+        "signup_path": "/api/auth/signup",
+        "signup_body_json": '{"username":"{username}","password":"{password}"}',
+        "token_key": "accessToken",
+    },
+    "26s-w1-c1-06": {
+        "signup_path": "/api/auth/signup",
+        "signup_body_json": '{"email":"{email}","password":"{password}","nickname":"{name}"}',
+        "token_key": "token",
+    },
 }
 
 
