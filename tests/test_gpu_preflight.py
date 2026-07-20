@@ -134,6 +134,7 @@ class WorkerRuntimePreflightTests(unittest.TestCase):
         self.assertEqual(target.docker_version, "29.1.3")
         self.assertEqual(target.expected_port_state, "listening")
         self.assertTrue(target.port_ready)
+        self.assertEqual(target.warnings, ())
 
     def test_unassigned_target_is_rejected_before_docker_or_target_probes(self) -> None:
         runner = self._runner()
@@ -181,6 +182,28 @@ class WorkerRuntimePreflightTests(unittest.TestCase):
         self.assertFalse(target.ready)
         self.assertFalse(target.port_ready)
         self.assertIn("Address already in use", target.issues[-1])
+
+    def test_missing_role_fixture_environment_is_reported_as_nonblocking_warning(
+        self,
+    ) -> None:
+        manifest_path = self.root / "targets" / "manifests" / "demo-api.yaml"
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        manifest["role_fixtures"] = [
+            {
+                "name": "local_role_fixture",
+                "description": "test-only role fixture",
+                "secret_env_names": ["VIBECUTTER_TEST_MISSING_SECRET"],
+            }
+        ]
+        manifest_path.write_text(
+            yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+        )
+
+        target = self._runner().run("gpu-1", expected_port_state="listening").targets[0]
+
+        self.assertTrue(target.ready)
+        self.assertEqual(target.issues, ())
+        self.assertIn("role fixture environment not configured", target.warnings[0])
 
     def test_cli_serializes_nested_readiness_and_returns_report_status(self) -> None:
         runner = self._runner()

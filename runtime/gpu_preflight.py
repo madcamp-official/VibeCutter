@@ -46,6 +46,7 @@ class WorkerTargetPreflight:
     port_ready: bool
     port_reason: str | None
     issues: tuple[str, ...]
+    warnings: tuple[str, ...]
 
     @property
     def ready(self) -> bool:
@@ -208,10 +209,15 @@ class WorkerRuntimePreflightRunner:
         )
 
         issues: list[str] = []
+        warnings: list[str] = []
         if not source.ready:
             issues.append(f"source: {source.status}")
         if not readiness.ready:
-            issues.extend(f"readiness: {issue}" for issue in readiness.issues)
+            for issue in readiness.issues:
+                if issue.startswith("role fixture environment not configured:"):
+                    warnings.append(f"provisioning: {issue}")
+                else:
+                    issues.append(f"readiness: {issue}")
         if not docker_available:
             issues.append("Docker daemon is unavailable")
         if not port_ready:
@@ -227,6 +233,7 @@ class WorkerRuntimePreflightRunner:
             port_ready=port_ready,
             port_reason=port_reason,
             issues=tuple(issues),
+            warnings=tuple(warnings),
         )
 
 
