@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -99,6 +100,18 @@ def _api(token: str, method: str, path: str, body: dict | None = None) -> dict |
         raise RuntimeError(f"discord API {method} {path} -> {exc.code}: {exc.read().decode()}") from exc
 
 
+def _agent_command(binary: str) -> list[str]:
+    """Return a CreateProcess-safe command prefix on Windows and Unix."""
+    resolved = shutil.which(binary) or binary
+    if os.name == "nt":
+        lowered = resolved.lower()
+        if lowered.endswith(".ps1"):
+            return ["pwsh", "-NoProfile", "-File", resolved]
+        if lowered.endswith(".cmd"):
+            return ["cmd", "/c", resolved]
+    return [resolved]
+
+
 def get_self(token: str) -> dict:
     return _api(token, "GET", "/users/@me")  # type: ignore[return-value]
 
@@ -119,7 +132,7 @@ def _chunks(text: str, size: int = MAX_CONTENT_CHARS) -> list[str]:
 
 
 def run_claude(prompt: str, session_id: str | None) -> tuple[str, str | None]:
-    cmd = [CLAUDE_BIN, "-p", prompt + NO_RE_MENTION_HINT, "--output-format", "json", *CLAUDE_EXTRA_ARGS]
+    cmd = _agent_command(CLAUDE_BIN) + ["-p", prompt + NO_RE_MENTION_HINT, "--output-format", "json", *CLAUDE_EXTRA_ARGS]
     if session_id:
         cmd += ["--resume", session_id]
     result = subprocess_run(cmd)
@@ -160,11 +173,10 @@ def run_codex(prompt: str, session_id: str | None) -> tuple[str, str | None]:
         output_path = handle.name
     try:
         if session_id:
-            cmd = [CODEX_BIN, "exec", "resume", "--json", "-o", output_path, session_id]
+            cmd = _agent_command(CODEX_BIN) + ["exec", "resume", "--json", "-o", output_path, session_id]
             relay_prompt = prompt + NO_RE_MENTION_HINT
         else:
-            cmd = [
-                CODEX_BIN,
+            cmd = _agent_command(CODEX_BIN) + [
                 "exec",
                 "--json",
                 "--sandbox",
