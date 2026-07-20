@@ -57,6 +57,11 @@ CLAUDE_EXTRA_ARGS = os.environ.get("CLAUDE_EXTRA_ARGS", "").split()
 CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
 CODEX_EXTRA_ARGS = os.environ.get("CODEX_EXTRA_ARGS", "").split()
 CODEX_SANDBOX = os.environ.get("CODEX_SANDBOX", "read-only")
+# Keep the relay's model/effort explicit instead of inheriting a user's global
+# desktop config.  ``gpt-5.6-luna`` is not exposed by the installed CLI; the
+# currently available 5.6 model is terra (override with CODEX_MODEL if needed).
+CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.6-terra")
+CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 RELAY_AGENT = os.environ.get("RELAY_AGENT", "claude").lower()
 CLAUDE_TIMEOUT_SECONDS = int(os.environ.get("CLAUDE_TIMEOUT_SECONDS", "600"))
 PROJECT_DIR = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
@@ -201,8 +206,11 @@ def run_codex(prompt: str, session_id: str | None) -> tuple[str, str | None]:
     with tempfile.NamedTemporaryFile(prefix="vibe-codex-relay-", suffix=".txt", delete=False) as handle:
         output_path = handle.name
     try:
+        model_args = ["-m", CODEX_MODEL, "-c", f'model_reasoning_effort="{CODEX_REASONING_EFFORT}"']
         if session_id:
-            cmd = _agent_command(CODEX_BIN) + ["exec", "resume", "--json", "-o", output_path, session_id]
+            cmd = _agent_command(CODEX_BIN) + [
+                "exec", "resume", "--json", "-o", output_path, *model_args, session_id
+            ]
             relay_prompt = prompt + NO_RE_MENTION_HINT
         else:
             cmd = _agent_command(CODEX_BIN) + [
@@ -214,6 +222,7 @@ def run_codex(prompt: str, session_id: str | None) -> tuple[str, str | None]:
                 PROJECT_DIR,
                 "-o",
                 output_path,
+                *model_args,
             ]
             cmd += CODEX_EXTRA_ARGS
             relay_prompt = _codex_relay_context() + "\n\nIncoming Discord message:\n" + prompt + NO_RE_MENTION_HINT
