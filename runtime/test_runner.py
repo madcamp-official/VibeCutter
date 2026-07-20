@@ -37,16 +37,23 @@ class RunScopedTestRunner:
         repository_root: Path,
         *,
         artifact_root: Path | None = None,
+        locked_revision: str | None = None,
     ) -> None:
         self.manifest = manifest
         self.repository_root = repository_root.resolve()
-        self.worktrees = WorktreeManager(self.repository_root, artifact_root=artifact_root)
+        self.worktrees = WorktreeManager(
+            self.repository_root,
+            artifact_root=artifact_root,
+            locked_revision=locked_revision,
+        )
 
     def run(self, run_id: str) -> TestRunSummary:
         worktree_path = self.worktrees.path_for(run_id)
         if not worktree_path.is_dir():
             raise FileNotFoundError(f"P2 worktree does not exist for run {run_id}")
-        self._assert_git_worktree(worktree_path)
+        self._assert_git_worktree(
+            worktree_path, expected_revision=self.worktrees.locked_revision
+        )
         if not self.manifest.test_suites:
             return TestRunSummary(
                 run_id=run_id,
@@ -62,12 +69,16 @@ class RunScopedTestRunner:
         return TestRunSummary(
             run_id=run_id,
             worktree_path=str(worktree_path),
-            status="passed" if all(result.status == "passed" for result in results) else "failed",
+            status="passed"
+            if all(result.status == "passed" for result in results)
+            else "failed",
             results=results,
         )
 
     @staticmethod
-    def _assert_git_worktree(worktree_path: Path) -> None:
+    def _assert_git_worktree(
+        worktree_path: Path, *, expected_revision: str | None = None
+    ) -> None:
         """Reject a manually created directory that merely shares a valid run_id path."""
         result = subprocess.run(
             ["git", "-C", str(worktree_path), "rev-parse", "--is-inside-work-tree"],
@@ -75,6 +86,23 @@ class RunScopedTestRunner:
             check=False,
             shell=False,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         if result.returncode != 0 or result.stdout.strip() != "true":
             raise ValueError("run path is not a Git worktree")
+        if expected_revision is None:
+            return
+        head = subprocess.run(
+            ["git", "-C", str(worktree_path), "rev-parse", "HEAD"],
+            capture_output=True,
+            check=False,
+            shell=False,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if head.returncode != 0 or head.stdout.strip() != expected_revision:
+            raise ValueError(
+                "run worktree does not use the locked target source revision"
+            )

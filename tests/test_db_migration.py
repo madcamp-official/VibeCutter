@@ -57,6 +57,24 @@ class AdditiveMigrationTests(unittest.TestCase):
         # 컬럼이 중복 추가되지 않는다.
         self.assertEqual(cols.count("origin_candidate_id"), 1)
 
+    def test_adds_audit_log_run_id_column(self) -> None:
+        # D5-P2: audit_log에도 뒤늦게 추가된 run_id 컬럼을 기존 DB에 채운다.
+        with TemporaryDirectory() as tmp:
+            engine = create_engine(f"sqlite:///{Path(tmp) / 'old.db'}")
+            with engine.begin() as conn:
+                conn.exec_driver_sql(
+                    "CREATE TABLE audit_log (id INTEGER PRIMARY KEY, tool VARCHAR, result VARCHAR)"
+                )
+                conn.exec_driver_sql("INSERT INTO audit_log (tool, result) VALUES ('vc_ping', 'ok')")
+
+            _apply_additive_migrations(engine)
+
+            with engine.begin() as conn:
+                cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(audit_log)")}
+                rows = conn.exec_driver_sql("SELECT tool, run_id FROM audit_log").fetchall()
+        self.assertIn("run_id", cols)
+        self.assertEqual(rows, [("vc_ping", None)])
+
     def test_skips_table_that_does_not_exist_yet(self) -> None:
         # 테이블이 아직 없으면(=fresh DB) create_all이 최신 스키마로 만들므로 migration은 no-op.
         with TemporaryDirectory() as tmp:

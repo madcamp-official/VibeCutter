@@ -1,29 +1,34 @@
 # GPU 서버 전용 의존성 (P4 model serving / QLoRA 학습).
 #
 # 공통 requirements.txt 와 분리한다 — torch/vllm/bitsandbytes 는 수 GB 이고 GPU
-# 전용이라 팀원 전원 머신(P1/P2/P3, Windows 포함)에 깔면 안 된다. GPU 서버에서만:
-#   python3.13 -m venv .venv-gpu && source .venv-gpu/bin/activate
-#   pip install -r requirements.txt -r requirements-gpu.txt
+# 전용이라 팀원 전원 머신(P1/P2/P3, Windows 포함)에 깔면 안 된다.
 #
-# 대상: 24GB VRAM (3090/4090/A5000) + Qwen2.5-Coder-7B-Instruct QLoRA(4bit).
-# torch 는 CUDA 빌드가 필요하다 — 설치 실패 시 아래로:
-#   pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+# ⚠️ 실전 검증(2026-07-20, camp1/2/3 = RTX 3090, 드라이버 595, CUDA 13, nvcc 없음):
+#   - GPU 서버 Python 은 3.10(서버 기본). 팀 공통 3.13 은 랩탑 스캐너/eval 용.
+#   - 아래 고정 핀(late-2024)은 **드라이버 595 에 너무 옛날이라 안 맞는다.** 실제로는
+#     최신을 설치했고 검증됨: vllm 0.25.1 / torch 2.11+cu130 / transformers 5.14 /
+#     peft 0.19 / bitsandbytes 0.49 / trl 1.8 / accelerate 1.14 / datasets 5.0.
+#   - 따라서 GPU 서버 셋업은 **버전 핀 없이** 설치한다(docs/P4_MODEL_SERVING_RUNBOOK.md):
+#       python3.10 -m venv /root/vibe-gpu
+#       /root/vibe-gpu/bin/pip install vllm                       # 서빙
+#       /root/vibe-gpu/bin/pip install peft bitsandbytes accelerate datasets trl   # 학습
+#   - trl>=1.0 은 SFTConfig 인자가 max_seq_length→max_length 로 바뀜(train_lora.py 가
+#     버전 자동 감지). QLoRA 4bit end-to-end 는 이 GPU 에서 실측 성공(tiny smoke).
 #
-# 버전은 late-2024/early-2025 기준 상호호환 조합. CUDA/드라이버에 따라 조정 필요
-# (조정하면 이유를 handoff 에 남긴다).
+# 아래 핀은 "무엇이 필요한가"의 참고 목록일 뿐 — 드라이버가 옛날인 환경에서만 그대로 쓴다.
 
 # --- 서빙 (vLLM = OpenAI 호환 endpoint) ------------------------------------------------
-vllm==0.6.6
+vllm
 
 # --- 학습 (QLoRA) ---------------------------------------------------------------------
-torch==2.5.1
-transformers==4.48.0
-peft==0.14.0
-bitsandbytes==0.45.0          # 4bit 양자화(QLoRA)
-accelerate==1.2.1
-datasets==3.2.0
-trl==0.13.0                   # SFTTrainer
+torch
+transformers
+peft
+bitsandbytes          # 4bit 양자화(QLoRA)
+accelerate
+datasets
+trl                   # SFTTrainer (>=1.0 은 SFTConfig max_length)
 
 # --- 임베딩(code_index embed_fn 백엔드, 선택) -----------------------------------------
 # 코드 임베딩 모델을 vLLM 로 서빙하지 않고 로컬로 돌릴 때만 필요:
-sentence-transformers==3.3.1
+sentence-transformers

@@ -43,10 +43,33 @@ P1은 이 값을 해당 target의 `Run.tool_versions`에 복사해 run 재현성
 YAML만 읽어 `Target.id`로 조회하며, 예제 파일은 catalog에 포함하지 않는다. P1 policy
 allowlist를 통과하기 전에는 catalog에 있는 target도 실행하면 안 된다.
 
+## Source identity and bootstrap
+
+`targets/source-lock.yaml`은 모든 runtime manifest ID를 canonical repository URL과 exact
+40자 commit에 1:1로 고정한다. production `TargetCatalog`는 manifest와 lock의 누락·추가 항목을
+거부하고, P1 `Target.source_commit`과 run-scoped worktree가 같은 commit을 사용하게 한다.
+
+source 전문은 계속 `.vibecutter/targets/sources/<target_id>`에만 두고 git에 올리지 않는다.
+clean host의 누락 clone은 `catalog.bootstrap_source(target_id, approved=True)`로 생성한다.
+caller는 URL, destination, revision, Git flag를 전달할 수 없다. 기존 clone이 dirty하거나
+origin/HEAD가 lock과 다르면 bootstrap은 그 clone을 fetch/reset/checkout하지 않고 거부한다.
+
 P1의 `vc_check_readiness` 연결점은 `catalog.readiness_for(target_id)`이다. 이 검사는
 build/start/reset을 실행하지 않고 source directory, manifest command의 executable, role
 fixture 환경변수 이름, 로그 **위치/크기**만 검사한다. 로그 본문이나 secret 값은 반환하지
 않으며 evidence에 저장하려면 별도 redaction 절차가 필요하다.
+
+GPU batch의 local runtime 상태는 아래처럼 해당 서버에서 확인한다. queue 밖 target은 probe 전에
+거부되고, SSH dispatch나 credential 처리는 이 도구의 범위가 아니다.
+
+```bash
+cd /opt/VibeCutter
+.venv-p2/bin/python -m runtime.gpu_preflight \
+  --worker-id gpu-1 --expect-port-state listening
+```
+
+`listening`은 P3 audit 직전, `available`은 build/start 전 port leak 확인에 사용한다. role fixture
+환경변수 누락은 runtime blocker와 분리해 `warnings`로 반환한다.
 
 P1 regression gate 연결점은 `catalog.test_runner_for(target_id).run(run_id)`이다. 먼저
 `catalog.worktree_manager_for(target_id).create(run_id)`로 **대상 앱 source clone의 Git
@@ -70,6 +93,11 @@ trusted absolute path로 고정한다.
 동일한 `docker_isolation` static 검사를 다시 통과해야 하며, P1 policy가 승인한 기존 loopback port를
 사용한다. 따라서 run instance를 올리기 전 기존 target instance는 approved stop/reset으로 내려야 한다.
 
+write verifier가 shared baseline을 변경한 경우에는 patched overlay 전용 `reset_run()`으로 원복할 수
+없다. P1 승인 gate 뒤 `restore_baseline_after_write(target_id, approved=True)`를 호출하면 P2가
+provisioning 계약을 먼저 검증하고 reset → start → health를 수행한다. `fixture_file` target은 stale
+fixture artifact를 제거하고 고정 command로 재생성하며, `self_signup` target은 fresh baseline만 남긴다.
+
 ## P1 policy onboarding
 
 manifest만으로는 실행할 수 없다. 해당 `id`를 `policies/scope.yaml`에 아래처럼 등록하고,
@@ -87,6 +115,7 @@ commands:
   build_target: {args: {target_id: str}}
   start_target: {args: {target_id: str}}
   reset_target: {args: {target_id: str}}
+  provision_target: {args: {target_id: str}}
 ```
 
 P2 `TargetRuntimeService`는 checked-in manifest와 MCP로 제출된 manifest가 완전히 같은지,

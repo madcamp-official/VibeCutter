@@ -132,6 +132,23 @@ class RunTargetAuditTests(unittest.TestCase):
         self.assertLess(tools.index("vc_build_target"), tools.index("vc_start_target"))
         self.assertLess(tools.index("vc_start_target"), tools.index("vc_scan_access_control"))
 
+    def test_runs_all_three_scan_tools_for_three_vuln_classes(self) -> None:
+        # D5-P2 요청: injection/xss(SAST)와 IDOR/SCA를 단일 경로에서 모두 수집.
+        self._run()
+        tools = [t for t, _a in self.runtime.calls]
+        for scan_tool in ("vc_scan_access_control", "vc_run_sast", "vc_run_sca"):
+            self.assertIn(scan_tool, tools)
+
+    def test_one_scanner_failure_does_not_abort_the_audit(self) -> None:
+        # 한 스캐너(예: semgrep 미설치)가 예외를 던져도 배치는 나머지로 계속된다.
+        def boom(**args):
+            raise RuntimeError("SemgrepUnavailableError")
+
+        self.runtime._on_vc_run_sast = boom
+        report = self._run()  # 예외 전파 없이 완주
+        # vc_scan_access_control이 만든 후보는 그대로 처리된다.
+        self.assertEqual(len(report.worker_results), 2)
+
     def test_worker_pipeline_error_is_isolated_and_batch_continues(self) -> None:
         # verify가 예외를 던져도(target 미기동 등) 배치가 죽지 않고 그 worker만 error로 남는다.
         original_verify = self.runtime._on_vc_verify_access_control
