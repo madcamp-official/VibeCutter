@@ -6,11 +6,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
 from contracts.schemas import Candidate, Run, RunState
-from core.evidence_store import get, save
+from core.evidence_store import get, list_by_run, save
 from core.orchestrator import materialize_worker_run
 
 
@@ -93,6 +95,59 @@ class MaterializeWorkerRunTests(unittest.TestCase):
         self.assertNotEqual(wc1.id, wc2.id)
         self.assertEqual(wc1.origin_candidate_id, c1.id)
         self.assertEqual(wc2.origin_candidate_id, c2.id)
+
+
+class VcMaterializeWorkerRunToolTests(unittest.TestCase):
+    """Host가 candidate마다 worker Run을 만들 수 있게 하는 tool을 실제 call_tool 경로로 확인."""
+
+    def _call(self, args: dict):
+        from mcp_server.server import mcp
+
+        return asyncio.run(mcp.call_tool("vc_materialize_worker_run", args))
+
+    def test_creates_worker_run_and_preserves_lineage(self) -> None:
+        scan_run = _scan_run()
+        scan_candidate = _scan_candidate(scan_run.id)
+
+        _, structured = self._call(
+            {"scan_run_id": scan_run.id, "candidate_id": scan_candidate.id}
+        )
+
+        worker_run_id = structured["worker_run_id"]
+        worker_candidate_id = structured["worker_candidate_id"]
+        self.assertEqual(structured["origin_candidate_id"], scan_candidate.id)
+        self.assertNotEqual(worker_run_id, scan_run.id)
+        worker_candidate = get(Candidate, worker_candidate_id)
+        self.assertEqual(worker_candidate.run_id, worker_run_id)
+        self.assertEqual(worker_candidate.origin_candidate_id, scan_candidate.id)
+        # scan Run은 CANDIDATE_SCAN 그대로.
+        self.assertEqual(get(Run, scan_run.id).status, RunState.CANDIDATE_SCAN)
+
+    def test_rejects_unregistered_target(self) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        scan_run = _scan_run(target_id="not-in-scope")
+        scan_candidate = _scan_candidate(scan_run.id)
+        with self.assertRaises(ToolError):
+            self._call({"scan_run_id": scan_run.id, "candidate_id": scan_candidate.id})
+
+    def test_rejects_candidate_from_a_different_run(self) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        scan_run = _scan_run()
+        other_run = _scan_run()
+        foreign_candidate = _scan_candidate(other_run.id)
+        with self.assertRaises(ToolError):
+            self._call({"scan_run_id": scan_run.id, "candidate_id": foreign_candidate.id})
+
+    def test_rejected_while_paused(self) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        scan_run = _scan_run()
+        scan_candidate = _scan_candidate(scan_run.id)
+        with patch("mcp_server.tools_analysis.check_not_paused", side_effect=PermissionError("paused")):
+            with self.assertRaises(ToolError):
+                self._call({"scan_run_id": scan_run.id, "candidate_id": scan_candidate.id})
 
 
 if __name__ == "__main__":

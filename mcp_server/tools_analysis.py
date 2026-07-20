@@ -29,6 +29,7 @@ from contracts.schemas import Candidate, Finding, FindingStatus, Run, RunState, 
 from core.audit_log import audited
 from core.evidence_store import find_or_create_finding, get, save, update_finding_status
 from core.kill_switch import check_not_paused
+from core.orchestrator import materialize_worker_run
 from core.policy_engine import require_target_allowed
 from core.state_machine import transition
 from core.trajectory import record_trajectory_step
@@ -59,6 +60,14 @@ class ScanResult(BaseModel):
     run_id: str
     tool: str
     candidate_ids: list[str] = Field(default_factory=list)
+
+
+class WorkerRunResult(BaseModel):
+    """`vc_materialize_worker_run` 출력: scan 후보를 검증용 worker Run으로 분리한 결과."""
+
+    worker_run_id: str
+    worker_candidate_id: str
+    origin_candidate_id: str
 
 
 def _prepare_verification(
@@ -260,6 +269,55 @@ def register(mcp: FastMCP) -> None:
             )
         return _store_scan_candidates(
             run, bridge_result.candidates, tool="vc_scan_access_control"
+        )
+
+    @mcp.tool()
+    @audited
+    def vc_materialize_worker_run(scan_run_id: str, candidate_id: str) -> WorkerRunResult:
+        """scan Run의 후보 하나를 검증용 worker Run으로 분리한다 (candidate-per-worker-Run 계약).
+
+        scan Run은 여러 후보를 수집하는 부모이고 `CANDIDATE_SCAN`에서 멈춘다. 후보 하나를
+        verify→patch loop로 독립 진행하려면 이 tool로 별도 worker Run을 만든 뒤, 반환된
+        `worker_run_id`/`worker_candidate_id`로 `vc_verify_*`→`vc_localize_root_cause`→
+        `vc_generate_patch`→…를 부른다. 원본 scan 후보는 `origin_candidate_id` lineage로
+        보존되고 그 `run_id`는 바뀌지 않는다(D5-P2.md 계약 ②).
+
+        `Run.status`가 candidate 하나당 하나의 검증 흐름만 담도록 고정돼 있어(VERIFIED는
+        LOCALIZING으로만 진행) scan Run에서 여러 후보를 직접 검증할 수 없기 때문에 필요하다.
+        밤 배치(`mcp_server/driver.py:run_target_audit`)는 같은 `materialize_worker_run`을
+        코드로 부르고, 대화형 Host는 이 tool로 같은 경계를 만든다.
+        """
+        check_not_paused()
+        scan_run = get(Run, scan_run_id)
+        if scan_run is None:
+            raise ValueError(f"scan run {scan_run_id} not found")
+        require_target_allowed(scan_run.target_id)
+
+        candidate = get(Candidate, candidate_id)
+        if candidate is None:
+            raise ValueError(f"candidate {candidate_id} not found")
+        if candidate.run_id != scan_run_id:
+            raise ValueError(
+                f"candidate {candidate_id}는 scan run {scan_run_id} 소속이 아닙니다"
+                f"(run_id={candidate.run_id})"
+            )
+
+        worker_run, worker_candidate = materialize_worker_run(scan_run, candidate)
+        record_trajectory_step(
+            worker_run.id,
+            state=worker_run.status,
+            action={
+                "tool": "vc_materialize_worker_run",
+                "scan_run_id": scan_run_id,
+                "origin_candidate_id": candidate.id,
+            },
+            result={"worker_candidate_id": worker_candidate.id},
+            next_state=worker_run.status,
+        )
+        return WorkerRunResult(
+            worker_run_id=worker_run.id,
+            worker_candidate_id=worker_candidate.id,
+            origin_candidate_id=candidate.id,
         )
 
     @mcp.tool()

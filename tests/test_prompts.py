@@ -25,12 +25,20 @@ class AuditLocalTargetPromptTests(unittest.TestCase):
         self.assertIn("26s-w1-c2-04", text)
         for tool_name in (
             "vc_scan_access_control",
+            "vc_materialize_worker_run",
             "vc_verify_access_control",
             "vc_apply_patch",
             "vc_generate_patch",
             "vc_pause",
         ):
             self.assertIn(tool_name, text)
+
+    def test_explains_worker_run_per_candidate(self) -> None:
+        result = self._get("some-target")
+        text = " ".join(m.content.text for m in result.messages)
+        # candidate-per-worker-Run 계약(D5-P2.md): scan Run은 부모, 후보마다 worker Run.
+        self.assertIn("worker Run", text)
+        self.assertIn("순차", text)
 
     def test_mentions_approval_and_retry_cap(self) -> None:
         result = self._get("some-target")
