@@ -20,10 +20,9 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
-
-from typing import Sequence
 
 from contracts.schemas import Observation, ObservationType, RunState, Trajectory
 
@@ -151,6 +150,60 @@ def to_sft_sample(
         if unknown:
             sample["evidence_warnings"] = unknown
     return sample
+
+
+# --- T-2 판독부: run 별 LLM 사용 여부 (T-1 관측이 step.result 에 심은 메타를 되읽는다) ------
+
+# T-1 `LlmCallOutcome.as_metadata()` 가 step.result 에 넣는 키. 이게 있으면 "LLM 접점 스텝".
+LLM_META_KEY = "llm_used"
+
+
+@dataclass(frozen=True)
+class RunLlmUsage:
+    """한 run 안에서 LLM 이 실제로 쓰였는지 요약. T-3 표본 필터의 입력."""
+
+    run_id: str
+    calls: int                 # llm 메타를 가진 스텝 수(rerank 1 + patch n 등)
+    used: int                  # 그 중 llm_used=True 인 스텝 수
+    tiers: tuple[str, ...]     # 관측된 tier 들("primary"/"fallback"/"none")
+
+    @property
+    def any_used(self) -> bool:
+        """LLM 이 한 번이라도 실제로 답했는가."""
+        return self.used > 0
+
+    @property
+    def all_used(self) -> bool:
+        """모든 LLM 접점이 실제로 답했는가(하나라도 degrade 면 False — ablation 무결성용, 보수적)."""
+        return self.calls > 0 and self.used == self.calls
+
+
+def llm_usage_from_trajectories(
+    trajectories: Iterable[Trajectory],
+) -> dict[str, RunLlmUsage]:
+    """trajectory 스텝들 → run_id 별 `RunLlmUsage`. `result` 에 llm 메타가 있는 스텝만 센다.
+
+    T-1 이 어느 tier 가 답했는지 `result` 에 기록해 두면(T-2 배선), 여기서 run 단위로 접어
+    'LLM 조건'이 진짜였는지 판정한다 — endpoint 죽어 조용히 heuristic 으로 샌 run 을 T-3 가
+    표본에서 뺄 수 있게.
+    """
+    agg: dict[str, dict] = {}
+    for t in trajectories:
+        result = t.result or {}
+        if LLM_META_KEY not in result:
+            continue
+        bucket = agg.setdefault(t.run_id, {"calls": 0, "used": 0, "tiers": []})
+        bucket["calls"] += 1
+        if result.get(LLM_META_KEY):
+            bucket["used"] += 1
+        tier = result.get("tier")
+        if tier:
+            bucket["tiers"].append(str(tier))
+    return {
+        run_id: RunLlmUsage(
+            run_id=run_id, calls=b["calls"], used=b["used"], tiers=tuple(b["tiers"]))
+        for run_id, b in agg.items()
+    }
 
 
 def stats(trajectories: Sequence[Trajectory]) -> dict:

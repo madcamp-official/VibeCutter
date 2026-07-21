@@ -9,7 +9,9 @@ from model.endpoints import (
     DEFAULT_FALLBACK_MODEL,
     DEFAULT_PRIMARY_ENDPOINTS,
     DEFAULT_PRIMARY_MODEL,
+    LlmCallOutcome,
     _with_max_tokens,
+    make_observed_chain,
     resolve_tiers,
 )
 from model.serving import make_chained_chat_fn, strip_reasoning
@@ -118,6 +120,55 @@ def test_chain_reports_fallback_events() -> None:
         on_fallback=lambda i, exc: seen.append((i, type(exc).__name__)),
     )
     assert chain([]) == "ok" and seen == [(0, "TimeoutError")]
+
+
+def _dead(_m):
+    raise TimeoutError("slow")
+
+
+def test_observed_chain_records_primary_when_it_answers() -> None:
+    chat, rec = make_observed_chain([lambda m: "ok", lambda m: "fb"], ["primary", "fallback"])
+    assert chat([]) == "ok"
+    out = rec()
+    assert out == LlmCallOutcome(llm_used=True, tier="primary", tier_index=0)
+
+
+def test_observed_chain_records_fallback_when_primary_raises() -> None:
+    chat, rec = make_observed_chain([_dead, lambda m: "fb"], ["primary", "fallback"])
+    assert chat([]) == "fb"
+    assert rec() == LlmCallOutcome(llm_used=True, tier="fallback", tier_index=1)
+
+
+def test_observed_chain_counts_empty_completion_as_failure() -> None:
+    # 빈 응답은 실패로 쳐서 fallback 이 답한다 → 답한 tier 는 fallback(1)이어야 한다.
+    chat, rec = make_observed_chain([lambda m: "   ", lambda m: "fb"], ["primary", "fallback"])
+    assert chat([]) == "fb"
+    assert rec().tier == "fallback" and rec().tier_index == 1
+
+
+def test_observed_chain_marks_unavailable_when_all_tiers_fail() -> None:
+    chat, rec = make_observed_chain([_dead, _dead], ["primary", "fallback"])
+    try:
+        chat([])
+    except TimeoutError:
+        pass
+    else:
+        raise AssertionError("전 tier 실패 시 예외가 올라와야 한다")
+    out = rec()
+    assert out.llm_used is False and out.tier == "none" and out.error == "TimeoutError"
+
+
+def test_observed_recorder_defaults_to_unavailable_before_any_call() -> None:
+    _, rec = make_observed_chain([lambda m: "ok"], ["primary"])
+    assert rec().llm_used is False and rec().tier == "none"
+
+
+def test_outcome_as_metadata_shape() -> None:
+    up = LlmCallOutcome(llm_used=True, tier="primary", tier_index=0).as_metadata()
+    assert up == {"llm_used": True, "tier": "primary", "tier_index": 0, "endpoint_health": "up"}
+    down = LlmCallOutcome.unavailable(error="ConnectionError").as_metadata()
+    assert down["llm_used"] is False and down["endpoint_health"] == "down"
+    assert down["llm_error"] == "ConnectionError"
 
 
 def test_strip_reasoning_removes_think_block() -> None:

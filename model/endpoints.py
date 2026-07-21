@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, replace
-from typing import Mapping, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
 from model.serving import ChatFn, liveness_check, make_chained_chat_fn, openai_chat_fn
 
@@ -132,6 +132,17 @@ def _with_max_tokens(tiers: Sequence[Endpoint], max_tokens: Optional[int]) -> li
     return [replace(t, max_tokens=max_tokens) for t in tiers]
 
 
+def _prepared_tiers(
+    env: Optional[Mapping[str, str]], *,
+    precheck: bool, precheck_timeout: float, max_tokens: Optional[int],
+) -> list[Endpoint]:
+    """env → (max_tokens override + precheck 통과) 최종 tier 목록. 살아있는 게 없으면 []."""
+    tiers = _with_max_tokens(resolve_tiers(os.environ if env is None else env), max_tokens)
+    if precheck:
+        tiers = [t for t in tiers if liveness_check(t.base_url, timeout=precheck_timeout)]
+    return tiers
+
+
 def chat_fn_from_env(
     env: Optional[Mapping[str, str]] = None, *,
     precheck: bool = True, precheck_timeout: float = 3.0,
@@ -148,14 +159,93 @@ def chat_fn_from_env(
     패치 합성처럼 rerank 기본(512)보다 긴 출력이 필요할 때 쓴다(`model.patch_client`).
 
     체인 자체가 호출 실패를 다음 tier 로 흘려보내므로, probe 이후에 primary 가 느려지거나
-    죽어도 fallback 은 그대로 동작한다.
+    죽어도 fallback 은 그대로 동작한다. **어느 tier 가 답했는지 기록**하려면
+    `observed_chat_fn_from_env` 를 쓴다(T-1).
     """
-    tiers = _with_max_tokens(resolve_tiers(os.environ if env is None else env), max_tokens)
-    if precheck:
-        tiers = [t for t in tiers if liveness_check(t.base_url, timeout=precheck_timeout)]
+    tiers = _prepared_tiers(
+        env, precheck=precheck, precheck_timeout=precheck_timeout, max_tokens=max_tokens)
     if not tiers:
         return None
     return make_chained_chat_fn([t.chat_fn() for t in tiers])
+
+
+# --- T-1: 조용한 degrade 관측 (어느 tier 가 답했나 / LLM 이 실제로 쓰였나) -----------------
+
+@dataclass(frozen=True)
+class LlmCallOutcome:
+    """LLM 호출 한 번의 결과. degrade 가 로그·run 메타에 드러나게 하는 근거(T-1/T-2)."""
+
+    llm_used: bool                    # LLM 이 실제로 답을 줬는가(전 tier 실패면 False)
+    tier: str                         # "primary" | "fallback" | "none"
+    tier_index: Optional[int] = None  # 답한 endpoint 인덱스(전체 실패면 None)
+    error: Optional[str] = None       # 전체 실패 시 마지막 예외 타입명
+
+    @classmethod
+    def unavailable(cls, error: Optional[str] = None) -> "LlmCallOutcome":
+        """호출 안 됨/전 tier 실패 → 휴리스틱으로 진행한 run 을 표시한다."""
+        return cls(llm_used=False, tier="none", tier_index=None, error=error)
+
+    def as_metadata(self) -> dict:
+        """trajectory step `result` dict 에 담을 형태(T-2 — schemas freeze 우회)."""
+        return {
+            "llm_used": self.llm_used,
+            "tier": self.tier,
+            "tier_index": self.tier_index,
+            "endpoint_health": "up" if self.llm_used else "down",
+            **({"llm_error": self.error} if self.error else {}),
+        }
+
+
+def make_observed_chain(
+    chat_fns: Sequence[ChatFn], tier_labels: Sequence[str],
+) -> tuple[ChatFn, Callable[[], LlmCallOutcome]]:
+    """관측 가능한 체인 ChatFn + `recorder()`. 호출 뒤 recorder() 가 마지막 결과를 준다.
+
+    `make_chained_chat_fn` 의 fallback 의미(빈 응답=실패 포함)를 그대로 쓰되, `on_fallback` 이
+    **실패한 tier 마다 정확히 1번** 불리는 성질을 이용해 '몇 번째 tier 가 답했는가'를 복원한다:
+    성공 시 답한 index == 그때까지 쌓인 실패 이벤트 수. (전 tier 실패면 예외 → llm_used=False.)
+
+    주의: recorder 는 **마지막 호출** 상태다. run 내 순차 호출(rerank 1회, patch n회)을 전제로 한다
+    (driver 는 target 당 순차 — TEAM_CONTRACT 3A-8). 병렬 호출은 이 인스턴스를 공유하지 말 것.
+    """
+    if len(chat_fns) != len(tier_labels):
+        raise ValueError("chat_fns 와 tier_labels 길이가 다르다")
+    failures: list[int] = []
+    state: dict = {"outcome": LlmCallOutcome.unavailable()}
+    chain = make_chained_chat_fn(
+        list(chat_fns), on_fallback=lambda i, exc: failures.append(i))
+
+    def chat(messages: list[dict]) -> str:
+        failures.clear()
+        try:
+            text = chain(messages)
+        except Exception as exc:  # 전 tier 실패 — 호출측이 휴리스틱으로 degrade.
+            state["outcome"] = LlmCallOutcome.unavailable(error=type(exc).__name__)
+            raise
+        idx = len(failures)  # 실패는 0..idx-1 에서 났고, idx 에서 성공했다.
+        state["outcome"] = LlmCallOutcome(
+            llm_used=True, tier=tier_labels[idx], tier_index=idx)
+        return text
+
+    return chat, (lambda: state["outcome"])
+
+
+def observed_chat_fn_from_env(
+    env: Optional[Mapping[str, str]] = None, *,
+    precheck: bool = True, precheck_timeout: float = 3.0,
+    max_tokens: Optional[int] = None,
+) -> Optional[tuple[ChatFn, Callable[[], LlmCallOutcome]]]:
+    """`chat_fn_from_env` 와 같되 (chat_fn, recorder) 를 돌려준다. endpoint 없으면 None.
+
+    호출측(P1 rerank 배선)은 chat_fn 을 `make_rerank_fn` 에 넣고, aggregate 뒤 `recorder()` 로
+    얻은 `LlmCallOutcome.as_metadata()` 를 trajectory step `result` 에 기록한다(T-2). None 이면
+    LLM 없이 휴리스틱으로 돈 run → `LlmCallOutcome.unavailable().as_metadata()` 로 표시한다.
+    """
+    tiers = _prepared_tiers(
+        env, precheck=precheck, precheck_timeout=precheck_timeout, max_tokens=max_tokens)
+    if not tiers:
+        return None
+    return make_observed_chain([t.chat_fn() for t in tiers], [t.tier for t in tiers])
 
 
 def probe(env: Optional[Mapping[str, str]] = None, *, timeout: float = 5.0) -> list[tuple[Endpoint, bool]]:

@@ -10,12 +10,19 @@ from model.trajectory import (
     OBSERVATION_TYPES,
     TrajectoryRecorder,
     is_evidence_type,
+    llm_usage_from_trajectories,
     load_trajectories,
     stats,
     to_sft_sample,
     training_samples,
     valid_evidence,
 )
+
+
+def _llm_step(run_id, seq, *, llm_used, tier) -> Trajectory:
+    return Trajectory(
+        id=f"{run_id}-{seq}", run_id=run_id, state=RunState.MAPPING, action={},
+        result={"llm_used": llm_used, "tier": tier}, next_state=RunState.CANDIDATE_SCAN)
 
 
 def _obs(id, type_) -> Observation:
@@ -122,6 +129,38 @@ def test_stats() -> None:
         s = stats(load_trajectories(Path(td) / "t.jsonl"))
         assert s["total"] == 3 and s["learnable"] == 2
         assert s["by_label"]["unlabeled"] == 1
+
+
+def test_llm_usage_ignores_steps_without_llm_meta() -> None:
+    # llm 메타 없는 스텝(일반 verify 등)은 세지 않는다.
+    trajs = [Trajectory(id="1", run_id="rA", state=RunState.VERIFYING, action={},
+                        result={"verified": True}, next_state=RunState.VERIFIED)]
+    assert llm_usage_from_trajectories(trajs) == {}
+
+
+def test_llm_usage_all_used_when_every_touchpoint_answers() -> None:
+    trajs = [_llm_step("rA", 0, llm_used=True, tier="primary"),
+             _llm_step("rA", 1, llm_used=True, tier="primary")]
+    usage = llm_usage_from_trajectories(trajs)["rA"]
+    assert usage.calls == 2 and usage.used == 2
+    assert usage.all_used is True and usage.any_used is True
+
+
+def test_llm_usage_degrade_makes_all_used_false_but_any_true() -> None:
+    # rerank 는 LLM, patch 합성은 endpoint 죽어 none → 오염된 run.
+    trajs = [_llm_step("rB", 0, llm_used=True, tier="primary"),
+             _llm_step("rB", 1, llm_used=False, tier="none")]
+    usage = llm_usage_from_trajectories(trajs)["rB"]
+    assert usage.calls == 2 and usage.used == 1
+    assert usage.all_used is False   # 하나라도 degrade → 보수적으로 오염
+    assert usage.any_used is True and "none" in usage.tiers
+
+
+def test_llm_usage_separates_runs() -> None:
+    trajs = [_llm_step("rA", 0, llm_used=True, tier="primary"),
+             _llm_step("rB", 0, llm_used=False, tier="none")]
+    out = llm_usage_from_trajectories(trajs)
+    assert out["rA"].all_used is True and out["rB"].any_used is False
 
 
 def _run() -> None:
