@@ -184,5 +184,60 @@ class VcGenerateReportToolTests(unittest.TestCase):
         self.assertIn("CWE-79", path.read_text(encoding="utf-8"))
 
 
+class VcExportSarifToolTests(unittest.TestCase):
+    """W-7: `vc_export_sarif` 배선. 렌더링 로직(`eval.report_export.render_sarif`)은 P4
+    소유고 `eval/test_report_export.py`가 이미 검증했다 — 여기서는 P1이 배선한 조회·파일
+    쓰기·`vc_generate_report`와 같은 데이터 소스 사용만 확인한다."""
+
+    def test_writes_sarif_file_and_returns_path(self) -> None:
+        import json
+
+        from mcp_server.server import mcp
+
+        run_id = f"run-{uuid4().hex[:12]}"
+        finding = Finding(id=f"finding-{uuid4().hex[:12]}", run_id=run_id, title="X", cwe="CWE-79")
+        save(finding)
+
+        _, structured = asyncio.run(mcp.call_tool("vc_export_sarif", {"run_id": run_id}))
+
+        self.assertEqual(structured["format"], "sarif")
+        self.assertTrue(structured["artifact_uri"].endswith(f"runs/{run_id}/report.sarif"))
+        from core.db import DATA_DIR
+
+        path = DATA_DIR / "runs" / run_id / "report.sarif"
+        self.addCleanup(path.unlink, missing_ok=True)
+        self.assertTrue(path.exists())
+        sarif = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(sarif["version"], "2.1.0")
+        self.assertEqual(sarif["runs"][0]["results"][0]["ruleId"], "CWE-79")
+
+    def test_same_data_source_as_generate_report(self) -> None:
+        """HTML과 SARIF export가 서로 다른 finding 집합을 보면 안 된다 — 같은
+        `build_run_report(run_id)`를 쓰는지 확인한다."""
+        import json
+
+        from mcp_server.server import mcp
+
+        run_id = f"run-{uuid4().hex[:12]}"
+        for i in range(2):
+            save(Finding(id=f"finding-{uuid4().hex[:12]}", run_id=run_id, title=f"f{i}", cwe="CWE-89"))
+
+        _, html_structured = asyncio.run(mcp.call_tool("vc_generate_report", {"run_id": run_id}))
+        _, sarif_structured = asyncio.run(mcp.call_tool("vc_export_sarif", {"run_id": run_id}))
+
+        from core.db import DATA_DIR
+
+        html_path = DATA_DIR / "runs" / run_id / "report.html"
+        sarif_path = DATA_DIR / "runs" / run_id / "report.sarif"
+        self.addCleanup(html_path.unlink, missing_ok=True)
+        self.addCleanup(sarif_path.unlink, missing_ok=True)
+
+        sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(sarif["runs"][0]["results"]), 2)
+        html = html_path.read_text(encoding="utf-8")
+        self.assertIn("f0", html)
+        self.assertIn("f1", html)
+
+
 if __name__ == "__main__":
     unittest.main()

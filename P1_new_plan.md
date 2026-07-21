@@ -29,7 +29,7 @@
 | ~~W-5~~ | R-3b `synthesize_fn` + `context_provider` 배선 | P3 | ✅ **완료** |
 | ~~W-10~~ | rerank를 `observed_chat_fn_from_env()`로 교체 (T-2) | P4 | ✅ **완료** |
 | ~~W-6~~ | `core/report.py` redaction (§3A-10) | — | ✅ **완료** |
-| **W-7** | `vc_export_sarif` 배선 | P4 | 소 |
+| ~~W-7~~ | `vc_export_sarif` 배선 | P4 | ✅ **완료** |
 
 > ⚠️ **스프린트 최대 리스크 — 235B endpoint 순환 대기 (2026-07-21 확인)**
 > `.env`에 `VIBECUTTER_LLM_*`가 **0건**이고 `python -m model.endpoints`는 두 tier 모두 `[DOWN]`이다.
@@ -113,7 +113,11 @@
   - ⚠️ **`vc_export_patch`가 쓰는 원본 `.patch` 파일(diff export)은 건드리지 않았다** — 그건 `git apply`로 실제 코드에 적용돼야 하는 바이트 정확한 산출물이라, report HTML과 같은 방식으로 redaction하면 diff가 깨지거나(hunk 길이 불일치) 사용자가 잘못된 코드를 적용하게 된다. 사람이 읽는 리포트와 기계가 적용하는 export는 다른 처리가 필요해서 별도 결정 사안으로 남겨뒀다(TEAM_CONTRACT §3A-10에 기록)
   - 테스트: `tests/test_report.py::RedactionTests` 4건(Bearer/JWT/세션쿠키/password, patch diff·impact·root_cause rationale 각각에서). 전체 스위트 566 passed, 0 failure
 
-- [ ] **W-7. `vc_export_sarif` 배선** — 렌더러(`eval/report_export.render_sarif`)는 P4 것이고 이미 동작 검증됨. tool 본문 2줄
+- [x] **W-7. `vc_export_sarif` 배선** — **완료(2026-07-21)**. 렌더러(`eval/report_export.render_sarif`)는 P4 것이고 `eval/test_report_export.py`(4건, `python -m eval.test_report_export`로 실행 — pytest/unittest 아닌 P4의 자체 러너)가 이미 검증. `mcp_server/tools_repair.py:vc_export_sarif`가 `build_run_report(run_id)` → `render_sarif()` → `.vibecutter/runs/{run_id}/report.sarif` 저장을 배선(`vc_generate_report`와 완전히 같은 패턴, 같은 데이터 소스)
+  - `mcp_server/prompts.py`의 `_TRIAGE_REPORT`에 `vc_export_sarif` 안내 추가(GitHub code scanning 업로드용)
+  - 테스트: `tests/test_report.py::VcExportSarifToolTests` 2건(파일 생성·경로, HTML/SARIF가 같은 데이터 소스를 쓰는지). 전체 스위트 568 passed, 0 failure
+
+**P1 W-* 항목 전부 완료.** 남은 리스크는 235B endpoint 순환 대기(위 박스)와 §3A-10의 patch diff export/container log redaction(별도 결정 필요, 미착수)뿐이다.
 
 ### ✅ P0 병합 — 완료 (우리 없이 진행됨)
 
