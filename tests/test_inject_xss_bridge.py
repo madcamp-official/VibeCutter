@@ -35,6 +35,29 @@ _HTML_XSS = '@app.get("/render")\ndef r(name: str):\n    return HTMLResponse(f"<
 _WRITE_SQL = '@app.post("/items/{i}")\ndef rm(i: int):\n    return db.execute(f"DELETE FROM t WHERE id = {i}")\n'
 _SAFE_PARAM = '@app.get("/safe")\ndef s(q: str):\n    return db.execute("SELECT * FROM t WHERE x = $1", (q,))\n'
 
+# Node/Express (Juice Shop 구조): 라우트 등록과 핸들러 정의가 다른 파일. SQL 결합 변수(criteria)가
+# HTTP 파라미터(q)와 다르다 — verify는 SQL 변수가 아니라 req.query.q를 때려야 한다.
+_JS_SERVER = "import { search } from './routes/search'\napp.get('/rest/products/search', search())\n"
+_JS_SEARCH = (
+    "export function search () {\n"
+    "  return (req, res, next) => {\n"
+    "    let criteria = req.query.q ?? ''\n"
+    "    criteria = (criteria.length <= 200) ? criteria : criteria.substring(0, 200)\n"
+    "    models.sequelize.query(`SELECT * FROM Products WHERE name LIKE '%${criteria}%' AND deletedAt IS NULL`)\n"
+    "      .then((p) => res.json(p)).catch(next)\n"
+    "  }\n"
+    "}\n"
+)
+# 로그인 SQLi: SQL 라인에 req.body.email 직접 결합 → 파라미터 email.
+_JS_LOGIN = (
+    "app.post('/rest/user/login', login())\n"
+    "export function login () {\n"
+    "  return (req, res) => {\n"
+    "    models.sequelize.query(`SELECT * FROM Users WHERE email = '${req.body.email}' AND deletedAt IS NULL`)\n"
+    "  }\n"
+    "}\n"
+)
+
 
 class InjectionXssBridgeTests(unittest.TestCase):
     def test_get_select_sqli_becomes_verifiable_injection_candidate(self):
@@ -48,6 +71,27 @@ class InjectionXssBridgeTests(unittest.TestCase):
             p = injection.injection_probe_from_candidate(inj[0])
             self.assertEqual(p.inject_param, "q")
             self.assertEqual(p.inject_method, "GET")
+
+    def test_node_sqli_traces_http_param_not_sql_variable(self):
+        # 데모 2(J-3) 잠금: Juice Shop처럼 route와 handler가 다른 파일이고 SQL 변수(criteria)≠HTTP
+        # 파라미터(q)일 때, candidate가 verify용으로 SQL 변수가 아니라 req.query.q를 잡아야 한다.
+        with _tree({"server.ts": _JS_SERVER, "routes/search.ts": _JS_SEARCH}) as d:
+            res = injection_xss_candidates("r", _prov(), d)
+            inj = [c for c in res.candidates if c.vuln_class == "injection"]
+            self.assertEqual(len(inj), 1)
+            self.assertEqual(inj[0].attack_params["inject_path"], "/rest/products/search")
+            self.assertEqual(inj[0].attack_params["inject_param"], "q")  # criteria가 아니라 q
+            p = injection.injection_probe_from_candidate(inj[0])
+            self.assertEqual(p.inject_param, "q")
+            self.assertEqual(p.inject_method, "GET")
+
+    def test_node_inline_request_access_resolves_param(self):
+        # SQL 라인에 req.body.email 직접 결합 → 파라미터 email로 잡는다.
+        with _tree({"routes/login.ts": _JS_LOGIN}) as d:
+            res = injection_xss_candidates("r", _prov(), d)
+            inj = [c for c in res.candidates if c.vuln_class == "injection"]
+            self.assertEqual(len(inj), 1)
+            self.assertEqual(inj[0].attack_params["inject_param"], "email")
 
     def test_htmlresponse_becomes_verifiable_xss_candidate(self):
         with _tree({"app.py": _HTML_XSS}) as d:

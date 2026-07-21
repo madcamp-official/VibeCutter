@@ -337,6 +337,8 @@ from surface.inject_xss import _DYN, _EXEC, _LOG_LINE, _interp_var, find_xss_sus
 _SELECT_SINK = re.compile(r"\bselect\b[\s\S]{0,240}?\bfrom\b", re.I)  # 불리언 payload에 안전(읽기)
 _WRITE_SINK = re.compile(r"\binsert\s+into\b|\bupdate\b[\s\S]{0,120}?\bset\b|\bdelete\s+from\b", re.I)
 _HTMLRESP = re.compile(r'HTMLResponse\s*\(\s*f["\'][^"\']*\{([^}]+)\}', re.I)  # 서버 반사 XSS
+# HTTP 요청 파라미터 접근(Express/Node): `req.query.q`, `request.body.email`, `req.params.id`.
+_REQ_SOURCE = re.compile(r"req(?:uest)?\.(?:query|params|body)\.(\w+)")
 
 
 def _sql_sink_in_body(body: str) -> tuple[str, bool] | None:
@@ -349,6 +351,28 @@ def _sql_sink_in_body(body: str) -> tuple[str, bool] | None:
         if _WRITE_SINK.search(line):
             return line.strip(), False
     return None
+
+
+def _http_param_for(sink_line: str, body: str) -> str:
+    """SQL에 결합된 변수를 HTTP 요청 파라미터명으로 역추적(Node/Express). 못 찾으면 "".
+
+    Juice Shop처럼 SQL 인터폴레이션 변수(`criteria`)가 HTTP 파라미터(`q`)와 다르면, 그대로 쓰면
+    verify probe가 엉뚱한 `?criteria=`를 때려 차등이 안 난다. `req.query.q` 접근을 역추적해 verify가
+    실제 파라미터를 주입하게 한다. 파이썬 등 요청 접근이 없는 스택이면 ""로 호출부가 `_interp_var` 폴백.
+    """
+    # 1) sink 라인에 요청 접근이 직접 있으면(예: `${req.body.email}`) 그 파라미터를 쓴다.
+    m = _REQ_SOURCE.search(sink_line)
+    if m:
+        return m.group(1)
+    # 2) 인터폴레이션 변수를 본문의 `<var> = ... req.query.X` 대입에서 역추적(같은 라인 한정).
+    var = _interp_var(sink_line)
+    if var:
+        am = re.search(rf"\b{re.escape(var)}\b\s*[:=][^\n;]*?req(?:uest)?\.(?:query|params|body)\.(\w+)", body)
+        if am:
+            return am.group(1)
+    # 3) 최후: 본문의 첫 요청 파라미터 접근.
+    bm = _REQ_SOURCE.search(body)
+    return bm.group(1) if bm else ""
 
 
 def _method_for(text: str, path: str) -> str:
@@ -401,7 +425,8 @@ def injection_xss_candidates(
                 elif ("injection", path) not in seen:
                     seen.add(("injection", path))
                     method = _method_for(text, path)
-                    param = _interp_var(line) or "q"
+                    # SQL 결합 변수가 아니라 실제 HTTP 요청 파라미터를 verify에 넘긴다(Node ↔ SQL 변수 불일치 방어).
+                    param = _http_param_for(line, body) or _interp_var(line) or "q"
                     ap = {"base_url": base, "inject_path": path, "inject_param": param,
                           "inject_method": method, "inject_location": "query" if method == "GET" else "json"}
                     if method != "GET":
