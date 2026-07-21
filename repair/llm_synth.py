@@ -96,33 +96,45 @@ def _read_source_excerpt(source_root: Path, root_cause: RootCause) -> str:
     return redact(text)
 
 
-_FENCE_RE = re.compile(r"```(?:diff|patch)?\s*\n(.*?)```", re.DOTALL)
+# 펜스 언어 무관하게 코드블록을 뽑는다(모델이 ```diff/```patch/```java/```suggestion 등으로 감쌀 수 있음).
+_FENCE_RE = re.compile(r"```[^\n`]*\n(.*?)```", re.DOTALL)
+
+
+def _looks_like_diff(text: str) -> bool:
+    """unified diff 헤더 마커를 가졌는지(설명문·코드조각을 diff로 오인하지 않게)."""
+    return "--- " in text and "+++ " in text
 
 
 def parse_diffs(raw: str, *, expected_file: str) -> list[str]:
     """모델 원문에서 unified diff 블록을 뽑아 expected_file을 실제로 건드리는 것만 남긴다.
 
-    ```diff 펜스가 있으면 그 안을, 없으면 diff 마커가 있는 원문 전체를 후보로 본다.
-    `+++ b/…`가 expected_file을 (접미 일치로) 가리키지 않으면 버린다(엉뚱한 파일 패치 방지).
+    견고성(S-3): 펜스 언어 무관 추출 → diff 마커를 가진 블록만 → 펜스가 없으면 원문 전체 폴백 →
+    `+++ …`가 expected_file을 (접미 일치로) 가리키는 것만. 설명문·오타 경로·빈 응답이 섞여도
+    후보를 조용히 버릴 뿐 **예외를 던지지 않는다**(합성 실패가 파이프라인을 죽이지 않게).
     """
-    blocks = [m.group(1) for m in _FENCE_RE.finditer(raw)]
-    if not blocks and "--- a/" in raw and "+++ b/" in raw:
-        blocks = [raw]
-    kept: list[str] = []
-    for block in blocks:
-        norm = block.strip("\n") + "\n"
-        targets = _diff_target_files(norm)
-        if targets and any(_path_matches(t, expected_file) for t in targets):
-            kept.append(norm)
-    return kept
+    try:
+        text = raw or ""
+        blocks = [b for b in _FENCE_RE.findall(text) if _looks_like_diff(b)]
+        if not blocks and _looks_like_diff(text):  # 펜스 없이 diff만 낸 모델 대응
+            blocks = [text]
+        kept: list[str] = []
+        for block in blocks:
+            norm = block.strip("\n") + "\n"
+            targets = _diff_target_files(norm)
+            if targets and any(_path_matches(t, expected_file) for t in targets):
+                kept.append(norm)
+        return kept
+    except Exception:
+        return []  # 파싱은 어떤 입력에도 터지지 않는다 — 후보를 못 만들 뿐.
 
 
 def _diff_target_files(diff: str) -> list[str]:
-    """diff의 `+++ b/<path>` 대상 파일 경로들(`/dev/null` 제외)."""
+    """diff의 `+++ [b/]<path>` 대상 파일 경로들(`/dev/null`·탭 타임스탬프 제외)."""
     files: list[str] = []
     for line in diff.splitlines():
         if line.startswith("+++ "):
             p = line[4:].strip()
+            p = p.split("\t", 1)[0].strip()  # "+++ b/x.py\t2024-01-01 .." → 경로만
             if p.startswith("b/"):
                 p = p[2:]
             if p and p != "/dev/null":
@@ -135,11 +147,25 @@ def _path_matches(a: str, b: str) -> bool:
     return a == b or a.endswith(b) or b.endswith(a)
 
 
+def _is_scope_safe_path(path: str) -> bool:
+    """worktree 밖으로 나가는 경로(절대경로·`..` 상위탈출)면 False (S-4 합성 단계 사전 거부).
+
+    최종 방어선은 `core.judge.assert_diff_within_worktree`(scope 게이트)지만, 명백히 밖을
+    가리키는 후보는 합성 단계에서 미리 버려 랭킹·apply 낭비를 막는다.
+    """
+    p = path.replace("\\", "/")
+    if p.startswith("/") or (len(p) >= 2 and p[1] == ":"):  # POSIX 절대경로 / Windows 드라이브
+        return False
+    return ".." not in p.split("/")
+
+
 def _to_candidate(diff: str, finding: Finding, root_cause: RootCause) -> PatchCandidate | None:
     """단일 diff → PatchCandidate. layer 추정 + 보수적 스코어 + 무관 파일 변경 페널티."""
     targets = _diff_target_files(diff)
     if not targets:
         return None
+    if not all(_is_scope_safe_path(t) for t in targets):
+        return None  # S-4: 절대경로/상위탈출(..)은 worktree 밖 → 합성 단계에서 사전 거부
     unrelated = sum(1 for t in targets if not _path_matches(t, root_cause.file))
     layer = _classify_layer(root_cause.symbol or "", root_cause.file)
     sec, reg, arch = _LAYER_PROFILE.get(layer, _LAYER_PROFILE["controller_hotfix"])
