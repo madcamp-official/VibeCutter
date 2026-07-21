@@ -7,7 +7,13 @@ from pathlib import Path
 from contracts.schemas import Candidate
 from model.code_index import CodeIndex
 from scanners.aggregate import priority_score
-from scanners.rag_enrich import code_context, enrich, has_indexable_location, rag_relevance
+from scanners.rag_enrich import (
+    _relevance,
+    code_context,
+    enrich,
+    has_indexable_location,
+    rag_relevance,
+)
 
 REPO = Path(__file__).parent.parent / "model" / "testdata" / "sample_repo"
 
@@ -105,6 +111,22 @@ def test_has_indexable_location_gates_index_build() -> None:
     assert has_indexable_location([sca]) is False
     assert has_indexable_location([sca, _cand("app/users.py:5", "injection")]) is True
     assert has_indexable_location([]) is False
+
+
+def test_idor_weighting_discriminates_generic_vs_access_control() -> None:
+    # G-1: 범용 CRUD 토큰만 있는 청크는 접근제어 토큰 청크보다 낮은 관련도 → 순위가 갈린다.
+    generic, _ = _relevance("idor", {"find", "get", "where", "user", "id"})
+    access, _ = _relevance("idor", {"owner", "authorize", "permission"})
+    assert access == 1.0
+    assert generic < access            # 흔한 토큰만으로는 최상단이 아니다
+    assert generic <= 0.67             # 5×0.4/3 = 0.67
+
+
+def test_non_idor_focus_weighting_unchanged() -> None:
+    # 가중 없는 focus(injection/xss)는 매칭 개수/3 그대로여야 한다(회귀 방지).
+    assert _relevance("injection", {"query", "execute", "exec"})[0] == 1.0   # 3/3
+    assert _relevance("injection", {"query", "execute"})[0] == 0.67          # 2/3
+    assert _relevance("xss", {"render", "html"})[0] == 0.67                  # 2/3
 
 
 def _run() -> None:

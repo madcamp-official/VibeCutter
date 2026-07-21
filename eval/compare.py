@@ -1,8 +1,9 @@
-"""base vs fine-tuned 비교 하네스 (P4, D4 "비교표 초안"의 GPU-free 부분).
+"""ablation 비교 하네스 (P4) — 두 구성의 같은 벤치마크 산출물을 나란히 놓고 델타 표를 만든다.
 
-D4 밤에 base 모델과 QLoRA fine-tuned 모델로 같은 벤치마크를 각각 돌려 두 산출물이
-나오면, 이 하네스가 두 `BaselineReport` 를 나란히 놓고 metric 델타 표를 만든다.
-GPU/학습 없이도 **비교 로직 자체는 지금 완성·검증**해 둔다 — 두 산출물만 나오면 바로 표가 나온다.
+**RQ3(2026-07-21 재정의)**: RAG 코드 컨텍스트 + LLM 재랭킹이 휴리스틱 대비 개선하는가.
+그래서 비교는 **base = heuristic**(`VIBECUTTER_LLM_DISABLE=1`) vs **full = rag-llm**(235B+RAG)
+두 산출물이다. (~~base(7B) vs QLoRA fine-tuned~~ 은 학습 포기로 폐기 — 하네스 로직은 라벨
+무관이라 **두 candidate 산출물만 있으면** 어떤 두 구성이든 그대로 비교된다.)
 
 - 순수: `compare(base, full) -> ComparisonReport` — 두 BaselineReport 만 받아 델타 계산.
 - wrapper: `compare_dirs(base_dir, full_dir, ...)` — candidate 디렉토리 두 개 → 두 리포트 → 비교.
@@ -114,9 +115,11 @@ def compare_dirs(
 
 
 def _main() -> None:
-    ap = argparse.ArgumentParser(description="base vs full 비교 (P4)")
-    ap.add_argument("--base-candidates", required=True, help="base 모델 산출 candidate 디렉토리")
-    ap.add_argument("--full-candidates", required=True, help="fine-tuned 산출 candidate 디렉토리")
+    ap = argparse.ArgumentParser(description="ablation 비교: base(heuristic) vs full(rag-llm) (P4)")
+    ap.add_argument("--base-candidates", required=True,
+                    help="base 구성 산출 candidate 디렉토리 (예: heuristic, VIBECUTTER_LLM_DISABLE=1)")
+    ap.add_argument("--full-candidates", required=True,
+                    help="full 구성 산출 candidate 디렉토리 (예: rag-llm, 235B+RAG)")
     ap.add_argument("--benchmark", default="datasets/inventory_benchmark.yaml")
     args = ap.parse_args()
 

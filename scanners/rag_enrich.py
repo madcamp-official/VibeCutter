@@ -54,11 +54,34 @@ def _focus_of(candidate: Candidate) -> Optional[str]:
     return None
 
 
+# 일부 sink 어휘는 변별력이 낮다(코드 절반에 있는 범용 CRUD/식별자 토큰)/높다(그 취약점군의
+# 진짜 신호). G-1 실측: idor 어휘 find/get/where/user/id 가 너무 흔해 청크의 44% 가 relevance
+# 0.67+ 를 받아 순위가 안 갈렸다(injection 0.9%·xss 2.6% 는 정상). 그래서 idor 는 접근제어/소유권
+# 토큰에 무게를 주고 범용 토큰을 깎아 순위를 가른다. **가중이 없는 focus 는 전부 1.0 → 기존과 동일.**
+_TERM_WEIGHTS: dict[str, dict[str, float]] = {
+    "idor": {
+        "find": 0.4, "get": 0.4, "where": 0.4, "user": 0.4, "id": 0.4,   # 범용 CRUD/식별자
+        "account": 0.8, "role": 1.0,                                      # 중간
+        "owner": 1.2, "authorize": 1.2, "permission": 1.2,               # 접근제어 = IDOR 진짜 신호
+    },
+}
+
+
+def _term_weight(focus: Optional[str], term: str) -> float:
+    """sink 어휘의 변별 가중. override 없으면 1.0(기존 동작)."""
+    return _TERM_WEIGHTS.get(focus or "", {}).get(term, 1.0)
+
+
 def _relevance(focus: Optional[str], chunk_tokens: set[str]) -> tuple[float, list[str]]:
-    """focus sink 어휘가 chunk 에 몇 개 있나 → 0~1 관련도 + 매칭된 용어."""
+    """focus sink 어휘의 **가중 합**이 얼마나 되나 → 0~1 관련도 + 매칭된 용어.
+
+    범용 토큰은 낮게·변별 토큰은 높게 가중해 순위를 가른다(G-1). 가중 없는 focus
+    (injection/xss)는 모든 매칭이 1.0 → `len(matched)/3` 인 기존 계산과 동일하다.
+    """
     terms = FOCUS_SINK_TERMS.get(focus or "", ())
     matched = [t for t in terms if t in chunk_tokens]
-    score = round(min(len(matched) / 3.0, 1.0), 2)  # 3개 이상이면 1.0
+    weight = sum(_term_weight(focus, t) for t in matched)
+    score = round(min(weight / 3.0, 1.0), 2)  # 가중합 3.0 이상이면 1.0
     return score, matched
 
 
