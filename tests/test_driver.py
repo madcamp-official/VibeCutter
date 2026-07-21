@@ -10,6 +10,8 @@ overlay reset, rejected worker는 reset 미호출, 순차 실행 순서. 실제 
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -23,6 +25,7 @@ from core.evidence_store import (
     write_artifact,
 )
 from mcp_server.driver import run_target_audit
+from runtime.target_lease import TargetBusyError, TargetLeaseManager
 
 REGISTERED_TARGET_ID = "26s-w1-c1-03"
 
@@ -104,10 +107,16 @@ class RunTargetAuditTests(unittest.TestCase):
         self.service = MagicMock()
         self.service.reset_run.return_value = True
         self.runtime = FakeToolRuntime()
+        self._lease_tmp = TemporaryDirectory()
+        self.addCleanup(self._lease_tmp.cleanup)
+        self.lease_manager = TargetLeaseManager(Path(self._lease_tmp.name))
 
     def _run(self):
         return run_target_audit(
-            REGISTERED_TARGET_ID, service=self.service, invoke=self.runtime.invoke
+            REGISTERED_TARGET_ID,
+            service=self.service,
+            invoke=self.runtime.invoke,
+            lease_manager=self.lease_manager,
         )
 
     def test_rejects_unregistered_target_before_any_scan(self) -> None:
@@ -115,9 +124,14 @@ class RunTargetAuditTests(unittest.TestCase):
 
         with self.assertRaises(PolicyViolation):
             run_target_audit(
-                "not-in-scope", service=self.service, invoke=self.runtime.invoke
+                "not-in-scope",
+                service=self.service,
+                invoke=self.runtime.invoke,
+                lease_manager=self.lease_manager,
             )
         self.service.sweep_stale_run_overlays.assert_not_called()
+        # 정책 게이트가 lease보다 먼저다 — 미등록 target은 lease조차 잡지 않는다.
+        self.assertIsNone(self.lease_manager.get("not-in-scope"))
 
     def test_sweeps_once_before_batch(self) -> None:
         self._run()
@@ -234,6 +248,82 @@ class RunTargetAuditTests(unittest.TestCase):
         # rejected worker는 verify만, patch 관련 tool은 verified worker 1개분(1회)만.
         self.assertEqual(tools_called.count("vc_generate_patch"), 1)
         self.assertEqual(tools_called.count("vc_apply_patch"), 1)
+
+
+class TargetLeaseWiringTests(unittest.TestCase):
+    """W-8: batch 전체 단위 lease acquire/renew/release 배선(§3A-8, P2 긴급 요청 3번)."""
+
+    def setUp(self) -> None:
+        self.service = MagicMock()
+        self.service.reset_run.return_value = True
+        self.runtime = FakeToolRuntime()
+        self._lease_tmp = TemporaryDirectory()
+        self.addCleanup(self._lease_tmp.cleanup)
+        self.lease_manager = TargetLeaseManager(Path(self._lease_tmp.name))
+
+    def _run(self):
+        return run_target_audit(
+            REGISTERED_TARGET_ID,
+            service=self.service,
+            invoke=self.runtime.invoke,
+            lease_manager=self.lease_manager,
+        )
+
+    def test_lease_released_after_successful_batch(self) -> None:
+        self._run()
+        self.assertIsNone(self.lease_manager.get(REGISTERED_TARGET_ID))
+
+    def test_lease_held_before_build_and_matches_scan_run_id(self) -> None:
+        # build/start 시점에 이미 lease가 잡혀 있어야 한다(worker보다 훨씬 이전).
+        observed: dict[str, str] = {}
+        original_start = self.runtime._on_vc_start_target
+
+        def check_lease_and_delegate(*, target_id: str) -> None:
+            lease = self.lease_manager.get(target_id)
+            self.assertIsNotNone(lease)
+            observed["run_id"] = lease.run_id
+            original_start(target_id=target_id)
+
+        self.runtime._on_vc_start_target = check_lease_and_delegate
+        report = self._run()
+        # build 시점에 관찰한 lease 소유자가 최종 scan_run_id와 같다 — 배치 전체가 한 lease.
+        self.assertEqual(observed["run_id"], report.scan_run_id)
+
+    def test_renew_called_once_per_worker(self) -> None:
+        real_renew = self.lease_manager.renew
+        calls: list[str] = []
+
+        def spy_renew(target_id: str, run_id: str, **kwargs):
+            calls.append(run_id)
+            return real_renew(target_id, run_id, **kwargs)
+
+        self.lease_manager.renew = spy_renew  # type: ignore[method-assign]
+        report = self._run()
+        # 후보 2개(verified+rejected) → worker 2개 → renew 2회, 전부 같은 scan_run_id 소유.
+        self.assertEqual(len(calls), len(report.worker_results))
+        self.assertTrue(all(c == report.scan_run_id for c in calls))
+
+    def test_busy_target_raises_and_never_reaches_build(self) -> None:
+        # 다른 배치가 이미 이 target을 쥐고 있으면 build/start 전에 TargetBusyError로 실패해야 한다.
+        self.lease_manager.acquire(REGISTERED_TARGET_ID, "other-run")
+        with self.assertRaises(TargetBusyError):
+            self._run()
+        self.assertEqual(self.runtime.calls, [])  # build_target조차 호출 안 됨
+        # 남의 lease를 우리가 release하지 않는다 — 여전히 other-run 소유로 남아 있어야 한다.
+        lease = self.lease_manager.get(REGISTERED_TARGET_ID)
+        self.assertIsNotNone(lease)
+        self.assertEqual(lease.run_id, "other-run")
+
+    def test_lease_released_even_if_scan_tool_raises_unexpectedly(self) -> None:
+        # 스캐너 실패는 driver 내부에서 잡히지만(로깅만), 혹시 모를 완전 미예상 실패에서도
+        # release가 finally로 보장되는지 build_target 자체를 깨뜨려 확인한다.
+        def boom(*, target_id: str) -> None:
+            raise RuntimeError("docker daemon unreachable")
+
+        self.runtime._on_vc_build_target = boom
+        with self.assertRaises(RuntimeError):
+            self._run()
+        self.assertIsNone(self.lease_manager.get(REGISTERED_TARGET_ID))
 
 
 if __name__ == "__main__":

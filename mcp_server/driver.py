@@ -28,6 +28,7 @@ from core.evidence_store import get, list_by_run, save
 from core.orchestrator import materialize_worker_run
 from core.policy_engine import require_target_allowed
 from mcp_server.tools_inventory import _service
+from runtime.target_lease import TargetLeaseManager
 from verifiers.dispatch import class_of
 
 logger = logging.getLogger(__name__)
@@ -197,55 +198,75 @@ def run_target_audit(
     service=None,
     invoke: Callable[..., None] | None = None,
     scan_tools: tuple[str, ...] = DEFAULT_SCAN_TOOLS,
+    lease_manager: TargetLeaseManager | None = None,
 ) -> AuditReport:
     """target 하나에 대한 candidate-per-worker-Run 감사를 순차 실행한다.
 
     순서(D5-P2.md P2 호출 조건 + candidate-per-worker-Run 계약):
-      1. batch 시작 전 `sweep_stale_run_overlays(target_id, active_run_ids=(), approved=True)`
+      1. `require_target_allowed` 통과 후 **target lease를 배치 전체 단위로 선점**한다
+         (P2 긴급 요청 3번, §3A-8) — scan Run과 그 아래 모든 worker Run이 같은 고정 host
+         port를 공유하므로, build/start부터 마지막 worker까지 통째로 한 배치가 target을
+         독점해야 한다. 이미 다른 배치가 쥐고 있으면 `TargetBusyError`(`RuntimeError` 상속)를
+         그대로 전파한다 — audit log의 `PermissionError` 집계를 오염시키지 않는다.
+      2. batch 시작 전 `sweep_stale_run_overlays(target_id, active_run_ids=(), approved=True)`
          — 이전 배치가 남긴 관리 overlay를 정리한다(임의 `vc-*` project는 안 건드림).
-      2. `vc_build_target`→`vc_start_target`으로 격리 환경에서 target을 띄운다(프롬프트 step 2와
+      3. `vc_build_target`→`vc_start_target`으로 격리 환경에서 target을 띄운다(프롬프트 step 2와
          동일 — 이게 없으면 verify가 Connection refused로 막힌다, 1B-5 라이브 실측).
-      3. scan Run 1개를 만들어 `scan_tools`(IDOR+SAST+SCA)로 3개 취약점군 후보를 모두
+      4. scan Run 1개를 만들어 `scan_tools`(IDOR+SAST+SCA)로 3개 취약점군 후보를 모두
          수집한다. 한 스캐너 실패는 로깅만 하고 나머지로 계속. scan Run은 `CANDIDATE_SCAN`에서
          종료하고 이후 전이시키지 않는다(계약 ①).
-      4. 후보마다 **순차로**(고정 host port라 병렬 불가, 계약 ④) worker Run을 materialize해
+      5. 후보마다 **순차로**(고정 host port라 병렬 불가, 계약 ④) worker Run을 materialize해
          verify(vuln_class로 tool 자동 선택)→(verified면)localize→patch→apply→build/replay/
-         validate를 돌린다(계약 ②③).
-      5. overlay를 만든 worker Run만 종료 시 `reset_run`으로 정리한다.
+         validate를 돌린다(계약 ②③). worker 하나가 끝날 때마다 lease를 `renew()`한다 —
+         c1-05 실측 기준 후보 1개 136초라, 후보 10개면 기본 TTL(900초)을 넘긴다.
+      6. overlay를 만든 worker Run만 종료 시 `reset_run`으로 정리한다.
+      7. `finally`에서 lease를 `release()`한다 — 배치 성공/실패와 무관하게 다음 배치가
+         이 target을 쓸 수 있게 한다.
 
-    `service`/`invoke`는 테스트에서 주입한다(기본값은 실제 P2 서비스 + 실제 MCP tool 호출).
-    build/start 실패는 audit할 target 자체가 없다는 뜻이라 그대로 전파한다(worker 단위 격리와
-    달리 여기서 잡지 않는다).
+    `service`/`invoke`/`lease_manager`는 테스트에서 주입한다(기본값은 실제 P2 서비스 + 실제
+    MCP tool 호출 + `~/.vibecutter/leases` 실 lease store). build/start 실패는 audit할 target
+    자체가 없다는 뜻이라 그대로 전파한다(worker 단위 격리와 달리 여기서 잡지 않는다).
     """
     service = service if service is not None else _service()
     invoke = invoke if invoke is not None else _default_invoke
+    lease_manager = lease_manager if lease_manager is not None else TargetLeaseManager()
 
-    require_target_allowed(target_id)  # 미등록 target은 스캔 시작 전에 조기 거부.
-    service.sweep_stale_run_overlays(target_id, active_run_ids=(), approved=True)
+    require_target_allowed(target_id)  # 미등록 target은 lease/스캔 시작 전에 조기 거부.
 
-    invoke("vc_build_target", target_id=target_id)
-    invoke("vc_start_target", target_id=target_id)
+    scan_run_id = f"run-{uuid4().hex[:12]}"
+    lease_manager.acquire(target_id, scan_run_id)  # 배치 전체(build~마지막 worker) 단위 선점.
+    try:
+        service.sweep_stale_run_overlays(target_id, active_run_ids=(), approved=True)
 
-    scan_run = Run(id=f"run-{uuid4().hex[:12]}", target_id=target_id, status=RunState.READY)
-    save(scan_run)
-    for scan_tool in scan_tools:
-        try:
-            invoke(scan_tool, run_id=scan_run.id)
-        except Exception as exc:  # noqa: BLE001 — 한 스캐너 실패가 전체 감사를 죽이면 안 된다
-            logger.warning(
-                "scan tool %s failed for run %s (target %s): %s",
-                scan_tool,
-                scan_run.id,
-                target_id,
-                exc,
-                exc_info=True,
+        invoke("vc_build_target", target_id=target_id)
+        invoke("vc_start_target", target_id=target_id)
+
+        scan_run = Run(id=scan_run_id, target_id=target_id, status=RunState.READY)
+        save(scan_run)
+        for scan_tool in scan_tools:
+            try:
+                invoke(scan_tool, run_id=scan_run.id)
+            except Exception as exc:  # noqa: BLE001 — 한 스캐너 실패가 전체 감사를 죽이면 안 된다
+                logger.warning(
+                    "scan tool %s failed for run %s (target %s): %s",
+                    scan_tool,
+                    scan_run.id,
+                    target_id,
+                    exc,
+                    exc_info=True,
+                )
+
+        scan_candidates = list_by_run(Candidate, scan_run.id)
+        worker_results: list[WorkerResult] = []
+        for scan_candidate in scan_candidates:  # 순차 — 고정 포트 공유 target
+            worker_results.append(
+                _audit_one_candidate(
+                    target_id, scan_run, scan_candidate, service=service, invoke=invoke
+                )
             )
-
-    scan_candidates = list_by_run(Candidate, scan_run.id)
-    worker_results = [
-        _audit_one_candidate(target_id, scan_run, scan_candidate, service=service, invoke=invoke)
-        for scan_candidate in scan_candidates  # 순차 — 고정 포트 공유 target
-    ]
-    return AuditReport(
-        target_id=target_id, scan_run_id=scan_run.id, worker_results=worker_results
-    )
+            lease_manager.renew(target_id, scan_run_id)  # 살아있으면 TTL 연장, 죽었으면 그대로 만료.
+        return AuditReport(
+            target_id=target_id, scan_run_id=scan_run.id, worker_results=worker_results
+        )
+    finally:
+        lease_manager.release(target_id, scan_run_id)

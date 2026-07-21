@@ -23,7 +23,7 @@
 | ~~W-1~~ | `source_lock.py` external_allowlist | P2 | ✅ **완료** |
 | ~~W-2~~ | P2 registry 병합 + `kind` 노출 | P2·P3 | ✅ **완료** |
 | **W-3** | `Validation.build_ok: bool \| None` coerce 금지 | **P3 (judge 구현 대기)** | 소 |
-| **W-8** | **lease 배선** (acquire/renew/release) | **P2 (긴급 요청)** | 소 |
+| ~~W-8~~ | **lease 배선** (acquire/renew/release) | P2 | ✅ **완료** |
 | **W-9** | **runtime metadata JSONL 배선** | **P2 (긴급 요청)** | 중 |
 | **W-4** | `vc_export_patch` + `vc_resume_audit` + driver 자동승인 제거 | P2 | 중 |
 | ~~W-5~~ | R-3b `synthesize_fn` + `context_provider` 배선 | P3 | ✅ **완료** |
@@ -60,16 +60,22 @@
   - [ ] `driver.py:145`의 자동 `confirmed=True` **제거**
   - [ ] driver 진입 직후 `acquire_target_lease`, `finally`에서 `release_target_lease` (P2 구현 대기)
 
-- [ ] **W-8. lease 배선** (P2 긴급 요청 3번, §3A-8) — `runtime/target_lease.py`가 main에 있다
+- [x] **W-8. lease 배선** (P2 긴급 요청 3번, §3A-8) — **완료(2026-07-21)**. `mcp_server/driver.py:run_target_audit`
   ```
   run_target_audit(target_id)
-    ├─ acquire(target_id, scan_run_id)     ← 배치 진입 직후
-    ├─ worker 하나 끝날 때마다 renew()
+    ├─ require_target_allowed(target_id)          ← lease보다 먼저(미등록 target은 lease조차 안 잡음)
+    ├─ acquire(target_id, scan_run_id)             ← 배치 진입 직후, build/start보다 먼저
+    ├─ try: sweep → build → start → scan → [worker마다 renew()]
     └─ finally: release(target_id, scan_run_id)
   ```
-  - **배치 전체 단위**다(worker 단위 아님) — scan run과 모든 worker가 같은 고정 포트를 공유한다
+  - **배치 전체 단위**다(worker 단위 아님) — `scan_run_id`를 `uuid4`로 미리 뽑아 lease에 쓰고, 나중에 실제 `Run(id=scan_run_id, ...)`로 재사용해 lease 소유자와 scan Run id를 일치시켰다
   - `renew()`가 필요한 이유: c1-05 실측이 후보 1개에 **136초**라 후보 10개면 TTL 900초를 넘긴다. 살아 있으면 갱신, 죽으면 900초 뒤 자동 회수
-  - `TargetBusyError`(`RuntimeError` 상속)는 그대로 전파한다 — audit log의 `PermissionError` 집계를 오염시키지 않는다
+  - `TargetBusyError`(`RuntimeError` 상속)는 그대로 전파한다 — audit log의 `PermissionError` 집계를 오염시키지 않는다. 다른 배치가 이미 쥐고 있으면 build조차 시도하지 않고 즉시 실패
+  - `lease_manager` 파라미터 주입 가능(기본 `~/.vibecutter/leases`) — `service`/`invoke`와 같은 DI 패턴, 테스트는 임시 디렉터리로 격리
+  - 테스트: `tests/test_driver.py::TargetLeaseWiringTests` 5건(release/held-before-build/renew-per-worker/busy-target/finally-release-on-unexpected-error) 신규 + 기존 11건 전부 `lease_manager` 주입으로 갱신, 16건 전체 통과
+
+> ⚠️ **W-8과 무관한 새 블로커 발견(2026-07-21 15:2x) — `datasets/inventory.yaml`에 juice-shop 누락**
+> `8b794b5`(P2, "register pinned Juice Shop SQLi runtime")가 `targets/manifests/juice-shop.yaml` + `source-lock.yaml`은 정확히 채웠지만(W-1에서 요청한 그대로), **P4 소유 `datasets/inventory.yaml`에는 juice-shop 항목을 추가하지 않았다.** `tests/test_inventory_manifest_contract.py`(체크인된 모든 manifest가 inventory에도 있어야 한다는 계약, P4 소유)가 지금 브랜치에서 **1 failure + 1 error**로 깨져 있다 — 내 W-8 변경과 무관, 순수하게 이 커밋 이후 상태다. **P2/P4 조율 필요**: `datasets/inventory.yaml`에 `juice-shop`(focus=injection) 항목 추가.
 
 - [ ] **W-9. runtime metadata JSONL 배선** (P2 긴급 요청 2번) — `runtime/metadata.py`의 `append_runtime_metadata()`를 배치 종료 시점에
   - P1이 채울 수 있는 것: `run_id`·`target_id`·`base_url`·`source_commit`·`health`·`readiness`·`reset_result`·`lease_run_id`·`lease_expires_at`
