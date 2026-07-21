@@ -63,3 +63,14 @@ P3가 승인된 교육용 fixture 또는 실제 target의 `target_id`, `source r
 safe method/path/body, observe/positive 조건, rollback, deterministic test command를
 제공하면 해당 target만 build → test-suite → reset으로 검증한다. 그 전까지는 c1-05 gold,
 c2-04 negative, c3-09 holdout을 유지한다.
+
+## D7 외부 LLM endpoint 도달성 점검
+
+P1 요청에 따라 P2 로컬에서 `http://172.10.7.246:8080/health`와 `/v1/models`를 각각
+5초 제한으로 비파괴 확인했다. 두 요청 모두 `status=000` timeout이었다. 이는 현재 P2
+네트워크에서 endpoint에 도달하지 못했다는 결과일 뿐, 외부망에서의 공개 여부를 확정하는
+검사는 아니다. 외부 네트워크(테더링 등)에서 별도 확인이 필요하다.
+
+외부에서 응답하면 해당 주소는 사설 RFC1918 대역이 아니므로 운영 전 `127.0.0.1` 또는
+허용된 내부 대역 bind, 방화벽 allowlist, Bearer 인증을 적용해야 한다. API key는 `.env`
+외부에 기록하지 않는다.
