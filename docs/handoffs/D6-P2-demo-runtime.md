@@ -54,6 +54,34 @@ orchestration은 변경하지 않는다.
 - P4 runtime metadata JSONL 필드: `run_id`, `target_id`, `source_commit`, `base_url`, `health`, `readiness`, `gpu_worker`, `llm_endpoint_status`, `reset_ok`, `residual_containers`, `residual_worktrees`, `residual_ports`. secret/token/password는 제외한다.
 - `health/readiness=false`, LLM endpoint fallback, 또는 residual resource가 있는 run은 fixed/모델 비교 통계에서 별도 플래그하거나 제외한다.
 
+## P3 closed-loop 대상 확정
+
+- 주력 gold: `26s-w1-c1-05`, local reference run `run-897ad65c686f`; `self_signup/bearer`라
+  P2 fixture는 만들지 않고 verifier가 ephemeral 계정을 생성한다.
+- 음성 IDOR: `26s-w1-c2-04`; 승인된 `prepare_idor_fixture`로 fixture-file을 재생성한다.
+  write-IDOR 계약은 `PUT /vocabs/{id}/description`, observe
+  `/vocabs/?owner_id={owner}`, rollback은 target reset이다. 토큰·비밀번호는 저장하지 않는다.
+- holdout: `26s-w1-c3-09`; runtime clean-room 용도로만 사용한다.
+- camp1 신규 run은 GPU runtime의 3.13 venv와 취약 target 준비가 끝난 뒤 P3가 발급한다.
+  P2는 그 전까지 baseline/reset 및 runtime metadata를 지원한다.
+
+## P3 실행 결과 및 camp1 blocker
+
+- `c1-05` local gold `run-897ad65c686f`: candidate 1, verified 1, `FIXED`, 6개 gate 모두 통과.
+  P3가 run-scoped overlay reset까지 완료했다. report는 P3 로컬 `camp1:/root/demo_report_897.*`
+  경로에 있다.
+- `c2-04` local scan `run-567d4d06e7e9`: worker 3개, candidate 3, verified 0/rejected 3.
+  무인증 앱에서 IDOR 경계가 없어지는 true-negative 결과이며, `down --volumes`까지 완료됐다.
+- 위 두 결과는 P3의 별도 로컬 머신에서 실행돼 P2 runtime JSONL에 직접 조인하지 않는다. P4용
+  co-located metadata가 필요하면 camp1에서 새 c1-05 run을 발급해야 한다.
+- camp1 준비 조건은 해소됐다(2026-07-20). `/opt/VibeCutter`를 `main` 최신으로 fast-forward하고
+  `.venv-p2`에 `pip`를 bootstrap한 뒤 `requirements.txt`를 설치했다. `httpx 0.28.1`,
+  `pydantic 2.13.4`, `semgrep 1.90.0`을 확인했고, locked `c2-04` source bootstrap도
+  `ready`로 통과했다.
+- camp1의 기존 `c1-05` container는 healthy이며, 프로세스 범위 일회성 secret env를 주입한
+  worker-local preflight에서 `ready=True`, source lock `ready`, listening port를 확인했다.
+  secret 값은 저장·출력하지 않았다. 이제 P3가 camp1에서 fresh verifier run을 발급할 수 있다.
+
 ## 결정·가정·리스크
 
 - 20개 전체를 발표 데모에 동시에 올리지 않는다. 고정 host port 때문에 3~5개 후보를 순차 운용한다.
