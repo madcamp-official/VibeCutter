@@ -20,11 +20,11 @@ apps:
     name: OWASP Juice Shop
     repo_url: https://github.com/juice-shop/juice-shop
     stack: node/express + angular
-    adapter: node
+    adapter: generic_docker
     focus: [idor, xss, injection]
     expected_vulns: [idor, xss, sqli, nosqli, auth]
     verify: false
-    notes: 3군 전부 풍부. 벤치마크 1순위. 단일 컨테이너 실행 쉬움.
+    notes: 3군 전부 풍부. 벤치마크 1순위. P2 가 generic-docker(compose)로 고정 등록 — inventory.yaml 과 adapter 일치.
 
   - id: nodegoat
     name: OWASP NodeGoat

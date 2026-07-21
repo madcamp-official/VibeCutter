@@ -499,3 +499,20 @@ apps:
   expected_vulns: []
   verify: true
   notes: 몰입캠프 프로젝트. 학생 프로젝트(미감사). files=7, backend=N, stack≈static/html, sigs=index.html
+# ── 데모/일반화 런타임 타깃 (학생앱 아님 — 위 헤더 스코프의 예외) ──────────────────────
+# P2 가 SQLi 데모 런타임으로 고정 등록(targets/manifests/juice-shop.yaml, commit 8b794b5).
+# 체크인된 manifest 는 inventory 에도 있어야 한다는 계약(tests/test_inventory_manifest_contract)
+# 때문에 여기 등재한다. adapter 는 P2 manifest(generic-docker)가 authoritative.
+# 라벨된 정답(ground truth)은 datasets/inventory_benchmark.yaml 의 juice-shop 을 쓴다.
+- id: juice-shop
+  name: OWASP Juice Shop
+  repo_url: https://github.com/juice-shop/juice-shop
+  stack: node/express + angular
+  adapter: generic_docker
+  focus:
+  - idor
+  - xss
+  - injection
+  expected_vulns: []
+  verify: true
+  notes: 데모/일반화 타깃(학생앱 아님). P2 pinned SQLi 런타임(manifest juice-shop, generic-docker, compose, v17.3.0). 라벨 정답은 inventory_benchmark.yaml 참조.
