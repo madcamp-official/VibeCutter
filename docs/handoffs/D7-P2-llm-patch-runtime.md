@@ -74,3 +74,20 @@ P1 요청에 따라 P2 로컬에서 `http://172.10.7.246:8080/health`와 `/v1/mo
 외부에서 응답하면 해당 주소는 사설 RFC1918 대역이 아니므로 운영 전 `127.0.0.1` 또는
 허용된 내부 대역 bind, 방화벽 allowlist, Bearer 인증을 적용해야 한다. API key는 `.env`
 외부에 기록하지 않는다.
+
+## Juice Shop 후보 사전 검증
+
+P3 승인에 따라 OWASP Juice Shop `v17.3.0` 공식 이미지를 후보로 점검했다. 로컬 loopback
+포트에서 이미지 기동과 검색 endpoint 응답을 확인한 뒤 컨테이너를 제거했다.
+
+- image digest: `sha256:123acb31ed8bb05ebb06934a29be83d4e11a46cae937b9ed2bf2bda29d98130`
+- endpoint: `GET /rest/products/search?q=`
+- baseline `apple`: HTTP 200, 631 bytes
+- true payload `')) OR 1=1--`: HTTP 200, 18,662 bytes
+- false payload `')) AND 1=2--`: HTTP 200, 30 bytes
+
+따라서 P3의 boolean-differential oracle 후보로는 적합하다. 고정 소스의 `package.json`에는
+공식 회귀 명령 `npm test`와 서버 전용 `npm run test:server`가 선언돼 있다. 다만 v17.3.0
+checkout에는 lockfile이 없어 `npm ci`는 실행할 수 없었으므로, manifest 등록 전 `npm install`
+기반 회귀 실행 또는 이미지 전용 deterministic smoke 계약을 P3와 확정해야 한다. 이 확인
+전에는 새 target manifest를 main에 추가하지 않는다.
