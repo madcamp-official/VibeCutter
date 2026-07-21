@@ -116,6 +116,54 @@ class RenderHtmlTests(unittest.TestCase):
         self.assertIn("finding이 없습니다", doc)
 
 
+class RedactionTests(unittest.TestCase):
+    """§3A-10: 확인된 결함(redact() 호출 0건)을 고친다 — HTML 리포트로 secret이 새면 안 된다."""
+
+    def _report_with(self, *, diff: str, impact: str = "", rationale: str = "") -> tuple:
+        run_id = f"run-{uuid4().hex[:12]}"
+        finding = Finding(
+            id=f"finding-{uuid4().hex[:12]}", run_id=run_id, title="t", impact=impact,
+            root_cause=RootCause(file="f.py", symbol="s", rationale=rationale) if rationale else None,
+        )
+        save(finding)
+        patch = Patch(id=f"patch-{uuid4().hex[:12]}", finding_id=finding.id, run_id=run_id, diff=diff)
+        save(patch)
+        return build_run_report(run_id)
+
+    def test_bearer_token_in_patch_diff_is_redacted(self) -> None:
+        report = self._report_with(
+            diff='+String h = "Bearer abc.def.ghi";\n'
+        )
+        doc = render_html(report)
+        self.assertNotIn("abc.def.ghi", doc)
+        # redaction은 html.escape보다 먼저 걸리므로 <redacted>의 꺾쇠도 엔티티로 나온다.
+        self.assertIn("Bearer &lt;redacted&gt;", doc)
+
+    def test_jwt_in_patch_diff_is_redacted(self) -> None:
+        # "token" 같은 필드명 문맥이 없는 순수 JWT라야 bare-JWT 규칙이 단독으로 잡는지 본다
+        # (token= 문맥이 있으면 그 필드 규칙이 먼저 통째로 지워버려 이 규칙을 못 본다).
+        jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dQw4w9WgXcQ"
+        report = self._report_with(diff=f"+// leaked in log: {jwt}\n")
+        doc = render_html(report)
+        self.assertNotIn(jwt, doc)
+        self.assertIn("&lt;redacted-jwt&gt;", doc)
+
+    def test_session_cookie_in_impact_is_redacted(self) -> None:
+        report = self._report_with(
+            diff="d", impact="세션 하이재킹 가능: JSESSIONID=ABCD1234EFGH 로 재현했다"
+        )
+        doc = render_html(report)
+        self.assertNotIn("ABCD1234EFGH", doc)
+        self.assertIn("JSESSIONID=&lt;redacted&gt;", doc)
+
+    def test_password_in_root_cause_rationale_is_redacted(self) -> None:
+        report = self._report_with(
+            diff="d", rationale='설정 파일에 password="hunter2"가 하드코딩돼 있다'
+        )
+        doc = render_html(report)
+        self.assertNotIn("hunter2", doc)
+
+
 class VcGenerateReportToolTests(unittest.TestCase):
     def test_writes_html_file_and_returns_path(self) -> None:
         from mcp_server.server import mcp

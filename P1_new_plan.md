@@ -28,7 +28,7 @@
 | ~~W-4~~ | `vc_export_patch` + `vc_resume_audit` + driver 자동승인 제거 | P2 | ✅ **완료** |
 | ~~W-5~~ | R-3b `synthesize_fn` + `context_provider` 배선 | P3 | ✅ **완료** |
 | ~~W-10~~ | rerank를 `observed_chat_fn_from_env()`로 교체 (T-2) | P4 | ✅ **완료** |
-| **W-6** | `core/report.py` redaction (§3A-10) | — | 소 |
+| ~~W-6~~ | `core/report.py` redaction (§3A-10) | — | ✅ **완료** |
 | **W-7** | `vc_export_sarif` 배선 | P4 | 소 |
 
 > ⚠️ **스프린트 최대 리스크 — 235B endpoint 순환 대기 (2026-07-21 확인)**
@@ -108,7 +108,10 @@
   - **W-9의 `llm_endpoint_state`와 같은 출처를 쓴다** — `mcp_server/driver.py:_llm_endpoint_state_for(scan_run_id)`가 `model.trajectory.llm_usage_from_trajectories()`로 그 trajectory를 다시 읽어 "up"/"down"/"unknown"으로 접는다. T-3 표본 필터(`eval.sample_filter.filter_llm_condition`)도 **같은 함수**를 쓰므로 두 값이 구조적으로 어긋날 수 없다
   - 테스트: `tests/test_scan_tool_wiring.py::RerankHookTests` 갱신(이름 변경 3건 + trajectory 병합 신규 2건), `tests/test_driver.py::LlmEndpointStateForTests` 4건 신규. 전체 스위트 **562 passed, 0 failure**(juice-shop/inventory 블로커도 이제 해소됨)
 
-- [ ] **W-6. `core/report.py` redaction** — 확인된 결함: `redact()` 호출 **0건**. evidence 8건·audit 3건과 대조. HTML 리포트로 secret이 샐 수 있다
+- [x] **W-6. `core/report.py` redaction** — **완료(2026-07-21)**. 확인된 결함이었다: `redact()` 호출 **0건**(evidence 8건·audit 3건과 대조), HTML 리포트로 secret이 샐 수 있었다
+  - `_esc()` 한 곳에서 `redact()` 후 `html.escape()`(순서 중요 — escape 후엔 `&`/`<`가 엔티티로 바뀌어 redaction 정규식이 원문과 다르게 매치될 수 있다). `_render_finding`/`render_html`의 모든 동적 값이 예외 없이 `_esc()`를 거치므로(제목/CWE/endpoint/impact/root_cause/evidence/**patch.diff**/validation/limitations 전부) 개별 필드마다 `redact()`를 잊고 빠뜨릴 여지가 없다 — `write_artifact()`/prompt 조립과 같은 "egress 경계 한 곳" 원칙
+  - ⚠️ **`vc_export_patch`가 쓰는 원본 `.patch` 파일(diff export)은 건드리지 않았다** — 그건 `git apply`로 실제 코드에 적용돼야 하는 바이트 정확한 산출물이라, report HTML과 같은 방식으로 redaction하면 diff가 깨지거나(hunk 길이 불일치) 사용자가 잘못된 코드를 적용하게 된다. 사람이 읽는 리포트와 기계가 적용하는 export는 다른 처리가 필요해서 별도 결정 사안으로 남겨뒀다(TEAM_CONTRACT §3A-10에 기록)
+  - 테스트: `tests/test_report.py::RedactionTests` 4건(Bearer/JWT/세션쿠키/password, patch diff·impact·root_cause rationale 각각에서). 전체 스위트 566 passed, 0 failure
 
 - [ ] **W-7. `vc_export_sarif` 배선** — 렌더러(`eval/report_export.render_sarif`)는 P4 것이고 이미 동작 검증됨. tool 본문 2줄
 

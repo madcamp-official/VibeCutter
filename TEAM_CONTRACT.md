@@ -271,7 +271,9 @@ vc_resume_audit(run_id):
 
 **확인된 결함**: `core/report.py`에 `redact()` 호출이 **0건**이다. evidence와 audit log는 걸지만 리포트는 안 건다.
 
-- [ ] redaction을 **모든 사용자 대면 산출물**에 적용: evidence(✅) / audit log(✅) / **report HTML(❌)** / SARIF / patch diff / container log
+- [x] redaction을 **모든 사용자 대면 산출물**에 적용: evidence(✅) / audit log(✅) / **report HTML(✅, 2026-07-21 W-6)** / SARIF(W-7, 미착수) / patch diff export(미착수 — 아래 참고) / container log(미착수)
+  - report HTML: `core/report.py:_esc()` 한 곳에서 `redact()` 후 `html.escape()` — `_render_finding`/`render_html`의 모든 동적 값이 예외 없이 이 함수를 거치므로 개별 필드마다 빠뜨릴 여지가 없다(`patch.diff`/`finding.impact`/`root_cause.rationale`/`limitations` 포함). 테스트: `tests/test_report.py::RedactionTests` 4건
+  - ⚠️ **patch diff export(`vc_export_patch`가 쓰는 원본 `.patch` 파일)는 report HTML과 같은 방식으로 redaction하면 안 된다** — diff는 `git apply`로 실제 코드에 적용돼야 하는 바이트 정확한 산출물이라, 본문에 `<redacted>`를 끼워 넣으면 diff가 깨지거나(hunk 길이 불일치) 사용자가 잘못된 코드를 적용하게 된다. 리포트(사람이 읽음)와 export(기계가 적용함)는 다른 처리가 필요 — 별도 결정 필요
 - [ ] **egress 동의**: 등록 시 또는 첫 LLM 호출 시 "코드 일부가 LLM 질의로 전송됩니다(secret은 제거)"를 1회 표시하고 기록
 - 전송 범위를 사실대로: rerank 스니펫(≈21줄 × 최대 10개) + 패치 대상 파일. 그 외 evidence·DB·로그는 **로컬을 벗어나지 않는다**
 
