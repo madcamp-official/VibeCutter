@@ -49,3 +49,17 @@ P2가 해당 target의 build/test contract를 추가할 수 있다.
 - P2 기존 target runtime/overlay/reset 회귀와 c1-05/c2-04/c3-09 clean-room 결과는 유지한다.
 - 현재 XSS/SQLi demo target과 실제 test suite는 아직 확정되지 않았다. target 지정 전에는
   manifest나 source를 추정해 변경하지 않는다.
+
+## D7 후속 점검 — template 밖 target 요청
+
+P3 요청에 따라 현재 코퍼스의 suite 보유 target을 소스 기준으로 재점검했다. `c1-02`는
+`innerHTML` 사용 지점이 있으나 채팅/닉네임 등 외부 값은 `escape()`를 거쳐 렌더링되고,
+`c1-04`의 `innerHTML`은 정적 게임 화면/로컬 방 데이터 렌더링이다. 둘 다 실제 XSS
+재현 endpoint로 확정할 근거가 없어 데모 취약 target으로 승격하지 않았다. 기존 handoff도
+로컬 앱이 XSS/Injection clean이라 기록하고 있다.
+
+따라서 P2는 임의로 소스에 취약점을 삽입하거나 성공용 regression test를 만들지 않는다.
+P3가 승인된 교육용 fixture 또는 실제 target의 `target_id`, `source revision`, `vuln_class`,
+safe method/path/body, observe/positive 조건, rollback, deterministic test command를
+제공하면 해당 target만 build → test-suite → reset으로 검증한다. 그 전까지는 c1-05 gold,
+c2-04 negative, c3-09 holdout을 유지한다.
