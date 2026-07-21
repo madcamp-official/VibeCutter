@@ -1,7 +1,13 @@
-# P4 Model Serving / 학습 런북
+# P4 Model Serving 런북
 
-GPU 서버에서 **모델 서빙 → 파이프라인 훅 연결 → QLoRA 학습 → base vs full 평가**를
-돌리는 순서. (통합 `RUNBOOK.md` 작성 시 이 문서를 P4 섹션으로 삽입 — plan.md §Day4.)
+> ⚠️ **2026-07-21 방향 변경**: 팀이 **학습(QLoRA) 포기 + 외부 72B API + LLM patch closed-loop**로
+> 전환했다. 아래 **3절(QLoRA 학습)·4절(base vs fine-tuned 평가)은 취소**다(보존만 — 아래 각 절 상단 참조).
+> 서빙도 **P4가 직접 설치하지 않고**, 외주가 GPU 3대에 72B를 올린 endpoint를 훅에 배선한다(2절).
+> 7B는 72B 작동 확인 전까지 fallback tier로 유지한다. 평가는 base(SAST/7B) vs full(72B+RAG)
+> ablation(`eval/compare.py`)으로 대체. — `plan-p4.md` 방향변경 배너가 최종 기준.
+
+GPU 서버에서 **모델 서빙 → 파이프라인 훅 연결**을 돌리는 순서(1·2절). ~~QLoRA 학습 → base vs
+full 평가~~는 취소(3·4절, 보존용). (통합 `RUNBOOK.md` 작성 시 이 문서를 P4 섹션으로 삽입.)
 
 - **대상 하드웨어**: RTX 3090 24GB × 3 (camp1/2/3). 7B bf16 ≈ 15GB → 여유 있음.
 - **base 모델**: `Qwen/Qwen2.5-Coder-7B-Instruct` (코드/보안 추론).
@@ -82,7 +88,10 @@ hits = CodeIndex.build(root).search("idor user id", k=5, embed_fn=embed)
 - 훅 실패(endpoint down/파싱오류) 시 **비파괴**: rerank 는 입력 순서 유지, search 는
   embed_fn 없이 호출하면 BM25 로 자동 폴백. 데모 중 endpoint 죽어도 파이프라인은 산다.
 
-## 3. QLoRA 학습 (D4 밤 메인)
+## 3. QLoRA 학습 (D4 밤 메인) — ❌ 취소(2026-07-21, 보존용)
+
+> **이 절은 학습 포기로 취소됐다.** 아래 절차는 실행하지 않는다(기록 보존용). `train_lora.py`도
+> 미사용. 성공 등급 입증은 학습이 아니라 4절→**ablation + LLM patch 성공률**로 한다.
 
 **선행 조건**: 실제 `verified`/`fixed` evidence 가 나와서 P1 이
 `core.trajectory.export_training_dataset()` 로 학습셋을 뽑아둔 상태
@@ -99,22 +108,28 @@ python -m model.train_lora \
 # → 어댑터가 .vibecutter/models/lora-7b 에 저장된다.
 ```
 
-## 4. base vs fine-tuned 평가 (OWASP Benchmark)
+## 4. base vs full ablation 평가 (OWASP Benchmark) — 학습 없이 ablation으로 대체
 
-fine-tuned 어댑터를 vLLM 로 서빙(`--enable-lora --lora-modules ...`)한 뒤,
-`inventory_benchmark.yaml`(양성/음성 라벨: c2-04 IDOR양성, c1-05 IDOR양성/JWT,
-c2-05 IDOR음성 …) 대상으로 파이프라인을 돌리고 두 후보셋을 비교:
+> **~~base(7B) vs fine-tuned~~ 는 취소.** 학습 대신 **base(SAST단독/7B) vs full(72B+RAG+prompt)**
+> ablation 으로 성공 등급을 입증한다. 하네스(`eval/compare.py`·`eval/run_baseline.py`)는 모델
+> 무관이라 그대로 재사용 — **두 candidate 디렉토리만 바꿔 넣으면 된다**(fine-tuned 어댑터 서빙 불필요).
+
+`inventory_benchmark.yaml`(양성/음성 라벨: c2-04 IDOR양성, c1-05 IDOR양성/JWT, c2-05 IDOR음성 …)
+대상으로 두 구성을 각각 돌려 후보셋을 비교:
 
 ```bash
-# base 산출물:
+# base 산출물 (SAST 단독 또는 7B):
 python -m eval.run_baseline --candidates <base_candidates_dir> --label base \
     --benchmark datasets/inventory_benchmark.yaml
-# fine-tuned 산출물:
+# full 산출물 (72B + RAG rerank/embed 훅 연결):
 python -m eval.run_baseline --candidates <full_candidates_dir> --label full \
     --benchmark datasets/inventory_benchmark.yaml
 # eval.baseline 이 precision/recall/FPR/F1 과 OWASP Benchmark score(TPR-FPR) 산출.
-# 같은 harness 로 base vs full 비교 → 발표 자료 표.
+# 같은 harness(eval.compare)로 base vs full 비교 → 발표 자료 표.
 ```
+
+**추가**: LLM patch closed-loop 성공률(게이트별 통과율 + FIXED 성공률)은 별도 평가 하네스로
+집계한다(`Validation` 6게이트 필드 소비 — `core.judge.compute_verdict` 와 같은 계약).
 
 ---
 

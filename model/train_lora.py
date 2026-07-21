@@ -1,5 +1,13 @@
 """7B QLoRA 학습 스크립트 (P4, GPU STEP / D4 밤 메인).
 
+⚠️ **2026-07-21 팀 결정으로 학습(LoRA) 포기 — 이 스크립트는 미사용(보존용).**
+방향이 "외부 72B API + LLM patch closed-loop"로 바뀌면서 fine-tuning 을 접었다. 파이프라인
+어디에서도 import 하지 않는다(독립 실행 스크립트). 삭제하지 않는 이유: (1) GPU 학습
+파이프라인까지 구축했다는 작업 증거, (2) 방향 전환의 근거 자료. 모델 배선은 이 스크립트가
+아니라 `model/serving.py` 의 72B 훅(`make_chained_chat_fn` 등)으로 대체됐다.
+평가도 "base(7B) vs fine-tuned" 가 아니라 "base(SAST/7B) vs full(72B+RAG)" ablation 이며,
+`eval/compare.py` 가 그 용도로 재사용된다. — 자세한 건 `plan-p4.md` 방향변경 배너 참조.
+
 입력: P1 이 `core.trajectory.export_training_dataset()` 로 뽑는
 `.vibecutter/trajectories/export/training_samples.jsonl` — 각 줄이 P4 의
 `model.trajectory.to_sft_sample()` 포맷(=이 저장소가 정한 학습 계약)이다.
