@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlparse
 
 import yaml
@@ -122,6 +122,10 @@ class TargetManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     manifest_version: int = Field(default=1, ge=1, le=1)
+    # ``compose_project`` preserves the existing built-in target behavior.
+    # ``running_local`` describes a user-owned service that is already running;
+    # its build/start/stop commands are optional, while reset remains required.
+    kind: Literal["compose_project", "running_local"] = "compose_project"
     # This field name is intentionally the same as contracts.schemas.Target.id.
     # P1's target registry and P2's manifest therefore share one identifier.
     id: TargetId
@@ -165,7 +169,9 @@ class TargetManifest(BaseModel):
 
     @model_validator(mode="after")
     def referenced_commands_must_exist(self) -> "TargetManifest":
-        required = {"build", "start", "stop", self.reset.command_id}
+        required = {self.reset.command_id}
+        if self.kind == "compose_project":
+            required.update({"build", "start", "stop"})
         required.update(suite.command_id for suite in self.test_suites)
         missing = required.difference(self.commands)
         if missing:
