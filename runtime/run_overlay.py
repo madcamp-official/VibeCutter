@@ -185,8 +185,11 @@ def _rewrite_document(
             build["context"] = str(_map_source_path(original_context, source_repository, worktree_path))
             dockerfile = build.get("dockerfile")
             if isinstance(dockerfile, str):
+                original_dockerfile = _resolve_from(
+                    original_context, dockerfile, repository_root, label="compose Dockerfile"
+                )
                 build["dockerfile"] = str(
-                    _resolve_from(original_context, dockerfile, repository_root, label="compose Dockerfile")
+                    _map_source_path(original_dockerfile, source_repository, worktree_path)
                 )
         _rewrite_volume_paths(service, compose_directory, repository_root)
         _rewrite_env_file_paths(service, compose_directory, repository_root)

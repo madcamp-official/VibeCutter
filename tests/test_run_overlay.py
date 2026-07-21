@@ -98,6 +98,48 @@ networks:
             finally:
                 worktrees.remove("run-1", approved=True)
 
+    def test_source_dockerfile_is_repointed_to_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / ".vibecutter" / "targets" / "sources" / "demo-api"
+            source.mkdir(parents=True)
+            _git(source, "init")
+            _git(source, "config", "user.email", "p2@example.test")
+            _git(source, "config", "user.name", "P2 Test")
+            (source / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+            _git(source, "add", "Dockerfile")
+            _git(source, "commit", "-m", "initial")
+            compose_dir = root / "targets" / "compose"
+            compose_dir.mkdir(parents=True)
+            (compose_dir / "demo-api.yaml").write_text(
+                """services:
+  app:
+    build:
+      context: ../../.vibecutter/targets/sources/demo-api
+      dockerfile: Dockerfile
+    ports: [127.0.0.1:18080:8080]
+    networks: [vc-internal]
+networks:
+  vc-internal:
+    internal: true
+""",
+                encoding="utf-8",
+            )
+            worktrees = WorktreeManager(
+                source, artifact_root=root / ".vibecutter" / "worktrees" / "demo-api"
+            )
+            worktree = worktrees.create("run-1")
+            try:
+                overlay = RunComposeOverlay(_manifest(), root, source, worktree, "run-1")
+                document = yaml.safe_load(overlay.prepare().read_text(encoding="utf-8"))
+                self.assertTrue(
+                    Path(document["services"]["app"]["build"]["dockerfile"]).samefile(
+                        worktree / "Dockerfile"
+                    )
+                )
+            finally:
+                worktrees.remove("run-1", approved=True)
+
     def test_generated_compose_uses_target_worktree_and_preserves_isolation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
