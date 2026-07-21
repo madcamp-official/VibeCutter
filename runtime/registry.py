@@ -1,9 +1,9 @@
 """User-owned approval registry for local target projects.
 
 The checked-in demo catalog remains available, but a user's own project must not
-require a pull request to this repository.  ``LocalRegistry`` stores only the
-user-approved target identity and immutable command/manifest hashes under
-``~/.vibecutter/registry``.  It deliberately does not decide whether approval
+require a pull request to this repository.  ``LocalRegistry`` stores the
+user-approved target identity, immutable command/manifest hashes, and an
+approval-time manifest snapshot under ``~/.vibecutter/registry``. It deliberately does not decide whether approval
 is appropriate; the MCP/P1 layer owns the human confirmation step.
 """
 
@@ -15,9 +15,12 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 from typing import Literal, Optional
 from urllib.parse import urlparse
+
+import yaml
 
 from .manifest import TargetManifest
 
@@ -38,7 +41,12 @@ class ApprovedTarget:
 
 
 class LocalRegistry:
-    """Read/write user-approved targets outside the repository evidence store."""
+    """Read/write user-approved targets outside the repository evidence store.
+
+    New approvals use a per-target directory containing an immutable manifest
+    snapshot and approval metadata. Legacy JSON entries remain readable so an
+    upgrade does not silently lose a user's registration.
+    """
 
     DEFAULT_ROOT = Path.home() / ".vibecutter" / "registry"
 
@@ -51,22 +59,47 @@ class LocalRegistry:
         return cls(root or cls.DEFAULT_ROOT)
 
     def get(self, target_id: str) -> Optional[ApprovedTarget]:
-        path = self._path_for(target_id)
-        if not path.is_file():
+        path = self._approval_path_for(target_id)
+        legacy_path = self._legacy_path_for(target_id)
+        if not path.is_file() and not legacy_path.is_file():
             return None
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            if path.is_file():
+                payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            else:
+                payload = json.loads(legacy_path.read_text(encoding="utf-8"))
             return self._from_json(payload)
         except (OSError, ValueError, TypeError, KeyError) as exc:
-            raise ValueError(f"invalid local target registry entry: {path}") from exc
+            current = path if path.is_file() else legacy_path
+            raise ValueError(f"invalid local target registry entry: {current}") from exc
+
+    def manifest_for(self, target_id: str) -> TargetManifest:
+        """Load the immutable manifest captured at approval time.
+
+        This additive helper keeps the frozen ``ApprovedTarget`` policy projection
+        small. Runtime/catalog consumers must use this snapshot instead of
+        re-reading a mutable user manifest file.
+        """
+        path = self._target_dir_for(target_id) / "manifest.yaml"
+        if not path.is_file():
+            raise ValueError(
+                f"target {target_id!r} has no approval-time manifest snapshot; re-approval required"
+            )
+        try:
+            payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            return TargetManifest.model_validate(payload)
+        except (OSError, ValueError, TypeError) as exc:
+            raise ValueError(f"invalid manifest snapshot for target {target_id!r}") from exc
 
     def list_ids(self) -> tuple[str, ...]:
         if not self.root.is_dir():
             return ()
-        ids: list[str] = []
-        for path in self.root.glob("*.json"):
-            if path.is_file():
-                ids.append(path.stem)
+        ids: set[str] = set()
+        for path in self.root.iterdir():
+            if path.is_dir() and (path / "approval.yaml").is_file():
+                ids.add(path.name)
+            elif path.is_file() and path.suffix == ".json":
+                ids.add(path.stem)
         return tuple(sorted(ids))
 
     def approve(self, manifest: TargetManifest, *, source_path: Path) -> ApprovedTarget:
@@ -102,34 +135,44 @@ class LocalRegistry:
             target_id=manifest.id,
             kind=manifest.kind,
             base_url=manifest.base_url,
-            allowed_hosts=[manifest.allowed_host],
+            # Policy compares hostnames. The explicit port remains part of the
+            # approved base_url and is never inferred from a tool-supplied URL.
+            allowed_hosts=[parsed.hostname or ""],
             source_path=source,
             manifest_sha256=manifest_content_sha256(manifest),
             commands_sha256=commands_sha256(manifest),
             approved_at=datetime.utcnow(),
         )
         self.root.mkdir(parents=True, exist_ok=True)
-        destination = self._path_for(manifest.id)
-        payload = json.dumps(_to_json(approved), ensure_ascii=False, indent=2, sort_keys=True)
-        # Replace atomically so a concurrent MCP read never sees partial JSON.
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=self.root, prefix=f".{manifest.id}-", delete=False
-        ) as handle:
-            handle.write(payload)
-            temporary = Path(handle.name)
-        temporary.replace(destination)
+        target_dir = self._target_dir_for(manifest.id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write_yaml(target_dir / "manifest.yaml", manifest.model_dump(mode="json"))
+        _atomic_write_yaml(target_dir / "approval.yaml", _to_json(approved))
+        # Remove a pre-snapshot entry only after the new snapshot is complete.
+        self._legacy_path_for(manifest.id).unlink(missing_ok=True)
         return approved
 
     def revoke(self, target_id: str) -> None:
-        self._path_for(target_id).unlink(missing_ok=True)
+        target_dir = self._target_dir_for(target_id)
+        if target_dir.is_dir():
+            shutil.rmtree(target_dir)
+        self._legacy_path_for(target_id).unlink(missing_ok=True)
 
-    def _path_for(self, target_id: str) -> Path:
+    def _target_dir_for(self, target_id: str) -> Path:
         if not target_id or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789-_" for ch in target_id):
             raise ValueError("target_id must be a lowercase local registry slug")
-        path = (self.root / f"{target_id}.json").resolve()
+        path = (self.root / target_id).resolve()
         if path.parent != self.root:
             raise ValueError("local registry path escapes registry root")
         return path
+
+    def _approval_path_for(self, target_id: str) -> Path:
+        return self._target_dir_for(target_id) / "approval.yaml"
+
+    def _legacy_path_for(self, target_id: str) -> Path:
+        if not target_id or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789-_" for ch in target_id):
+            raise ValueError("target_id must be a lowercase local registry slug")
+        return (self.root / f"{target_id}.json").resolve()
 
     @staticmethod
     def _require_git_repository(source: Path) -> None:
@@ -173,6 +216,17 @@ def _to_json(target: ApprovedTarget) -> dict:
     payload["source_path"] = str(target.source_path)
     payload["approved_at"] = target.approved_at.isoformat()
     return payload
+
+
+def _atomic_write_yaml(path: Path, payload: dict) -> None:
+    """Write one registry artifact without exposing a partial file to readers."""
+    content = yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}-", delete=False
+    ) as handle:
+        handle.write(content)
+        temporary = Path(handle.name)
+    temporary.replace(path)
 
 
 def _canonical_manifest(manifest: TargetManifest) -> bytes:

@@ -54,9 +54,13 @@ class LocalRegistryTests(unittest.TestCase):
             self.assertIsNotNone(loaded)
             assert loaded is not None
             self.assertEqual(loaded.source_path, project.resolve())
+            self.assertEqual(approved.allowed_hosts, ["127.0.0.1"])
             self.assertEqual(loaded.manifest_sha256, manifest_content_sha256(_manifest()))
             self.assertEqual(loaded.commands_sha256, commands_sha256(_manifest()))
             self.assertEqual(loaded, approved)
+            self.assertTrue((Path(temp) / "registry" / "local-demo" / "manifest.yaml").is_file())
+            self.assertTrue((Path(temp) / "registry" / "local-demo" / "approval.yaml").is_file())
+            self.assertEqual(registry.manifest_for("local-demo"), _manifest())
 
     def test_non_git_source_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

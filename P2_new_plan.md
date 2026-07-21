@@ -35,7 +35,7 @@
 
 **계약 3.1의 시그니처를 그대로 구현한다.** D1 오전에 확정되면 이후 안 바꾼다 — P1이 이걸 목으로 짜고 있다.
 
-- [ ] **R-1. `runtime/registry.py` 신규**
+- [~] **R-1. `runtime/registry.py` snapshot 구현 / catalog 연결 대기**
   - 저장 위치 `~/.vibecutter/registry/` — **repo의 `.vibecutter/`(evidence.db)와 분리**
   - `manifest_sha256`은 **이미 있다** — `runtime/registration.py:13`. 새로 만들지 말 것
   - `commands_sha256`: manifest의 `commands` 전체(argv 포함)를 정규화해 해시. **argv가 바뀌면 재승인 강제**가 목적
@@ -85,7 +85,7 @@
   - **P1이 검증 로직을 먼저 올려야 시작 가능** → P1 W-1
   - **삭제하지 말 것**: 기존 20개의 재현성 장치다
 
-- [ ] **R-6. target별 active-run lease** (§3A-8)
+- [~] **R-6. target별 active-run lease primitive** (§3A-8; orchestration 연결 대기)
   - 고정 loopback port를 공유하므로 target당 lifecycle mutation run은 하나만 허용한다
   - lease에는 `target_id`, 소유 `run_id`, 취득 시각, timeout을 기록한다
   - 정상 reset/kill 시 해제하고, timeout된 lease는 명시적으로 회수한다

@@ -24,13 +24,15 @@
 
 ### P2 — registry와 runtime
 
-- [ ] **§3A-2 승인 manifest snapshot**: registry를 `<target_id>/manifest.yaml`과
+- [~] **§3A-2 승인 manifest snapshot**: registry는 `<target_id>/manifest.yaml`과
   `approval.yaml` 구조로 바꾸고, catalog가 snapshot만 읽도록 연결한다. hash만 보관하는
-  현재 P2 branch 구현은 충분하지 않다.
-- [ ] **§3A-2 host/port 계약**: `allowed_hosts=["127.0.0.1"]`처럼 hostname만 저장한다.
-  port는 승인 snapshot의 `base_url`에 고정하고 lifecycle/health가 그 URL만 사용하게 한다.
-- [ ] **§3A-8 target별 active-run lease**: 같은 target의 동시 lifecycle mutation을 막고,
-  run_id·timeout·회수·reset/kill 해제를 검증한다.
+  P2 registry 내부 저장·복원은 구현됐지만 catalog 연결은 남아 있다.
+- [~] **§3A-2 host/port 계약**: registry가 `allowed_hosts=["127.0.0.1"]`처럼 hostname만
+  저장하도록 구현했다. port를 승인 snapshot의 `base_url`에 고정하는 lifecycle/health
+  검증은 catalog 통합 시 닫아야 한다.
+- [~] **§3A-8 target별 active-run lease**: P2 runtime에 원자적 acquire/release/reap
+  primitive와 단위 테스트를 추가했다. P1 orchestration의 acquire/finally-release 연결은
+  아직 남아 있다.
 - [ ] **R-4/R-5 catalog 이중 출처**: built-in은 기존 source lock/bootstrap을 유지하고,
   user target은 승인된 source path·snapshot을 사용한다. 외부 user Git repo에서
   lifecycle/overlay/worktree가 동작하는 E2E 테스트가 필요하다.
