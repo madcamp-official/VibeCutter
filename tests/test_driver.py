@@ -199,22 +199,24 @@ class RunTargetAuditTests(unittest.TestCase):
         report = self._run()
         self.assertEqual(get(Run, report.scan_run_id).status, RunState.CANDIDATE_SCAN)
 
-    def test_only_verified_worker_gets_reset_run(self) -> None:
+    def test_no_worker_gets_reset_run_since_apply_is_not_automatic(self) -> None:
+        """§3A-7/W-4: driver는 더 이상 confirmed=True를 자동으로 넘기지 않는다 — apply가
+        전혀 일어나지 않으니 정리할 overlay도 없고, reset_run은 아예 호출되지 않는다."""
         report = self._run()
         verified = [r for r in report.worker_results if r.verified]
         rejected = [r for r in report.worker_results if not r.verified]
         self.assertEqual(len(verified), 1)
         self.assertEqual(len(rejected), 1)
 
-        # overlay를 만든(verified→apply까지 간) worker Run만 reset_run.
-        self.service.reset_run.assert_called_once_with(
-            REGISTERED_TARGET_ID, verified[0].worker_run_id, approved=True
-        )
-        self.assertTrue(verified[0].overlay_reset)
-        # rejected worker는 overlay가 없으니 reset 대상이 아니다.
+        self.service.reset_run.assert_not_called()
+        self.assertIsNone(verified[0].overlay_reset)
         self.assertIsNone(rejected[0].overlay_reset)
+        # verified worker는 PATCH_PROPOSED에서 멈춘 patch id를 들고 있어야 Host가 승인할 수 있다.
+        self.assertIsNotNone(verified[0].patch_id)
+        self.assertIsNone(rejected[0].patch_id)
 
-    def test_verified_worker_runs_repair_pipeline_in_order(self) -> None:
+    def test_verified_worker_stops_at_generate_patch(self) -> None:
+        """§3A-7/W-4: verify → localize → generate_patch까지만 자동, apply부터는 Host 승인 후."""
         self._run()
         # verified worker candidate에 대한 tool 호출만 순서대로 뽑는다.
         verified_cand = next(
@@ -230,24 +232,22 @@ class RunTargetAuditTests(unittest.TestCase):
             or a.get("finding_id") is not None
             or a.get("patch_id") is not None
         ]
-        # verify → localize → generate_patch → apply → build → replay → validate
+        # verify → localize → generate_patch. apply/build/replay/validate는 여기 없다.
         expected_tail = [
             "vc_verify_access_control",
             "vc_localize_root_cause",
             "vc_generate_patch",
-            "vc_apply_patch",
-            "vc_build_and_test",
-            "vc_replay_attack",
-            "vc_validate_regression",
         ]
         self.assertEqual(seq[-len(expected_tail):], expected_tail)
+        self.assertNotIn("vc_apply_patch", seq)
 
     def test_rejected_worker_skips_repair(self) -> None:
         self._run()
         tools_called = [t for t, _a in self.runtime.calls]
-        # rejected worker는 verify만, patch 관련 tool은 verified worker 1개분(1회)만.
+        # rejected worker는 verify만. verified worker 1개분(1회)만 generate_patch까지 간다.
         self.assertEqual(tools_called.count("vc_generate_patch"), 1)
-        self.assertEqual(tools_called.count("vc_apply_patch"), 1)
+        # apply는 이제 driver가 자동으로 부르지 않는다 — 사용자 승인 후 Host가 직접 호출한다.
+        self.assertEqual(tools_called.count("vc_apply_patch"), 0)
 
 
 class TargetLeaseWiringTests(unittest.TestCase):
@@ -374,28 +374,11 @@ class RuntimeMetadataWiringTests(unittest.TestCase):
         self.assertIsNone(record.gpu_worker)
         self.assertEqual(record.remaining_containers, [])
 
-    def test_reset_result_true_when_verified_worker_overlay_reset_succeeds(self) -> None:
-        # FakeToolRuntime 기본 시나리오는 verified 1개 + rejected 1개 → overlay 1개 생성·정리.
-        report = self._run()
-        self.assertTrue(self._records_for(report)[0].reset_result)
-
-    def test_reset_result_none_when_no_worker_creates_overlay(self) -> None:
-        def only_rejected(*, run_id: str) -> None:
-            run = get(Run, run_id)
-            run.status = RunState.CANDIDATE_SCAN
-            save(run)
-            save(
-                Candidate(
-                    id=f"scan-cand-rejected-{uuid4().hex[:6]}",
-                    run_id=run_id,
-                    cwe="CWE-639",
-                    vuln_class="idor",
-                    attack_params={"_verdict": "rejected"},
-                )
-            )
-
-        self.runtime._on_vc_scan_access_control = only_rejected
-        report = self._run()
+    def test_reset_result_is_always_none_since_batch_never_applies(self) -> None:
+        """§3A-7/W-4 이후: driver는 apply를 자동으로 안 하므로 overlay가 절대 안 생긴다 —
+        `reset_result`는 verified worker가 있어도 항상 `None`이다(`vc_resume_audit`의 reset은
+        별도 경로라 이 batch-level metadata에 잡히지 않는다)."""
+        report = self._run()  # 기본 시나리오: verified 1개 + rejected 1개.
         self.assertIsNone(self._records_for(report)[0].reset_result)
 
     def test_metadata_append_failure_does_not_crash_batch(self) -> None:

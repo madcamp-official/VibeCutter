@@ -32,7 +32,14 @@ from contracts.schemas import (
     Validation,
 )
 from core.audit_log import audited
-from core.evidence_store import find_or_create_validation, get, save, update_finding_status, write_artifact
+from core.evidence_store import (
+    find_or_create_validation,
+    get,
+    list_by_run,
+    save,
+    update_finding_status,
+    write_artifact,
+)
 from core.judge import (
     ScopeViolationError,
     assert_diff_within_worktree,
@@ -67,6 +74,20 @@ class RunResetResult(BaseModel):
     run_id: str
     target_id: str
     ok: bool
+
+
+class PatchExportResult(BaseModel):
+    run_id: str
+    patch_id: str
+    path: str
+
+
+class ResumeAuditResult(BaseModel):
+    run_id: str
+    patch_id: str
+    verdict: str | None
+    export_path: str
+    reset_ok: bool
 
 
 def _advance_to_patch_proposed(run: Run) -> None:
@@ -111,6 +132,19 @@ def _advance_to_patch_applied(run: Run) -> None:
     run.status = transition(run.status, RunState.WAITING_APPROVAL)
     run.status = transition(run.status, RunState.PATCH_APPLIED)
     save(run)
+
+
+def _applied_patch_for_run(run_id: str) -> Patch:
+    """run에 현재 적용된(approval=APPROVED) patch를 찾는다 — `vc_export_patch`/`vc_resume_audit`가
+    쓴다. RETRY로 여러 patch가 쌓여도 `vc_apply_patch`가 적용 시 `approval=APPROVED`로 표시하는
+    건 그 시점의 patch 하나뿐이라, 그중 가장 최근 것이 "지금 worktree에 있는 diff"다.
+    """
+    applied = [p for p in list_by_run(Patch, run_id) if p.approval == ApprovalStatus.APPROVED]
+    if not applied:
+        raise ValueError(
+            f"run {run_id}에 적용된 patch가 없습니다 — 먼저 vc_apply_patch(patch_id, confirmed=True)를 호출하세요"
+        )
+    return max(applied, key=lambda p: p.created_at)
 
 
 def _patch_directory_prefix(catalog, target_id: str) -> str | None:
@@ -549,6 +583,86 @@ def register(mcp: FastMCP) -> None:
             next_state=run.status,
         )
         return validation
+
+    @mcp.tool()
+    @audited
+    def vc_export_patch(run_id: str) -> PatchExportResult:
+        """적용된 patch의 diff를 `reset_run`이 worktree를 지우기 전에 보존한다(§3A-6, ⚠️ 실제 결함 수정).
+
+        `.vibecutter/runs/<run_id>/security-fix.patch`로 저장한다(`vc_generate_report`와 같은
+        `runs/<run_id>/` 관례). **원본 branch는 건드리지 않는다** — 이 파일을 자신의 저장소에
+        `git apply`하는 건 사용자의 별도 행위다(기획서 10.1 "원본 미변경" 절대 원칙 유지).
+
+        `vc_resume_audit`가 reset 직전에 호출하며, 여기서 예외가 나면(디스크 IO 등) 그대로
+        전파돼 reset을 시도하지 않는다 — export 실패 후 reset하면 패치가 영영 사라진다.
+        """
+        check_not_paused()
+        run = get(Run, run_id)
+        if run is None:
+            raise ValueError(f"run {run_id} not found")
+        patch = _applied_patch_for_run(run_id)
+
+        out_dir = DATA_DIR / "runs" / run_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / "security-fix.patch"
+        out_path.write_text(patch.diff, encoding="utf-8")
+
+        record_trajectory_step(
+            run.id,
+            state=run.status,
+            action={"tool": "vc_export_patch", "run_id": run_id},
+            result={"patch_id": patch.id, "path": str(out_path)},
+            next_state=run.status,
+        )
+        return PatchExportResult(run_id=run_id, patch_id=patch.id, path=str(out_path))
+
+    @mcp.tool()
+    @audited
+    def vc_resume_audit(run_id: str) -> ResumeAuditResult:
+        """사용자 승인 이후 재개: 남은 6게이트 → export → reset (§3A-7, 안전 불변식 4).
+
+        **전제**: run이 `PATCH_APPLIED`여야 한다 — 사용자가 diff를 보고 `vc_apply_patch(patch_id,
+        confirmed=True)`를 이미 호출했다는 뜻이다. driver(`mcp_server/driver.py`)의 자동 배치는
+        여기까지 넘어오지 않는다(더 이상 `confirmed=True`를 자동으로 넘기지 않는다) — 재개
+        주체는 항상 Host(사용자 승인 이후)다.
+
+        `vc_build_and_test`→`vc_replay_attack`→`vc_validate_regression` 순서로 나머지 게이트를
+        채우고(각 tool이 이미 `_finalize_validation`으로 verdict를 확정한다), verdict가
+        FIXED/RETRY/미확정 무엇이든 **reset 전에 반드시 export**한다(§3A-6) — export가 실패하면
+        예외가 그대로 전파돼 reset을 아예 시도하지 않는다.
+        """
+        check_not_paused()
+        run = get(Run, run_id)
+        if run is None:
+            raise ValueError(f"run {run_id} not found")
+        if run.status != RunState.PATCH_APPLIED:
+            raise ValueError(
+                "vc_resume_audit는 run이 PATCH_APPLIED 상태여야 호출할 수 있습니다"
+                f"(현재 {run.status}) — 먼저 vc_apply_patch(patch_id, confirmed=True)를 호출하세요"
+            )
+        patch = _applied_patch_for_run(run_id)
+
+        vc_build_and_test(patch.id)
+        vc_replay_attack(patch.id)
+        validation = vc_validate_regression(patch.id)
+
+        export = vc_export_patch(run_id)
+        reset_ok = _service().reset_run(run.target_id, run_id, approved=True)
+
+        record_trajectory_step(
+            run.id,
+            state=run.status,
+            action={"tool": "vc_resume_audit", "run_id": run_id},
+            result={"patch_id": patch.id, "verdict": validation.verdict, "reset_ok": reset_ok},
+            next_state=run.status,
+        )
+        return ResumeAuditResult(
+            run_id=run_id,
+            patch_id=patch.id,
+            verdict=validation.verdict,
+            export_path=export.path,
+            reset_ok=reset_ok,
+        )
 
     @mcp.tool()
     @audited
