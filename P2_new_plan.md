@@ -60,9 +60,19 @@
   - ⚠️ **`catalog.py:84`의 `expected_target_ids` 결합을 풀어야 한다** — 지금은 발견된 **모든** manifest가 source-lock 엔트리를 요구한다. built-in에만 요구하도록 분리
   - ⚠️ **`catalog.py:159`의 repo 탈출 검사 교체** — 목적은 docstring대로 *"never an MCP-supplied path"*다. 레지스트리의 `source_path`는 MCP 입력이 아니라 **사용자가 대역 외로 승인한 경로**이므로, "repo 안" 대신 **"승인 기록의 source_path와 일치"**로 바꾼다. 불변식이 약해지는 게 아니라 출처가 바뀌는 것
 
-- [ ] **R-5. `source_lock.py` / `source_bootstrap.py`**
-  - `_REPOSITORY_PREFIX = "https://github.com/madcamp-official/"`(`source_lock.py:14`) 강제를 **built-in에만** 적용
-  - 사용자 target은 clone하지 않는다 — **이미 로컬에 있는 프로젝트가 원본**이다. `source_bootstrap`을 건너뛰고 현재 commit만 기록
+- [ ] **R-5. `source_lock.py` / `source_bootstrap.py`** — ⚠️ **2026-07-21 03:09 합의로 방향 정정됨**
+
+  경로가 **둘**이다. 초안은 하나만 봤다.
+
+  | 경우 | 처리 |
+  |---|---|
+  | built-in 20개 | 현행 유지 (`madcamp-official` prefix + 40자 commit) |
+  | **외부 벤치마크 repo**(Juice Shop) | **`external_allowlist`로 확장** ← 신규. **P1이 구현**(03:12 승인) |
+  | 사용자 로컬 프로젝트 | source-lock 자체를 **건너뛴다**. clone하지 않고 이미 로컬에 있는 원본을 쓴다 |
+
+  - **왜 Juice Shop이 source-lock을 타야 하나**: image-only 동적 target으로 제한하면 static·scope 게이트와 LLM 패치가 전부 bypass된다 — `source_dir`이 실제 파일 트리를 가리켜야 한다. 그래서 pinned source를 `.vibecutter/targets/sources/juice-shop`에 vendor한다(P2 권고, P1 동의)
+  - P2 몫: `external_allowlist` + `juice-shop` 엔트리를 `targets/source-lock.yaml`에 추가, source bootstrap, manifest/compose/smoke/reset 등록
+  - **P1이 검증 로직을 먼저 올려야 시작 가능** → P1 W-1
   - **삭제하지 말 것**: 기존 20개의 재현성 장치다
 
 ---

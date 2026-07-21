@@ -14,16 +14,60 @@
 
 ---
 
-## P0 — D1 09:00~10:00 · 브랜치 병합 (다른 모든 것보다 먼저)
+## ▶ 지금 해야 할 일 (2026-07-21 14:40 갱신 · 위에서부터)
 
-이번 스프린트가 어긋난 근본 원인이다. 세 갈래가 서로를 못 봐서 P2는 `main`을 보고 "RAG 미구현", P3는 자기 브랜치 기준으로 판단했다.
+**다른 사람을 막고 있는 순서**로 정렬했다. 1·2번은 P2가 3시간+ 대기 중이다.
 
-- [ ] **M-1. `origin/rag` → main** (c8e48f8 + 277b956 + 307c078). RAG 배선 + 코드 컨텍스트 경로. main 460 → 463 tests 예상
-- [ ] **M-2. `origin/security/agent` → main** (a189c17 `llm_synth`, 015f23c locator CWE 분기). 충돌 예상 지점: `repair/` 없음(P3 전용), `plan.md`는 무시하고 P3 것 채택
-- [ ] **M-3. 병합 후 전체 테스트** → Discord에 **규칙 3 형식**으로 공지. main 커밋 해시 명시
-- [ ] **M-4. 전원에게 "main 리베이스하라" 공지.** 이후 모든 주장은 main 기준
+| # | 항목 | 막고 있는 사람 | 크기 |
+|---|---|---|---|
+| **W-1** | `source_lock.py` external_allowlist | **P2 (Juice Shop 전면 대기)** | 소 |
+| **W-2** | `codex/p2-local-registry` 병합 + `kind` 노출 | **P2·P3** | 소 |
+| **W-3** | `Validation.build_ok: bool \| None` coerce 금지 | **P3 (judge 구현 대기)** | 소 |
+| **W-4** | `vc_export_patch` + `vc_resume_audit` + driver 자동승인 제거 | P2 (lease 배선) | 중 |
+| **W-5** | R-3b `tools_repair.py:298` 배선 | P3 (완주 대기) | 소 |
+| **W-6** | `core/report.py` redaction (§3A-10) | — | 소 |
+| **W-7** | `vc_export_sarif` 배선 | P4 | 소 |
 
-⚠️ **병합은 사람이 한다**(팀 규칙). 나는 충돌 해소와 검증까지 하고 최종 push는 사용자 확인 후.
+- [ ] **W-1. `source_lock.py` external_allowlist** — **최우선. 이미 승인받은 미이행 건**(03:09 설계 확정 → 03:12 anjonghwa 승인 → 권한 문제로 미적용)
+  - 현재 `source_lock.py:14`가 `https://github.com/madcamp-official/{target_id}.git` **exact match**를 강제해 외부 repo가 구조적으로 불가
+  - `external_allowlist` optional 최상위 필드 추가 → 거기 있는 URL은 통과. **없으면 기존 동작 100% 동일**(하위호환)
+  - P2가 준 값: `https://github.com/juice-shop/juice-shop.git` @ `1867b926c5f50e4e692dc9c8f61821413cebe0cd`, target_id=`juice-shop`
+  - ⚠️ `runtime/source_lock.py`는 **P2 소유 파일**이다. 03:12에 명시 승인을 받았으므로 진행하되, 완료 즉시 P2에 공지
+  - ⚠️ `tests/test_source_lock_contract.py`의 target count는 **건드리지 않는다** — P2가 manifest를 추가할 때 함께 올린다(먼저 바꾸면 P2 커밋 전에 깨진다)
+
+- [ ] **W-2. `codex/p2-local-registry`(8c6ed5c) 병합 + `kind` 노출**
+  - P1 소비 코드는 **이미 main에 있다**(13706de). Protocol 기반이라 registry가 오면 **자동으로 붙는다**
+  - 병합 후 확인: `LocalRegistry.load()` 실제 인스턴스로 `require_target_allowed`가 통과하는지
+  - **P3 요청(05:07)**: `kind`가 judge까지 도달해야 한다. 지금은 policy_engine만 lazy-load라 judge가 못 본다 → catalog가 registry의 `manifest_for()`로 snapshot을 읽어 `kind`를 노출하는 경로를 P2와 확정
+  - `manifest_for()`는 P2가 이미 구현했다(§3A-2 충족). **P1은 snapshot 파일을 직접 읽지 않는다**
+
+- [ ] **W-3. `Validation.build_ok: bool | None` coerce 금지** (05:08 P3에 약속)
+  - running_local에서 build 게이트를 못 돌리면 `None`을 **그대로 저장**한다. `False`로 바꾸면 RETRY가 되고, `True`로 바꾸면 안 돌린 게이트를 통과로 위조하는 것
+  - `compute_verdict()`가 `None` 하나면 verdict를 안 내므로 **FIXED가 구조적으로 불가**해진다 — 이게 §3A-5의 강제 수단이다(추가 방어 불필요)
+
+- [ ] **W-4. 승인 흐름 정리** (§3A-6/3A-7, P2 회신 4·5번)
+  - [ ] `vc_audit_target(target_id, mode="propose")` 노출 — 기본은 `PATCH_PROPOSED` 정지
+  - [ ] `vc_export_patch(run_id)` 신규 — `.vibecutter/runs/<run_id>/security-fix.patch`. **reset보다 먼저, 실패 시 reset 금지**
+  - [ ] `vc_resume_audit(run_id)` 신규 — 전제 `PATCH_APPLIED`. 6게이트 → export → reset
+  - [ ] `driver.py:145`의 자동 `confirmed=True` **제거**
+  - [ ] driver 진입 직후 `acquire_target_lease`, `finally`에서 `release_target_lease` (P2 구현 대기)
+
+- [ ] **W-5. R-3b 배선** — **조건 전부 갖춰짐.** P4 `patch_client`가 main(935e362)에 있고 P3가 05:37에 결합 검증 완료
+  ```python
+  from repair.llm_synth import make_llm_synthesizer
+  from model.patch_client import build_patch_model_client
+  patch = generate_patch(..., synthesize_fn=make_llm_synthesizer(_get_llm_client()), ...)
+  ```
+  - `_get_llm_client()`는 lazy init + memoize, 실패 시 `None` → template-only degrade (P3와 합의)
+
+- [ ] **W-6. `core/report.py` redaction** — 확인된 결함: `redact()` 호출 **0건**. evidence 8건·audit 3건과 대조. HTML 리포트로 secret이 샐 수 있다
+
+- [ ] **W-7. `vc_export_sarif` 배선** — 렌더러(`eval/report_export.render_sarif`)는 P4 것이고 이미 동작 검증됨. tool 본문 2줄
+
+### ✅ P0 병합 — 완료 (우리 없이 진행됨)
+
+D1 오전 예정이던 병합을 P3·P4가 먼저 집행했다. `main` = **935e362**에 RAG·llm_synth·locator·patch_client·P1 R1이 전부 들어갔다.
+남은 미반영: `codex/p2-local-registry`(8c6ed5c) → W-2, `security/agent`(2e30ade, P3 결합검증분) → P3 소관.
 
 ---
 

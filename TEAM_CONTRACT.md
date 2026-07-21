@@ -264,6 +264,34 @@ vc_export_patch(run_id) → reset_run
 - [ ] **egress 동의**: 등록 시 또는 첫 LLM 호출 시 "코드 일부가 LLM 질의로 전송됩니다(secret은 제거)"를 1회 표시하고 기록
 - 전송 범위를 사실대로: rerank 스니펫(≈21줄 × 최대 10개) + 패치 대상 파일. 그 외 evidence·DB·로그는 **로컬을 벗어나지 않는다**
 
+### 3A-11. P2 인터페이스 확인 5건 회신 (2026-07-21 확정)
+
+P2가 runtime 독립 구현 전 물은 5건. **P1이 결정하고 확정했다. 이후 안 바꾼다.**
+
+| # | 확정 |
+|---|---|
+| 1 | **`manifest_for()` 채택.** P1은 snapshot 파일을 직접 읽지 않는다 — 경로·포맷 지식이 소유 경계를 넘어 복제되면 P2가 저장 구조를 바꿀 때 P1이 조용히 깨진다. 실행은 **항상 승인 당시 snapshot만** |
+| 2 | **lease 획득은 `run_target_audit` 진입 직후, 해제는 `finally`.** worker가 아니라 **배치 전체** 단위 — scan run과 모든 worker가 같은 고정 포트를 공유하므로 |
+| 3 | compose는 `build → start`, running_local은 **readiness 확인 후 진행**. FIXED는 build+restart+health 전부 가능할 때만 |
+| 4 | driver는 `confirmed=True`를 **자동 전달하지 않는다**. resume tool = **`vc_resume_audit(run_id)`** |
+| 5 | `vc_export_patch(run_id)`를 **reset보다 먼저**. **export 실패 시 reset 금지** |
+
+**2번 보충 — `timeout`의 의미를 고정한다**: **lease TTL(만료)이지 대기 시간이 아니다.**
+고정 포트라 기다려도 못 쓰므로 **블로킹 대기 없이 즉시 실패**가 맞다. TTL이 지난 lease는 죽은 run의 것으로 보고 회수 가능해야 한다(중단된 run이 target을 영구 점유하면 안 됨).
+예외는 `PolicyViolation`이 아니라 **`TargetBusyError`**(runtime 소유) — 정책 위반이 아니라 자원 경합이다. 메시지에 점유 run_id와 만료 시각을 담는다.
+
+**3번 보충 — 별도 방어 코드가 필요 없다**: `core/judge.py`의 `compute_verdict()`는 게이트 중 하나라도 `None`이면 verdict를 내지 않는다. build 게이트가 `None`이면 **FIXED가 구조적으로 불가능**하다. §3A-5는 기존 구현으로 자동 강제된다(P3 05:07 확인).
+
+**4번 확정 흐름**:
+```
+vc_audit_target(target_id, mode="propose")   ← 기본. PATCH_PROPOSED 에서 정지
+  ↓ Host가 diff를 사용자에게 표시
+vc_apply_patch(patch_id, confirmed=True)     ← 승인 지점 (기존 tool 재사용)
+  ↓ WAITING_APPROVAL → PATCH_APPLIED
+vc_resume_audit(run_id)                      ← 신규. 6게이트 → export → reset
+```
+완전 자동은 `mode="batch_approved"`로 분리하고 audit log에 mode를 기록한다.
+
 ---
 
 ## 4. 안전 불변식 — 누구도 깨지 않는다
@@ -307,16 +335,36 @@ CF 엣지가 TLS를 종단하므로 그 스니펫은 Cloudflare를 통과한다.
 
 ---
 
-## 6. 현재 상태 (2026-07-21 기준, 사실)
+## 6. 현재 상태 (2026-07-21 14:40 KST 기준, 사실)
+
+### 브랜치 — **§1 규칙 2가 실제로 작동해서 세 갈래가 main으로 모였다**
 
 ```
-origin/main            182bdda   ← RAG·llm_synth 없음. 460 tests OK
-origin/rag             c8e48f8   ← R-1/R-2 RAG 배선. 463 tests OK. main +3/-2
-origin/security/agent  a189c17   ← llm_synth + locator CWE 분기(015f23c)
+origin/main  935e362  ← 아래가 전부 들어감
+  ├─ c8e48f8  RAG 배선 + 코드 컨텍스트 (구 origin/rag)
+  ├─ e2ec373  llm_synth + locator CWE 분기 (구 security/agent, P3 병합)
+  ├─ 0d6d961  P4 문서·train_lora (P4 병합)
+  ├─ 13706de  정책 이중 출처 + vc_register_local_target (P1 R1)
+  └─ 935e362  model/patch_client.py (P4 C-3)
+
+origin/codex/p2-local-registry  8c6ed5c  ← LocalRegistry + running_local kind. **main 미반영**
+origin/security/agent           2e30ade  ← P3 결합검증 추가분. **main 미반영**
 ```
 
-- `vc_run_target_audit` **tool 없음** (Python 함수만)
-- `vc_export_sarif` **NotImplementedError**
-- `vc_register_target()`은 실제 등록이 아니라 체크인 manifest와 byte 비교
-- 235B endpoint: 랩탑·P2 로컬 모두 도달 불가 → **현재 모든 run이 휴리스틱**
-- `driver.py:145`가 `confirmed=True`를 자동으로 넘김 (안전 불변식 4 위반)
+### 해소된 것
+- ✅ `llm_synth`(P3) · `patch_client`(P4) · RAG(P1) 전부 **main에 있다**
+- ✅ P3가 05:37에 **어댑터↔patch_client 결합 검증 완료**(스모크 3/3 + 헤르메틱 57/57) → R-3b 배선만 남음
+- ✅ P2의 `LocalRegistry`가 계약 3.1을 정확히 구현했고 §3A-2 snapshot(`manifest_for()`)까지 포함
+- ✅ Juice Shop 계약 확정: regression=**B(image smoke)**, verify=injection blind 차등, `GET /rest/products/search?q=`
+- ✅ camp1 c1-05 gold 복구됨
+
+### 남은 블로커
+- ❌ **`source_lock.py` external_allowlist** — P1이 03:09에 설계 확정·03:12 승인받고 **미이행**. P2가 Juice Shop 등록을 못 해 3시간+ 대기 중. 값은 이미 확보: `https://github.com/juice-shop/juice-shop.git` @ `1867b926c5f50e4e692dc9c8f61821413cebe0cd`
+- ❌ **235B endpoint 미도달** — Cloudflare URL 미제공. **현재 모든 run이 휴리스틱**. P4가 05:23·05:28 두 번 요청. **스프린트 최대 리스크**
+- ❌ `driver.py:145`가 `confirmed=True` 자동 전달 (안전 불변식 4 위반)
+- ❌ `vc_export_sarif` NotImplementedError / `vc_export_patch`·`vc_resume_audit` 미존재
+- ❌ `core/report.py` redaction 0건 (§3A-10)
+
+### 운영 주의 (2026-07-21 03:12 실측)
+camp1 c1-05 fresh run이 **DB secret 불일치로 실패**했다. run마다 새 일회성 secret을 쓰는데 기존 DB 볼륨이 남아 MySQL 인증이 어긋난다.
+→ **fresh run은 반드시 같은 프로세스에서 새 secret 생성 → `down --volumes` → up/build/verify**. 볼륨 유지한 채 secret만 바꾸면 재발한다. 데모 리허설에서 그대로 지킬 것.
