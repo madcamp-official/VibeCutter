@@ -70,10 +70,24 @@ SENDER_LABEL = os.environ.get("DISCORD_SENDER_LABEL", "")
 POLL_INTERVAL_SECONDS = float(os.environ.get("DISCORD_POLL_INTERVAL_SECONDS", "5"))
 MAX_CONTENT_CHARS = 2000
 
+# 에이전트가 "이건 나한테 온 게 아니다 / 덧붙일 게 없다"를 표현하는 신호. 이 값만 내보내면
+# relay 는 채널에 **아무것도 올리지 않는다**(자기모순적인 "나는 답 안 함" 메시지 방지).
+NO_REPLY_SENTINEL = "[[NO_REPLY]]"
+
 NO_RE_MENTION_HINT = (
-    "\n\n(디스코드 팀 채널에서 온 메시지에 답하는 중이다. 새로 질문/요청할 대상이 "
-    "있을 때만 그 사람을 @멘션하고, 단순 답장 끝에 습관적으로 다시 멘션하지 마라 "
-    "-- 서로 멘션을 주고받으면 봇들이 끝없이 응답하게 된다.)"
+    "\n\n=== RELAY 출력 규칙 (반드시 지킬 것) ===\n"
+    "너의 출력 전체가 **그대로 디스코드 #클로드만 채널에 게시**된다. 사람과 대화하는 게 "
+    "아니라, 채널에 올릴 **최종 메시지 본문 하나만** 써라.\n"
+    "- 금지: '회신 초안입니다', '아래가 ~입니다', '이대로 보낼까요?', '작업트리 상태/막힌 지점' "
+    "같은 서문·메타설명·사고과정·확인 요청. relay 는 네게 확인을 되물을 수 없으니 묻지 말고 "
+    "바로 최종본을 써라.\n"
+    "- 간결하게. 장황한 상태 나열 말고, 받는 사람이 실제로 필요한 것만 몇 줄로.\n"
+    "- 새로 질문/요청할 대상이 있을 때만 그 사람을 @멘션한다. 습관적으로 답장 끝에 다시 "
+    "멘션하지 마라(봇끼리 멘션 핑퐁 → 무한 응답).\n"
+    "- 이 메시지가 너(네 역할)에게 온 게 아니거나, 여러 봇을 한꺼번에 부른 브로드캐스트라 "
+    "네가 답할 필요가 없거나, 덧붙일 실질적 내용이 없으면 -- 다른 말 없이 정확히 "
+    + NO_REPLY_SENTINEL + " 만 출력하라(relay 가 아무것도 안 올린다). '나는 답 안 함' 같은 "
+    "문장조차 쓰지 말고 그냥 " + NO_REPLY_SENTINEL + " 만."
 )
 
 CODEX_CONTEXT = os.environ.get(
@@ -143,6 +157,18 @@ def post_message(token: str, channel_id: str, content: str, label: str = "") -> 
 
 def _chunks(text: str, size: int = MAX_CONTENT_CHARS) -> list[str]:
     return [text[i : i + size] for i in range(0, len(text), size)] or ["(빈 응답)"]
+
+
+def _is_silent_reply(reply: str | None) -> bool:
+    """에이전트가 침묵 sentinel(또는 빈 응답)을 냈으면 채널에 올리지 않는다.
+
+    '나한테 온 게 아니다'를 채널에 글로 올리는 것 자체가 노이즈이자 자기모순이므로,
+    그 경우 relay 는 조용히 넘어간다.
+    """
+    if reply is None:
+        return True
+    stripped = reply.strip()
+    return not stripped or stripped.startswith(NO_REPLY_SENTINEL)
 
 
 def run_claude(prompt: str, session_id: str | None) -> tuple[str, str | None]:
@@ -335,6 +361,9 @@ def cmd_listen(args: argparse.Namespace) -> None:
             author_name = msg["author"].get("username", "?")
             print(f"[discord_relay] {author_name} mentioned me: {msg['content'][:120]!r}", file=sys.stderr)
             reply, session_id = run_agent(msg["content"], session_id)
+            if _is_silent_reply(reply):
+                print(f"[discord_relay] staying silent (no-reply sentinel) for {author_name}", file=sys.stderr)
+                continue
             post_message(args.token, args.channel_id, reply, SENDER_LABEL)
 
         time.sleep(POLL_INTERVAL_SECONDS)
