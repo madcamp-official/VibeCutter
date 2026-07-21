@@ -30,9 +30,9 @@
 - [~] **§3A-2 host/port 계약**: registry가 `allowed_hosts=["127.0.0.1"]`처럼 hostname만
   저장하도록 구현했다. port를 승인 snapshot의 `base_url`에 고정하는 lifecycle/health
   검증은 catalog 통합 시 닫아야 한다.
-- [~] **§3A-8 target별 active-run lease**: P2 runtime에 원자적 acquire/release/reap
-  primitive와 단위 테스트를 추가했다. P1 orchestration의 acquire/finally-release 연결은
-  아직 남아 있다.
+- [~] **§3A-8 target별 active-run lease**: P2 runtime primitive와 단위 테스트,
+  P1 orchestration의 batch acquire/worker renew/finally-release 배선까지 완료했다.
+  실제 fresh target run에서 lease·reset·metadata가 함께 남는 E2E 확인이 남아 있다.
 - [~] **R-4/R-5 catalog 이중 출처**: built-in은 기존 source lock/bootstrap을 유지하고,
   user target은 승인된 source path·snapshot을 사용하도록 discovery/source-root 분기를
   구현했다. user Compose overlay/worktree lifecycle E2E는 §3A-5 통합과 함께 남아 있다.

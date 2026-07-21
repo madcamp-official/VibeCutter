@@ -1,7 +1,7 @@
 # D8 / P2 Handoff
 
 ## 상태
-진행 중 — P2 내부 runtime primitive 완료, P1 orchestration 연결 대기
+진행 중 — P2 runtime primitive와 P1 orchestration lease 배선 완료, P4 T-2/P3 J-3 실측 대기
 
 ## 변경 파일
 
@@ -54,9 +54,10 @@
 
 ## 다른 역할에 필요한 사항
 
-- P1: catalog가 `LocalRegistry.manifest_for()`를 소비할지 확인해 주세요.
-- P1: audit 시작 전 `acquire(target_id, run_id)` 및 reset/kill/failure의 `finally`에서
-  `release(target_id, run_id)`를 호출할 위치를 확정해 주세요.
+- P1: `LocalRegistry.manifest_for()` 소비와 batch-level lease acquire/worker renew/finally-release
+  배선을 main에 반영했습니다. fresh run에서 metadata까지 연결해 주세요.
+- P4/P1: observed LLM recorder 결과를 rerank trajectory `result`에 저장하는 T-2 배선을
+  main에 반영해 주세요.
 - P3: `running_local` patched-worktree restart 조건은 §3A-5 그대로 유지합니다.
 
 ## 결정·가정·리스크

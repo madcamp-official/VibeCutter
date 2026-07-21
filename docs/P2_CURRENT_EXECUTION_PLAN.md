@@ -71,8 +71,10 @@ LLM health 실패·fallback·잔여 리소스가 확인된 run은 `FIXED` 통계
 1. **P3 c1-05 fresh run 보호**: P3가 CAMP-1 closed-loop를 실행하는 동안 14006/14007과 baseline을 건드리지 않는다. P3 요청 시에만 사전 합의된 reset/restore를 수행한다.
 2. **P1 source-lock 병합 완료**: external repository는 체크인된 `external_allowlist`에 정확히 일치하는 URL만 허용한다. 무제한 clone은 허용하지 않는다.
 3. **Juice Shop runtime 검증**: `juice-shop` pinned managed checkout bootstrap → manifest/Compose → loopback health → normal-search smoke → reset/teardown을 Docker 가능한 환경에서 수행한다. 실제 source checkout은 `.vibecutter/targets/sources/`에 두고 Git에는 source identity만 남긴다.
-4. **runtime metadata attach**: P3가 CAMP-1 fresh `run_id`와 evidence 결과를 주면 source revision/readiness/reset/잔여 리소스/LLM 상태를 기록한다.
-5. **데모 리허설**: P1의 one-command lifecycle에 맞춰 c1-05, c2-04, c3-09을 reset 포함으로 반복 점검하고 상태표를 갱신한다.
+4. **P4 T-2 배선 확인**: P4의 `observed_chat_fn`/recorder가 rerank trajectory `result`에 들어가도록 P1이 main에 연결한 뒤, LLM 사용 여부가 기록되는지 확인한다.
+5. **P3 J-3 실행 지원**: P3가 Juice Shop SQLi verify → LLM patch → 6-gate를 수행할 때 target lease와 fixed port를 보호한다.
+6. **runtime metadata attach**: P3가 fresh `run_id`와 evidence 결과를 주면 source revision/readiness/reset/잔여 리소스/LLM 상태를 기록한다.
+7. **데모 리허설**: P1의 one-command lifecycle에 맞춰 c1-05, c2-04, c3-09 및 Juice Shop을 reset 포함으로 반복 점검하고 상태표를 갱신한다.
 6. **장애 대응**: health failure, port leak, stale overlay, volume/secret mismatch만 P2가 즉시 처리한다. verifier·patch·judge failure는 증거와 함께 P3/P1으로 넘긴다.
 
 ## 5. 다른 역할에 필요한 입력
