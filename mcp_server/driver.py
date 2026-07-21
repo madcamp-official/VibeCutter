@@ -28,6 +28,7 @@ from core.evidence_store import get, list_by_run, save
 from core.orchestrator import materialize_worker_run
 from core.policy_engine import require_target_allowed
 from mcp_server.tools_inventory import _service
+from runtime.metadata import RuntimeMetadata, append_runtime_metadata
 from runtime.target_lease import TargetLeaseManager
 from verifiers.dispatch import class_of
 
@@ -192,6 +193,57 @@ DEFAULT_SCAN_TOOLS: tuple[str, ...] = (
 )
 
 
+def _record_runtime_metadata(
+    service,
+    target_id: str,
+    scan_run_id: str,
+    lease,
+    worker_results: list[WorkerResult],
+) -> None:
+    """배치 종료 시점에 `runtime.metadata.RuntimeMetadata` 1건을 남긴다(W-9, P2 긴급 요청 2번).
+
+    P1이 직접 조회 가능한 값만 채운다: `base_url`/`source_commit`은 P2 catalog에서, `health`는
+    `adapter.health()`로 지금 다시 확인(마지막 worker가 overlay를 reset하고 원본으로 돌아온
+    뒤라 "배치가 target을 정상 상태로 남겼는가"를 의미한다), `readiness`는 `check_readiness()`,
+    `reset_result`는 이 배치의 worker들이 만든 overlay가 전부 정리됐는지(overlay를 하나도
+    안 만들었으면 `None` — 해당 없음, K-2 원칙과 동일하게 모르는/해당 없는 값을 지어내지 않는다),
+    `lease_run_id`/`lease_expires_at`은 방금 갱신된 lease 그대로.
+
+    `llm_endpoint_state`(W-10, P4 recorder 대기)와 `gpu_worker`/`remaining_*`(P2 runtime 소관,
+    출처 확인 중)는 스키마 기본값(`"unknown"`/`None`/빈 리스트)으로 남겨 둔다.
+
+    이 기록 자체의 실패(디스크 IO, catalog 조회 예외 등)는 로깅만 하고 삼킨다 — observability
+    부가 정보일 뿐이라 감사 배치의 안전 불변식과 무관하다(worker/scanner 예외 격리와 같은 원칙).
+    """
+    try:
+        reset_flags = [r.overlay_reset for r in worker_results if r.overlay_reset is not None]
+        reset_result = all(reset_flags) if reset_flags else None
+
+        target = service.catalog.get(target_id)
+        health = service.catalog.adapter_for(target_id).health().status == "ready"
+        readiness = service.check_readiness(target_id).ready
+
+        metadata = RuntimeMetadata(
+            run_id=scan_run_id,
+            target_id=target_id,
+            source_commit=target.contract_target.source_commit,
+            base_url=target.manifest.base_url,
+            health=health,
+            readiness=readiness,
+            reset_result=reset_result,
+            lease_run_id=lease.run_id,
+            lease_expires_at=lease.expires_at,
+        )
+        append_runtime_metadata(metadata)
+    except Exception:  # noqa: BLE001 — 관측 기록 실패가 감사 배치를 죽이면 안 된다
+        logger.warning(
+            "runtime metadata append failed for run %s (target %s)",
+            scan_run_id,
+            target_id,
+            exc_info=True,
+        )
+
+
 def run_target_audit(
     target_id: str,
     *,
@@ -220,7 +272,10 @@ def run_target_audit(
          validate를 돌린다(계약 ②③). worker 하나가 끝날 때마다 lease를 `renew()`한다 —
          c1-05 실측 기준 후보 1개 136초라, 후보 10개면 기본 TTL(900초)을 넘긴다.
       6. overlay를 만든 worker Run만 종료 시 `reset_run`으로 정리한다.
-      7. `finally`에서 lease를 `release()`한다 — 배치 성공/실패와 무관하게 다음 배치가
+      7. 배치 종료 시점에 `runtime.metadata.RuntimeMetadata` 1건을 남긴다(W-9, P2 긴급
+         요청 2번) — health/readiness/source_commit/base_url/reset_result/lease 정보.
+         `_record_runtime_metadata`가 실패해도 로깅만 하고 삼킨다(관측 부가 정보).
+      8. `finally`에서 lease를 `release()`한다 — 배치 성공/실패와 무관하게 다음 배치가
          이 target을 쓸 수 있게 한다.
 
     `service`/`invoke`/`lease_manager`는 테스트에서 주입한다(기본값은 실제 P2 서비스 + 실제
@@ -234,7 +289,7 @@ def run_target_audit(
     require_target_allowed(target_id)  # 미등록 target은 lease/스캔 시작 전에 조기 거부.
 
     scan_run_id = f"run-{uuid4().hex[:12]}"
-    lease_manager.acquire(target_id, scan_run_id)  # 배치 전체(build~마지막 worker) 단위 선점.
+    lease = lease_manager.acquire(target_id, scan_run_id)  # 배치 전체(build~마지막 worker) 단위 선점.
     try:
         service.sweep_stale_run_overlays(target_id, active_run_ids=(), approved=True)
 
@@ -264,7 +319,9 @@ def run_target_audit(
                     target_id, scan_run, scan_candidate, service=service, invoke=invoke
                 )
             )
-            lease_manager.renew(target_id, scan_run_id)  # 살아있으면 TTL 연장, 죽었으면 그대로 만료.
+            lease = lease_manager.renew(target_id, scan_run_id)  # 살아있으면 TTL 연장, 죽었으면 만료.
+
+        _record_runtime_metadata(service, target_id, scan_run_id, lease, worker_results)
         return AuditReport(
             target_id=target_id, scan_run_id=scan_run.id, worker_results=worker_results
         )

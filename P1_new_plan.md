@@ -24,7 +24,7 @@
 | ~~W-2~~ | P2 registry 병합 + `kind` 노출 | P2·P3 | ✅ **완료** |
 | ~~W-3~~ | `Validation.build_ok: bool \| None` coerce 금지 | P3 | ✅ **완료(P3가 이미 구현)** |
 | ~~W-8~~ | **lease 배선** (acquire/renew/release) | P2 | ✅ **완료** |
-| **W-9** | **runtime metadata JSONL 배선** | **P2 (긴급 요청)** | 중 |
+| ~~W-9~~ | **runtime metadata JSONL 배선** | P2 | ✅ **완료** |
 | **W-4** | `vc_export_patch` + `vc_resume_audit` + driver 자동승인 제거 | P2 | 중 |
 | ~~W-5~~ | R-3b `synthesize_fn` + `context_provider` 배선 | P3 | ✅ **완료** |
 | **W-10** | rerank를 `observed_chat_fn_from_env()`로 교체 (T-2) | — | ⏳ P4 main 반영 대기 |
@@ -76,13 +76,15 @@
   - `lease_manager` 파라미터 주입 가능(기본 `~/.vibecutter/leases`) — `service`/`invoke`와 같은 DI 패턴, 테스트는 임시 디렉터리로 격리
   - 테스트: `tests/test_driver.py::TargetLeaseWiringTests` 5건(release/held-before-build/renew-per-worker/busy-target/finally-release-on-unexpected-error) 신규 + 기존 11건 전부 `lease_manager` 주입으로 갱신, 16건 전체 통과
 
-> ⚠️ **W-8과 무관한 새 블로커 발견(2026-07-21 15:2x) — `datasets/inventory.yaml`에 juice-shop 누락**
+> ⚠️ **W-8과 무관한 새 블로커 발견(2026-07-21) — `datasets/inventory.yaml`에 juice-shop 누락**
 > `8b794b5`(P2, "register pinned Juice Shop SQLi runtime")가 `targets/manifests/juice-shop.yaml` + `source-lock.yaml`은 정확히 채웠지만(W-1에서 요청한 그대로), **P4 소유 `datasets/inventory.yaml`에는 juice-shop 항목을 추가하지 않았다.** `tests/test_inventory_manifest_contract.py`(체크인된 모든 manifest가 inventory에도 있어야 한다는 계약, P4 소유)가 지금 브랜치에서 **1 failure + 1 error**로 깨져 있다 — 내 W-8 변경과 무관, 순수하게 이 커밋 이후 상태다. **P2/P4 조율 필요**: `datasets/inventory.yaml`에 `juice-shop`(focus=injection) 항목 추가.
 
-- [ ] **W-9. runtime metadata JSONL 배선** (P2 긴급 요청 2번) — `runtime/metadata.py`의 `append_runtime_metadata()`를 배치 종료 시점에
-  - P1이 채울 수 있는 것: `run_id`·`target_id`·`base_url`·`source_commit`·`health`·`readiness`·`reset_result`·`lease_run_id`·`lease_expires_at`
-  - ⏳ `llm_endpoint_state` — **W-10(P4 recorder) 이후.** 같은 출처를 써야 eval 표본 필터와 어긋나지 않는다
-  - ❓ `gpu_worker`·`remaining_containers/worktrees/ports` — **P2에게 출처를 물었다.** P1은 어느 GPU 워커가 응답했는지 알 방법이 없고, 잔여 리소스는 sweep/reset 결과라 P2 소관으로 보인다
+- [x] **W-9. runtime metadata JSONL 배선** (P2 긴급 요청 2번) — **완료(2026-07-21)**. `mcp_server/driver.py:_record_runtime_metadata`, 배치 종료 시점(`finally` 직전)에 1건 기록
+  - P1이 채운 것: `run_id`(=scan_run_id)·`target_id`·`base_url`(`catalog.get().manifest.base_url`)·`source_commit`(`catalog.get().contract_target.source_commit`)·`health`(`adapter_for().health()` 재확인)·`readiness`(`check_readiness().ready`)·`reset_result`(이 배치 worker들이 만든 overlay가 전부 정리됐는지 — overlay를 하나도 안 만들었으면 `None`, 지어내지 않음)·`lease_run_id`·`lease_expires_at`(마지막 `acquire`/`renew` 결과)
+  - ⏳ `llm_endpoint_state` — **W-10(P4 recorder) 이후.** 같은 출처를 써야 eval 표본 필터와 어긋나지 않는다(스키마 기본값 `"unknown"` 그대로 둠)
+  - ❓ `gpu_worker`·`remaining_containers/worktrees/ports` — **P2에게 출처를 물었다.** 여전히 스키마 기본값(`None`/빈 리스트) 그대로 — 모르는 값을 지어내지 않는다
+  - 기록 자체가 실패해도(catalog 조회 예외, IO 등) 로깅만 하고 감사 배치는 완주한다 — worker/scanner 예외 격리와 같은 원칙
+  - 테스트: `tests/test_driver.py::RuntimeMetadataWiringTests` 4건(P1 필드 기록·reset_result true/None·실패해도 배치 완주) 신규. 전체 스위트 546 passed(juice-shop/inventory 1건 제외 — 무관·기존 블로커)
 
 - [x] **W-5. R-3b `synthesize_fn` + `context_provider` 배선** — **완료(2026-07-21, 배선 #7)**. `mcp_server/tools_repair.py`
   ```python
