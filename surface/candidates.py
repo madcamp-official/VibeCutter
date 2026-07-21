@@ -331,7 +331,7 @@ def build_candidates(
 # 핸들러 밖(서비스 계층/프론트) 싱크는 라우트를 못 붙여 blocked로 남긴다(IDOR blocked 경로와 동형).
 # 안전: SELECT 싱크만 injection candidate로 만든다(불리언 payload가 파괴적 write의 WHERE에 안 들어가게).
 
-from surface.graph import _iter_sources, _java_handlers, _node_handlers, _node_symbol_index, _python_handlers  # noqa: E402
+from surface.graph import _NODE_DECL, _iter_sources, _java_handlers, _node_handlers, _node_symbol_index, _python_handlers  # noqa: E402
 from surface.inject_xss import _DYN, _EXEC, _LOG_LINE, _interp_var, find_xss_suspects  # noqa: E402
 
 _SELECT_SINK = re.compile(r"\bselect\b[\s\S]{0,240}?\bfrom\b", re.I)  # 불리언 payload에 안전(읽기)
@@ -375,6 +375,45 @@ def _http_param_for(sink_line: str, body: str) -> str:
     return bm.group(1) if bm else ""
 
 
+def _node_source_files(root: Path) -> dict[str, str]:
+    """Node 심볼명 → 정의된 파일(상대경로). handler가 route 등록 파일과 달라도 sink 파일을 찾게 한다."""
+    out: dict[str, str] = {}
+    for p in _iter_sources(root):
+        if p.suffix not in (".ts", ".js"):
+            continue
+        text = p.read_text(encoding="utf-8", errors="replace")
+        rel = str(p.relative_to(root)) if p.is_relative_to(root) else str(p)
+        for m in _NODE_DECL.finditer(text):
+            out.setdefault(m.group(1), rel)
+    return out
+
+
+def _line_number_of(path: Path, needle: str) -> int:
+    """path에서 needle(strip 비교) 줄의 1-based 줄번호. 없으면 0."""
+    try:
+        for i, ln in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            if ln.strip() == needle:
+                return i
+    except OSError:
+        return 0
+    return 0
+
+
+def _sink_symbol(stack: str, name: str, sink_line: str, rel: str, root: Path,
+                 node_files: dict[str, str]) -> str:
+    """패치가 향할 sink 위치 `파일:라인`(localizer의 sink 교차검증 형식).
+
+    Java/Python은 handler가 route와 같은 파일이라 rel 그대로다. Node는 route 등록(server.ts)과
+    handler 정의(routes/search.ts)가 분리돼 rel이 sink 파일이 아니므로, 심볼→파일 맵으로 sink 파일을
+    찾아 그 안 sink_line의 줄번호를 붙인다. 못 찾으면 rel 폴백(줄번호 없이).
+    """
+    if stack != "node" or not name:
+        return rel
+    sink_file = node_files.get(name, rel)
+    lineno = _line_number_of(root / sink_file, sink_line)
+    return f"{sink_file}:{lineno}" if lineno else sink_file
+
+
 def _method_for(text: str, path: str) -> str:
     esc = re.escape(path)
     m = re.search(rf"\.(get|post|put|patch|delete)\s*\([^)]*{esc}", text, re.I)
@@ -405,6 +444,7 @@ def injection_xss_candidates(
     cands: list[Candidate] = []
     blocked: list[BlockedTarget] = []
     seen: set[tuple[str, str]] = set()
+    node_files: dict[str, str] | None = None  # Node 심볼→파일 (sink 파일 해석용, 첫 Node injection에서 lazy 빌드)
 
     for p in _iter_sources(root):
         text = p.read_text(encoding="utf-8", errors="replace")
@@ -431,9 +471,13 @@ def injection_xss_candidates(
                           "inject_method": method, "inject_location": "query" if method == "GET" else "json"}
                     if method != "GET":
                         ap["read_query"] = "true"  # SELECT 싱크라 불리언 테스트 안전
+                    if _stack == "node" and node_files is None:
+                        node_files = _node_source_files(root)
+                    # 패치 대상은 route 등록 파일이 아니라 sink이 있는 handler 파일(Node 다중파일 방어).
+                    sink_symbol = _sink_symbol(_stack, name, line, rel, root, node_files or {})
                     cands.append(Candidate(
                         id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-89", vuln_class="injection",
-                        endpoint=path, source_symbols=[f"{rel}"], attack_params=ap,
+                        endpoint=path, source_symbols=[sink_symbol], attack_params=ap,
                     ))
             # ── XSS: 서버 HTMLResponse 반사 ──
             hm = _HTMLRESP.search(body)

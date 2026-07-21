@@ -85,6 +85,17 @@ class InjectionXssBridgeTests(unittest.TestCase):
             self.assertEqual(p.inject_param, "q")
             self.assertEqual(p.inject_method, "GET")
 
+    def test_node_candidate_source_symbol_points_to_sink_file_not_route_file(self):
+        # 패치 대상은 route 등록 파일(server.ts)이 아니라 SQL sink이 있는 handler 파일(routes/search.ts).
+        # source_symbols는 localizer/patch가 소비하는 "파일:라인" 형식이어야 한다.
+        with _tree({"server.ts": _JS_SERVER, "routes/search.ts": _JS_SEARCH}) as d:
+            res = injection_xss_candidates("r", _prov(), d)
+            inj = [c for c in res.candidates if c.vuln_class == "injection"]
+            self.assertEqual(len(inj), 1)
+            sym = inj[0].source_symbols[0]
+            self.assertTrue(sym.startswith("routes/search.ts:"), f"sink 파일 아님: {sym}")
+            self.assertNotIn("server.ts", sym)
+
     def test_node_inline_request_access_resolves_param(self):
         # SQL 라인에 req.body.email 직접 결합 → 파라미터 email로 잡는다.
         with _tree({"routes/login.ts": _JS_LOGIN}) as d:

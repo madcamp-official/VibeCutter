@@ -178,6 +178,8 @@ _JS_ROUTER_DECL = re.compile(r"\b(\w+)\s*=\s*(?:\w+\.)?Router\s*\(\s*\)")  # x =
 _JS_APP_DECL = re.compile(r"\b(\w+)\s*=\s*express\s*\(\s*\)")  # app = express()
 _JS_FIRST_STR = re.compile(r"[\"'`]([^\"'`]*)[\"'`]")
 _JS_IDENT = re.compile(r"\b([A-Za-z_]\w*)\b")
+# handler 심볼 정의(함수/변수). route 등록 파일이 아니라 handler 정의 파일을 source로 짚기 위함.
+_JS_DEF = re.compile(r"(?:export\s+)?(?:const|let|var|(?:async\s+)?function)\s+(\w+)")
 
 
 class _ExpressCtx(BaseModel):
@@ -203,8 +205,25 @@ def _collect_express_context(texts: list[str]) -> _ExpressCtx:
     return ctx
 
 
-def _extract_express_routes(text: str, rel: str, ctx: _ExpressCtx) -> list[Route]:
+def _collect_node_defs(texts: dict[Path, str], root: Path) -> dict[str, str]:
+    """Node 심볼명 → 정의 위치 'rel:line'(첫 정의). Express는 route 등록(server.ts)과 handler 정의
+    (routes/search.ts)가 분리돼, source를 등록 파일로 두면 localizer/patch가 sink 없는 파일을 짚는다.
+    handler 심볼을 정의 파일로 되짚어 그 문제를 없앤다."""
+    defs: dict[str, str] = {}
+    for f, text in texts.items():
+        rel = str(f.relative_to(root))
+        for m in _JS_DEF.finditer(text):
+            name = m.group(1)
+            if name not in defs:
+                defs[name] = f"{rel}:{text.count(chr(10), 0, m.start()) + 1}"
+    return defs
+
+
+def _extract_express_routes(
+    text: str, rel: str, ctx: _ExpressCtx, handler_defs: dict[str, str] | None = None
+) -> list[Route]:
     routes: list[Route] = []
+    handler_defs = handler_defs or {}
     for m in _JS_METHOD_CALL.finditer(text):
         var, method = m.group(1), m.group(2).upper()
         if var not in ctx.router_vars:
@@ -219,8 +238,11 @@ def _extract_express_routes(text: str, rel: str, ctx: _ExpressCtx) -> list[Route
         idents = _JS_IDENT.findall(tail[:cut] if cut >= 0 else tail)
         handler = idents[-1] if idents else "?"  # 마지막 인자=컨트롤러(path 속 단어는 중간이라 제외)
         line_no = text.count("\n", 0, m.start()) + 1
+        # handler가 다른 파일에 정의됐으면 그 정의 위치를 source로(patch 대상=sink 있는 handler 파일).
+        defined_at = handler_defs.get(handler)
+        source = defined_at if defined_at and defined_at.split(":")[0] != rel else f"{rel}:{line_no}"
         routes.append(Route(
-            http_method=method, path=full, handler=handler, source=f"{rel}:{line_no}", stack="express",
+            http_method=method, path=full, handler=handler, source=source, stack="express",
         ))
     return routes
 
@@ -260,9 +282,10 @@ def extract_routes(source_root: Path | str) -> list[Route]:
     ]
     js_texts = {f: _read(f) for f in js_files}
     ctx = _collect_express_context(list(js_texts.values()))
+    handler_defs = _collect_node_defs(js_texts, root)
     for f, text in js_texts.items():
         if _JS_METHOD_CALL.search(text):
-            routes += _extract_express_routes(text, str(f.relative_to(root)), ctx)
+            routes += _extract_express_routes(text, str(f.relative_to(root)), ctx, handler_defs)
 
     return routes
 
