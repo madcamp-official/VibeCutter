@@ -10,7 +10,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from contracts.schemas import Finding, RootCause
-from repair.llm_synth import build_prompt, make_llm_synthesizer, parse_diffs
+from repair.llm_synth import (
+    _is_scope_safe_path,
+    _number_lines,
+    build_prompt,
+    make_llm_synthesizer,
+    parse_diffs,
+)
 
 
 def _finding() -> Finding:
@@ -103,6 +109,87 @@ class LlmSynthTest(unittest.TestCase):
         prompt = build_prompt(_finding(), _rc(), "class Handler {}")
         self.assertIn("src/Handler.java", prompt)
         self.assertIn("diff", prompt)  # unified diff 출력 요구
+
+    # --- S-3: diff 파싱 견고성 (실 모델 응답의 잡음 내성) ---
+
+    def test_parse_tolerates_non_diff_fence_language(self) -> None:
+        # 모델이 ```java 등 다른 언어 펜스로 감싸도, 설명문을 앞뒤에 붙여도 diff면 뽑는다.
+        raw = (
+            "여기 패치입니다:\n```java\n--- a/src/Handler.java\n+++ b/src/Handler.java\n"
+            "@@ -1 +1,2 @@\n x\n+y\n```\n이상입니다."
+        )
+        self.assertEqual(len(parse_diffs(raw, expected_file="src/Handler.java")), 1)
+
+    def test_parse_ignores_non_diff_code_block(self) -> None:
+        # diff 마커(--- / +++) 없는 코드블록은 후보로 오인하지 않는다.
+        raw = "```java\nclass Handler {}\n```"
+        self.assertEqual(parse_diffs(raw, expected_file="src/Handler.java"), [])
+
+    def test_parse_handles_tab_timestamp_header(self) -> None:
+        raw = (
+            "```diff\n--- a/src/Handler.java\t2024-01-01 00:00\n"
+            "+++ b/src/Handler.java\t2024-01-02 00:00\n@@ -1 +1,2 @@\n x\n+y\n```"
+        )
+        self.assertEqual(len(parse_diffs(raw, expected_file="src/Handler.java")), 1)
+
+    def test_parse_never_raises_on_garbage(self) -> None:
+        for junk in ("", "설명만 있고 diff 없음", "```\n\n```", None):
+            self.assertEqual(parse_diffs(junk, expected_file="x"), [])  # type: ignore[arg-type]
+
+    # --- S-4: worktree 밖 경로 합성 단계 사전 거부 ---
+
+    def test_is_scope_safe_path(self) -> None:
+        self.assertTrue(_is_scope_safe_path("src/Handler.java"))
+        self.assertFalse(_is_scope_safe_path("../etc/passwd"))
+        self.assertFalse(_is_scope_safe_path("/etc/passwd"))
+        self.assertFalse(_is_scope_safe_path("a/../../b"))
+        self.assertFalse(_is_scope_safe_path("C:/Windows/x"))
+
+    def test_traversal_diff_dropped_even_if_suffix_matches(self) -> None:
+        # ../src/Handler.java 는 expected-file 접미 일치는 통과하지만 worktree 밖 → S-4가 버린다.
+        with TemporaryDirectory() as tmp:
+            root = self._with_source(tmp)
+            evil = (
+                "```diff\n--- a/../src/Handler.java\n+++ b/../src/Handler.java\n"
+                "@@ -1 +1,2 @@\n x\n+y\n```"
+            )
+            synth = make_llm_synthesizer(_FakeClient(evil))
+            self.assertEqual(synth(_finding(), _rc(), root), [])
+
+    # --- S-1: 줄번호 컨텍스트 정렬 + context_provider 주입 (계약 3.4) ---
+
+    def test_number_lines(self) -> None:
+        self.assertEqual(_number_lines("a\nb"), "   1| a\n   2| b")
+
+    def test_source_excerpt_is_line_numbered(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = self._with_source(tmp, content="line one\nline two\n")
+            client = _FakeClient(_GOOD_DIFF)
+            make_llm_synthesizer(client)(_finding(), _rc(), root)
+            assert client.seen_prompt is not None
+            self.assertIn("1| line one", client.seen_prompt)  # 파일 절대 줄번호 부착
+            self.assertIn("2| line two", client.seen_prompt)
+
+    def test_context_provider_overrides_file_and_redacts(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = self._with_source(tmp, content="원본파일내용\n")
+            snippet = '  6| String h = "Bearer abc.def.ghi";  // sink'
+            client = _FakeClient(_GOOD_DIFF)
+            synth = make_llm_synthesizer(client, context_provider=lambda f, rc, sr: snippet)
+            synth(_finding(), _rc(), root)
+            assert client.seen_prompt is not None
+            self.assertIn("6| String h", client.seen_prompt)  # 주입된 P4 스니펫 사용
+            self.assertNotIn("원본파일내용", client.seen_prompt)  # 파일 대신 스니펫
+            self.assertNotIn("Bearer abc.def.ghi", client.seen_prompt)  # 주입본도 redaction
+
+    def test_context_provider_none_falls_back_to_file(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = self._with_source(tmp, content="fallback line\n")
+            client = _FakeClient(_GOOD_DIFF)
+            synth = make_llm_synthesizer(client, context_provider=lambda f, rc, sr: None)
+            synth(_finding(), _rc(), root)
+            assert client.seen_prompt is not None
+            self.assertIn("1| fallback line", client.seen_prompt)
 
 
 if __name__ == "__main__":

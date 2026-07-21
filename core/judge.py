@@ -131,7 +131,19 @@ def check_attack(
     return not result.verified
 
 
-def check_build(run_id: str, patch_id: str) -> bool:
+def _target_kind(target: object) -> str:
+    """target의 kind ("compose_project" | "running_local"). 미선언이면 "compose_project"(기존 기본).
+
+    P1 확정값(2026-07-21): compose_project / running_local. 정확한 필드 위치는 P1이 P2 registry
+    확인 후 확정 예정 — 그때까지 manifest.kind → target.kind 순으로 방어적 조회한다. 기본이
+    compose_project라 기존 22개 target은 무영향(c1-05 gold 안전), running_local target이 생길
+    때만 아래 분기가 활성화된다(그 target은 registry+kind가 main에 오기 전엔 존재 불가).
+    """
+    manifest = getattr(target, "manifest", None)
+    return getattr(manifest, "kind", None) or getattr(target, "kind", None) or "compose_project"
+
+
+def check_build(run_id: str, patch_id: str) -> bool | None:
     """Build gate: patch가 적용된 worktree가 실제로 build되는지 확인한다.
 
     Compose 기반 target(`manifest.docker_isolation`이 설정된 target)은 `catalog.run_overlay_for()`
@@ -158,6 +170,11 @@ def check_build(run_id: str, patch_id: str) -> bool:
     _, run, worktree_path, run_source_root = _patch_and_worktree(run_id, patch_id)
     catalog = _service().catalog
     target = catalog.get(run.target_id)
+    if _target_kind(target) == "running_local":
+        # 3A-5: 이미 떠 있는 서비스는 patched worktree를 build/restart 못 한다 → build 게이트 N/A(None).
+        # compute_verdict가 None을 FIXED로 올리지 않으므로 running_local target은 최대 PATCH_PROPOSED에 머문다.
+        # (못 돌린 게이트를 통과로 위조하지 않는다 = K-2 원칙)
+        return None
     if target.manifest.docker_isolation is not None:
         overlay = catalog.run_overlay_for(run.target_id, run.id)
         overlay.prepare()
