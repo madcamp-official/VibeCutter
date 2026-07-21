@@ -79,7 +79,7 @@
 
 - [ ] **F-1. 데모 2 완주** (Juice Shop SQLi → LLM 패치 → FIXED) — J-3 종속
 - [ ] **F-2. fallback 확인** — c1-05 gold(`run-897ad65c686f`). P3 확인: 로컬 evidence.db에서 6게이트 全1·FIXED 유지(2026-07-21) ✅
-- [ ] **F-3. 한계 문서화** — injection positive=liveness까지 / xss positive=benign 반영 확인 / `running_local`의 N/A 게이트
+- [x] **F-3. 한계 문서화** — [`docs/P3_VERIFY_JUDGE_LIMITS.md`](docs/P3_VERIFY_JUDGE_LIMITS.md). injection positive=liveness / xss positive=benign·실행관찰 / injection payload 비파괴 / running_local N/A 게이트 / static semgrep 의존 — 코드 검증 완료. P1이 SECURITY_POLICY.md로 취합 예정
 
 ---
 

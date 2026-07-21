@@ -48,7 +48,7 @@
 - [ ] **[P1]** patch diff / container log redaction (patch diff는 git apply 바이트정확성 때문에 별도 접근)
 - [ ] **[P1]** **`SECURITY_POLICY.md`** — 승인모델·loopback 불변식·argv 승인·CF 전송범위·"제3자 LLM API 안 씀" (P2/P3 안전내용 취합)
 - [ ] **[P2]/[P4]** **`RUNBOOK.md`** — P2 runtime(build/start/reset/lease) + P4 serving(endpoint/tier/degrade) 섹션
-- [ ] **[P3]** **F-3 한계 문서** — injection positive=liveness / xss positive=benign 반영 / running_local N/A 게이트 (SECURITY_POLICY 또는 RUNBOOK에 편입)
+- [x] **[P3]** **F-3 한계 문서** — **완료** [`docs/P3_VERIFY_JUDGE_LIMITS.md`](docs/P3_VERIFY_JUDGE_LIMITS.md). injection positive=liveness / xss positive=benign·실행관찰 / running_local N/A 게이트 / static semgrep 의존. P1이 `SECURITY_POLICY.md`로 취합
 
 ## 단계 4 — E2E 검증 + 리허설
 - [ ] **[전원]** **전체 E2E 시나리오** — 등록 → snapshot → scan/verify → `PATCH_PROPOSED` 승인 → 6게이트 → `FIXED` → **patch export(reset 뒤 artifact 보존)** → reset → (write면 baseline restore) 통과
