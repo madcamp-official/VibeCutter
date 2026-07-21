@@ -3,8 +3,9 @@
 > 상위 문서: **[TEAM_CONTRACT.md](TEAM_CONTRACT.md)** — 충돌 시 그쪽이 이긴다.
 >
 > **상태(2026-07-21 갱신)**: 엔진(판정·오라클·패치 어댑터·배선·테스트)·계약 P3 몫 **완료**. 남은 건
-> **J-3 완주**뿐인데, endpoint 외에 **Juice Shop injection candidate 생성 gap**(surface가 Node.js 미지원)이
-> 새 블로커로 발견됨 — J-3 아래 참고.
+> **J-3 완주**뿐. candidate gap은 **코드상 해결**(`b512141`): surface는 이미 Node.js를 파싱했고 진짜
+> 문제는 `inject_param`이 SQL 변수(criteria)를 잡던 것 → HTTP 파라미터(q) 역추적으로 수정. J-3 남은
+> 전제는 **실 Juice Shop Docker 실측 + 235B endpoint(현재 UP)** — J-3 아래 참고.
 
 ## 내 역할 한 줄
 
@@ -67,9 +68,10 @@
 
 - [x] **J-1. regression 계약 A/B 회신** — **B(image smoke)** 채택·전송. `test_suites: juice-shop-search-smoke`로 매니페스트 반영됨
 - [x] **J-2. verify 계약 확정** — `vuln_class=injection`, `GET /rest/products/search?q=`, blind 차등 오라클, liveness positive, reset rollback. 전송 완료. 오라클은 J-2 실측 패턴(631/18662/30B)으로 회귀 테스트 잠금(`test_juice_shop_sqli_demo_pattern`)
-- [ ] **J-3. verified → LLM 패치 → 6게이트 완주 1회** — ❌ 미실행. 블로커 2개:
-  - **(1) 235B endpoint/키** — 환경(P2 로컬 .env, tunnel). 이 Mac엔 없어 401.
-  - **(2) 🔴 Juice Shop injection candidate 생성 안 됨** — `surface/candidates.py`의 `injection_xss_candidates`/`_handlers_for`가 `.java`·`.py`만 파싱, **Node.js(.js/.ts) 미지원** → Juice Shop SQLi 후보가 소스 스캔에서 안 나옴. **해결안**: (b) Juice Shop injection fixture/candidate seed(P2, 추천) / (a) surface에 JS 파싱 추가(P3) / (c) SAST JS(P4)
+- [ ] **J-3. verified → LLM 패치 → 6게이트 완주 1회** — ❌ 미실행. 남은 전제:
+  - **(1) 실 Juice Shop Docker 실측** — candidate 공급은 코드상 해결됐으나(아래), fixture는 구조 모사일 뿐 실 서버 응답이 아니다. 실 컨테이너에서 verify가 blind 차등(J-2 오라클)을 실제로 내는지 1회 확인 필요(P2 단계 0 Docker 종속).
+  - **(2) 235B endpoint** — 현재 **UP** 확인. 실 235B로 Sequelize 템플릿 리터럴 SQLi를 파라미터화 패치할 수 있는지 J-3에서 실증.
+  - ✅ **candidate 공급 해결(`b512141`)** — surface는 이미 Node(.js/.ts)를 파싱한다(이전 "미지원" 서술은 stale). 실제 gap이던 `inject_param`(SQL 변수 criteria를 잡던 것)을 `_http_param_for`로 HTTP 파라미터(q) 역추적하도록 수정. 테스트 `test_node_sqli_traces_http_param_not_sql_variable`로 잠금.
 
 ---
 

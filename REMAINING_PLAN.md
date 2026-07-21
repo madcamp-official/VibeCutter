@@ -26,7 +26,7 @@
 ## 단계 0 — 지금 바로 (병렬 착수, endpoint UP 직후)
 - [ ] **[P2]** injection candidate **seed 경로 결정** — 파이프라인이 injection candidate를 fixture/manifest로 seed 가능한가? (되면 최속) → P3에 회신
 - [ ] **[P2]** Juice Shop **Docker build → start → health(`/rest/products/search?q=apple` 200) → reset** 실측
-- [ ] **[P3]** candidate gap 대응 — P2가 seed 못 하면 `surface/candidates.py`에 **`.js`/`.ts` 핸들러 파싱 + JS SQL sink 탐지** 추가
+- [x] **[P3]** candidate gap 대응 — **해결(`b512141`)**. surface는 이미 Node를 파싱했고, 진짜 문제이던 `inject_param`(SQL 변수→HTTP 파라미터) 역추적을 `_http_param_for`로 수정. Juice Shop 구조 fixture에서 candidate 정상 생성 확인. P2 seed 불필요.
 - [ ] **[P4]** **E-1 ablation `heuristic` 팔** 주행(`VIBECUTTER_LLM_DISABLE=1`, endpoint 무관 — 지금 가능)
 - [ ] **[P4]** **E-1 ablation `rag-llm` 팔** 주행(endpoint UP이라 가능)
 - [ ] **[P4]** **SARIF redaction** — `eval/report_export.py:render_sarif()`/`_finding_to_sarif_result`에 `redact()` 적용(현재 0건)
@@ -63,5 +63,5 @@
 ---
 
 ## 크리티컬 패스 (endpoint UP 이후)
-**단계 0(candidate·Docker·ablation·SARIF 병렬) → 단계 1(데모 2 완주) → 단계 2(데모 1 + 측정) → 단계 3(안전·문서) → 단계 4(E2E·리허설).**
-가장 큰 리스크는 **데모 2의 candidate gap** 하나. 이것만 풀리면 실 235B FIXED 증거가 나오고 나머지는 병렬로 수렴.
+**단계 0(Docker·ablation·SARIF 병렬 — candidate gap은 `b512141`로 해결) → 단계 1(데모 2 완주) → 단계 2(데모 1 + 측정) → 단계 3(안전·문서) → 단계 4(E2E·리허설).**
+candidate gap이 풀렸으니 이제 최대 리스크는 **실 Juice Shop Docker 실측**(P2 단계 0) — 이 위에서 verify 차등이 실제로 나면 235B 패치→FIXED 완주(J-3)가 바로 가능. 나머지는 병렬로 수렴.
