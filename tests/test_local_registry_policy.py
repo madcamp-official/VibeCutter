@@ -183,5 +183,74 @@ class TargetIdCollisionTests(unittest.TestCase):
         self.assertFalse(any("겹칩니다" in b for b in preview.blockers))
 
 
+class KindReachesJudgeTests(unittest.TestCase):
+    """P3 요청(2026-07-21 05:07): judge가 `kind`를 읽을 수 있는 경로를 계약으로 고정한다.
+
+    `contracts.schemas.Target`에는 `kind`가 없고 그 스키마는 freeze 대상이다. 대신
+    `catalog.get(target_id).manifest`가 built-in은 체크인 manifest를, 사용자 target은
+    **승인 시점 snapshot**을 돌려주므로 양쪽 모두 `.manifest.kind`로 읽으면 된다.
+
+    이 테스트가 깨지면 P3의 `core/judge.py`가 조용히 잘못된 kind로 판정하게 된다.
+    """
+
+    ACCESSOR = "catalog.get(target_id).manifest.kind"
+
+    def _catalog_with_user_target(self, tmp_root: Path, source: Path):
+        from runtime.catalog import TargetCatalog
+        from runtime.manifest import TargetManifest
+        from runtime.registry import LocalRegistry
+
+        manifest = TargetManifest.model_validate({
+            "id": "local-my-app", "display_name": "My App", "adapter": "node",
+            "kind": "running_local", "base_url": "http://127.0.0.1:3000",
+            "commands": {"reset": {"argv": ["docker", "compose", "restart"]}},
+            "reset": {"command_id": "reset"},
+        })
+        registry = LocalRegistry.load(tmp_root)
+        registry.approve(manifest, source_path=source)
+
+        repo = Path(__file__).resolve().parent.parent
+        catalog = TargetCatalog(
+            manifest_root=repo / "targets" / "manifests",
+            repository_root=repo,
+            registry=registry,
+        )
+        catalog.load()
+        return catalog
+
+    def _git_repo(self, path: Path) -> None:
+        for args in (["init"], ["config", "user.email", "t@e.com"],
+                     ["config", "user.name", "t"]):
+            subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True)
+        (path / "app.py").write_text("print(1)\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(path), "add", "-A"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(path), "commit", "-m", "init"],
+                       check=True, capture_output=True)
+
+    def test_kind_readable_for_builtin_and_user_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as reg_root, tempfile.TemporaryDirectory() as src:
+            source = Path(src)
+            self._git_repo(source)
+            catalog = self._catalog_with_user_target(Path(reg_root), source)
+
+            # built-in은 기본값 compose_project — 기존 20개 동작 불변
+            self.assertEqual(catalog.get(BUILTIN_TARGET_ID).manifest.kind, "compose_project")
+            # 사용자 target은 승인 snapshot의 kind가 그대로 도달한다
+            self.assertEqual(catalog.get("local-my-app").manifest.kind, "running_local")
+
+    def test_running_local_has_no_build_command(self) -> None:
+        """§3A-5: build를 못 돌리면 judge가 build 게이트를 None으로 두고 FIXED를 막는다."""
+        with tempfile.TemporaryDirectory() as reg_root, tempfile.TemporaryDirectory() as src:
+            source = Path(src)
+            self._git_repo(source)
+            catalog = self._catalog_with_user_target(Path(reg_root), source)
+
+            user = catalog.get("local-my-app").manifest
+            self.assertNotIn("build", user.commands)
+            self.assertIn("reset", user.commands)      # 재시작 방법은 필수
+            builtin = catalog.get(BUILTIN_TARGET_ID).manifest
+            self.assertIn("build", builtin.commands)   # compose는 현행 유지
+
+
 if __name__ == "__main__":
     unittest.main()
