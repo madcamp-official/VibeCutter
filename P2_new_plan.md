@@ -1,0 +1,93 @@
+# P2 — 2일 스프린트 계획
+
+> 상위 문서: **[TEAM_CONTRACT.md](TEAM_CONTRACT.md)** — 충돌 시 그쪽이 이긴다.
+
+## 내 역할 한 줄
+
+**런타임과 등록의 소유자.** 중앙 allowlist를 사용자 로컬 레지스트리로 전환하고, LLM 관문(VM)을 연다.
+
+## 내 파일 (배타적)
+
+`runtime/**`, `targets/**`, `policies/**`, VM/Cloudflare 인프라
+
+**남의 파일은 안 고친다.** `core/policy_engine.py`는 **P1 것**이다 — 나는 `runtime/registry.py`를 제공하고 P1이 그걸 호출한다.
+
+---
+
+## P0 — LLM 관문 (VM은 딱 이것만)
+
+**VM은 LLM에 닿기 위한 관문 수준으로만 쓴다.** target도 evidence도 MCP도 VM에 두지 않는다.
+사용자 머신에서 도는 것: MCP, Docker target, evidence.db, worktree, 스캐너, verifier, 6게이트.
+나가는 것: `POST /v1/chat/completions` **하나뿐**.
+
+- [ ] **G-1. `cloudflared`로 235B 노출**
+  - VM에서 `192.168.0.226:8080` → `https://<name>.trycloudflare.com` (또는 고정 도메인)
+  - `GET /health`는 인증 없이 열어둔다(도달성 probe용 — `model.endpoints.liveness_check`가 씀)
+  - `/v1/*`는 `Authorization: Bearer` 필수
+- [ ] **G-2. Cloudflare Access 적용** — **데이터가 아니라 자원 문제다.** 토큰 하나가 유일 방어면 새는 순간 누구나 우리 GPU를 쓴다. 7.7 tok/s라 동시 사용 몇 명이면 데모가 죽는다
+- [ ] **G-3. P4에게 전달**: 최종 URL, 모델 ID(`qwen3-235b`), timeout 권장치, `/health` 경로
+  ⚠️ **용어**: 이 모델은 **72B가 아니라 qwen3-235b**다. D7 runtime plan·평가 표 필드 정정 필요
+- [ ] **G-4. 부하 확인** — 4명이 동시에 쓰면 어떻게 되는지 1회 측정. 순차 대기가 필요하면 P4에게 알린다
+
+---
+
+## P1 — 로컬 승인 레지스트리 (이번 스프린트의 핵심)
+
+**계약 3.1의 시그니처를 그대로 구현한다.** D1 오전에 확정되면 이후 안 바꾼다 — P1이 이걸 목으로 짜고 있다.
+
+- [ ] **R-1. `runtime/registry.py` 신규**
+  - 저장 위치 `~/.vibecutter/registry/` — **repo의 `.vibecutter/`(evidence.db)와 분리**
+  - `manifest_sha256`은 **이미 있다** — `runtime/registration.py:13`. 새로 만들지 말 것
+  - `commands_sha256`: manifest의 `commands` 전체(argv 포함)를 정규화해 해시. **argv가 바뀌면 재승인 강제**가 목적
+  - `approve()`는 **승인 여부를 판단하지 않는다.** 사용자 승인은 P1의 tool이 받고 나는 기록만 한다
+  - `base_url`은 `TargetManifest` 검증기를 **반드시** 통과시킨 뒤 저장 — loopback 불변식의 집행 지점
+
+- [ ] **R-2. 사용자 프로젝트 사전조건 검사** (`registry.approve()` 안)
+  - ⚠️ **git 저장소여야 한다.** `runtime/worktree.py:43`이 대상 소스에 `git worktree add`를 하고, 패치 apply·6게이트 전체가 그 위에서 돈다
+  - git이 아니면 **명확한 사유로 거부**한다(추측으로 진행 금지). `git init` 안내 문구 제공
+  - 커밋되지 않은 변경이 있으면 경고 — worktree는 커밋 상태 기준
+
+- [ ] **R-3. `TargetManifest`에 `kind` 추가** (`runtime/manifest.py`)
+  - `kind: Literal["compose_project", "running_local"] = "compose_project"` (기본값이 기존 동작 = 하위호환)
+  - **`referenced_commands_must_exist` 완화**: 현재 `{"build","start","stop",reset}`을 전부 요구한다(`manifest.py:168`).
+    `running_local`은 build/start가 없으므로 **kind별로 필수 집합을 나눈다**
+    - `compose_project`: 현행 유지
+    - `running_local`: `reset`(= 재시작 방법)만 필수. build/start/stop 선택
+  - **loopback 검증기(`manifest.py:154`)는 손대지 않는다** — 안전 불변식 1
+
+- [ ] **R-4. `catalog.py` 이중 출처**
+  - `targets/manifests/`(built-in demo 20개) + 사용자 레지스트리를 **함께** 발견
+  - ⚠️ **`catalog.py:84`의 `expected_target_ids` 결합을 풀어야 한다** — 지금은 발견된 **모든** manifest가 source-lock 엔트리를 요구한다. built-in에만 요구하도록 분리
+  - ⚠️ **`catalog.py:159`의 repo 탈출 검사 교체** — 목적은 docstring대로 *"never an MCP-supplied path"*다. 레지스트리의 `source_path`는 MCP 입력이 아니라 **사용자가 대역 외로 승인한 경로**이므로, "repo 안" 대신 **"승인 기록의 source_path와 일치"**로 바꾼다. 불변식이 약해지는 게 아니라 출처가 바뀌는 것
+
+- [ ] **R-5. `source_lock.py` / `source_bootstrap.py`**
+  - `_REPOSITORY_PREFIX = "https://github.com/madcamp-official/"`(`source_lock.py:14`) 강제를 **built-in에만** 적용
+  - 사용자 target은 clone하지 않는다 — **이미 로컬에 있는 프로젝트가 원본**이다. `source_bootstrap`을 건너뛰고 현재 commit만 기록
+  - **삭제하지 말 것**: 기존 20개의 재현성 장치다
+
+---
+
+## P2 — Juice Shop (데모 2의 전제)
+
+- [ ] **J-1. manifest 등록** — OWASP Juice Shop **v17.3.0** (digest `sha256:123acb31ed8bb05ebb06934a29be83d4e11a46cae937b9ed2bf2bda29d98130`)
+  - 이미 검증됨: `GET /rest/products/search?q=` 에서 boolean 차등 재현 (apple 200/631B, true 200/18662B, false 200/30B)
+- [ ] **J-2. regression 계약 A/B 확정** — P3 회신 대기 중(2026-07-21 02:46부터)
+  - A: pinned source에 `npm install` 후 `npm run test:server`
+  - B: 공식 이미지 smoke (health + 정상 검색 + SQLi 수정 후 동일 검색)
+  - ⚠️ **`test_suites=[]`면 regression 게이트가 False라 FIXED 불가.** 반드시 하나는 있어야 데모 2가 완주한다
+  - **synthetic pass test는 만들지 않는다**(P2 원칙 유지)
+- [ ] **J-3. build/health/reset 확인** 후 P3에게 넘김
+
+---
+
+## 하지 말 것
+
+- ❌ `core/policy_engine.py` 수정 — P1 것. `registry.py`를 제공하고 P1이 호출
+- ❌ loopback 검증기(`manifest.py:154`) 완화
+- ❌ `targets/manifests/`·`source-lock.yaml` 삭제 — built-in demo profile로 남는다
+- ❌ VM에 target·evidence·MCP 배치 — **VM은 LLM 관문만**
+- ❌ 임의 취약점 삽입 — 승인된 교육용 앱(Juice Shop)만
+
+## 보고
+
+계약 규칙 3 형식. 특히 **G-3(엔드포인트 정보)와 R-1(레지스트리 시그니처)은 P4·P1이 대기 중**이라 완료 즉시 공지.
