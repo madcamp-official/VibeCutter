@@ -81,19 +81,29 @@ def build_prompt(finding: Finding, root_cause: RootCause, source_excerpt: str) -
         f"- 오직 {root_cause.file} 파일만 수정한다(다른 파일·무관한 변경 금지).\n"
         "- 정상 기능을 깨지 않는 최소 변경. 새 의존성은 되도록 추가하지 않는다.\n"
         "- 출력은 반드시 ```diff 로 감싼 unified diff(`--- a/`, `+++ b/`) 하나만. 설명 금지.\n\n"
-        f"[SOURCE {root_cause.file}]\n{source_excerpt}\n"
+        f"[SOURCE {root_cause.file}] (각 줄 앞 숫자 = 파일 줄번호; sink 줄을 짚어 최소 수정)\n{source_excerpt}\n"
     )
 
 
+def _number_lines(text: str, *, start: int = 1) -> str:
+    """각 줄에 파일 절대 줄번호를 붙인다 — 모델이 "N번 줄이 sink"라고 짚게 한다
+    (P4 `scanners.rag_enrich.code_context`와 같은 규칙, 계약 3.4)."""
+    return "\n".join(f"{start + i:>4}| {line}" for i, line in enumerate(text.splitlines()))
+
+
 def _read_source_excerpt(source_root: Path, root_cause: RootCause) -> str:
-    """root_cause 파일을 읽어 secret redaction 후 상한까지 반환. 없으면 ''."""
+    """root_cause 파일을 읽어 secret redaction → 줄번호 부착 → 상한까지 반환. 없으면 ''.
+
+    P4 code_context(줄번호 스니펫)와 같은 형식이라, 그 스니펫을 context_provider로 주입해도
+    프롬프트 형태가 일관된다. redaction은 egress 경계에서 유지한다.
+    """
     path = source_root / root_cause.file
     if not path.is_file():
         return ""
-    text = path.read_text(encoding="utf-8", errors="replace")
-    if len(text) > _MAX_SOURCE_CHARS:
-        text = text[:_MAX_SOURCE_CHARS] + "\n… (truncated)\n"
-    return redact(text)
+    numbered = _number_lines(redact(path.read_text(encoding="utf-8", errors="replace")))
+    if len(numbered) > _MAX_SOURCE_CHARS:
+        numbered = numbered[:_MAX_SOURCE_CHARS] + "\n… (truncated)\n"
+    return numbered
 
 
 # 펜스 언어 무관하게 코드블록을 뽑는다(모델이 ```diff/```patch/```java/```suggestion 등으로 감쌀 수 있음).
@@ -187,11 +197,19 @@ def _to_candidate(diff: str, finding: Finding, root_cause: RootCause) -> PatchCa
 
 
 def make_llm_synthesizer(
-    client: PatchModelClient | None, *, max_candidates: int = 3
+    client: PatchModelClient | None,
+    *,
+    max_candidates: int = 3,
+    context_provider: Callable[[Finding, RootCause, Path], str | None] | None = None,
 ) -> Callable[[Finding, RootCause, Path], list[PatchCandidate]]:
     """`generate_patch(synthesize_fn=...)`에 넣을 어댑터를 만든다.
 
-    `client=None`(미배선)이거나 소스 파일이 없으면 `[]`를 반환한다 — 기존 template 경로에 무해.
+    `client=None`(미배선)이거나 소스가 없으면 `[]` — 기존 template 경로에 무해.
+
+    `context_provider`(선택, 계약 3.4): 프롬프트에 실을 코드 컨텍스트를 대신 공급한다. P4
+    `scanners.rag_enrich.code_context`(줄번호 스니펫)를 여기 주입하면 sink 주변만 정밀하게
+    싣는다(실 배선은 P1의 tools_repair). None이거나 빈 값이면 root_cause 파일 전체(줄번호
+    부착)로 폴백한다. 어느 경로든 egress 전 `redact()`를 통과한다.
     """
 
     def _synth(
@@ -199,7 +217,13 @@ def make_llm_synthesizer(
     ) -> list[PatchCandidate]:
         if client is None:
             return []
-        excerpt = _read_source_excerpt(source_root, root_cause)
+        excerpt = ""
+        if context_provider is not None:
+            provided = context_provider(finding, root_cause, source_root)
+            if provided:
+                excerpt = redact(provided)  # P4 스니펫도 egress 경계에서 redaction(3.4)
+        if not excerpt:
+            excerpt = _read_source_excerpt(source_root, root_cause)
         if not excerpt:
             return []
         raw = client.synthesize_patch(build_prompt(finding, root_cause, excerpt))

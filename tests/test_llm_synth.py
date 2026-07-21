@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 from contracts.schemas import Finding, RootCause
 from repair.llm_synth import (
     _is_scope_safe_path,
+    _number_lines,
     build_prompt,
     make_llm_synthesizer,
     parse_diffs,
@@ -154,6 +155,41 @@ class LlmSynthTest(unittest.TestCase):
             )
             synth = make_llm_synthesizer(_FakeClient(evil))
             self.assertEqual(synth(_finding(), _rc(), root), [])
+
+    # --- S-1: 줄번호 컨텍스트 정렬 + context_provider 주입 (계약 3.4) ---
+
+    def test_number_lines(self) -> None:
+        self.assertEqual(_number_lines("a\nb"), "   1| a\n   2| b")
+
+    def test_source_excerpt_is_line_numbered(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = self._with_source(tmp, content="line one\nline two\n")
+            client = _FakeClient(_GOOD_DIFF)
+            make_llm_synthesizer(client)(_finding(), _rc(), root)
+            assert client.seen_prompt is not None
+            self.assertIn("1| line one", client.seen_prompt)  # 파일 절대 줄번호 부착
+            self.assertIn("2| line two", client.seen_prompt)
+
+    def test_context_provider_overrides_file_and_redacts(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = self._with_source(tmp, content="원본파일내용\n")
+            snippet = '  6| String h = "Bearer abc.def.ghi";  // sink'
+            client = _FakeClient(_GOOD_DIFF)
+            synth = make_llm_synthesizer(client, context_provider=lambda f, rc, sr: snippet)
+            synth(_finding(), _rc(), root)
+            assert client.seen_prompt is not None
+            self.assertIn("6| String h", client.seen_prompt)  # 주입된 P4 스니펫 사용
+            self.assertNotIn("원본파일내용", client.seen_prompt)  # 파일 대신 스니펫
+            self.assertNotIn("Bearer abc.def.ghi", client.seen_prompt)  # 주입본도 redaction
+
+    def test_context_provider_none_falls_back_to_file(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = self._with_source(tmp, content="fallback line\n")
+            client = _FakeClient(_GOOD_DIFF)
+            synth = make_llm_synthesizer(client, context_provider=lambda f, rc, sr: None)
+            synth(_finding(), _rc(), root)
+            assert client.seen_prompt is not None
+            self.assertIn("1| fallback line", client.seen_prompt)
 
 
 if __name__ == "__main__":
