@@ -23,9 +23,10 @@ import json
 import re
 import urllib.error
 import urllib.request
-from typing import Callable, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
 from contracts.schemas import Candidate
+from core.redaction import redact
 
 # 주입 지점의 타입.
 ChatFn = Callable[[list[dict]], str]                       # messages → assistant text
@@ -52,15 +53,40 @@ def _parse_rerank_order(text: str, n: int) -> list[int]:
 
 
 def _candidate_brief(c: Candidate, idx: int) -> str:
-    """rerank 프롬프트용 candidate 한 줄 요약(민감정보 없이 메타만)."""
+    """rerank 프롬프트용 candidate 한 줄 요약(메타).
+
+    **주의(R-1 이전과 달라진 점)**: 예전엔 이 함수가 "민감정보 없이 메타만" 보내는 것이
+    프롬프트 전체의 보증이었다. 지금은 `build_rerank_messages` 가 코드 본문도 함께
+    보내므로, 그 보증은 이 함수가 아니라 거기서 거는 `redact()` 가 진다.
+    """
     loc = c.source_symbols[0] if c.source_symbols else "?"
     sig = ",".join(s for s in c.signals if s.startswith(("focus:", "severity:", "rag:")))
     return (f"[{idx}] class={c.vuln_class or '?'} cwe={c.cwe or '?'} "
             f"conf={c.confidence if c.confidence is not None else '?'} loc={loc} {sig}".strip())
 
 
-def build_rerank_messages(cands: Sequence[Candidate]) -> list[dict]:
-    """candidate 목록 → chat messages. 모델은 인덱스 순열만 답하도록 유도한다."""
+# 코드 본문을 붙일 상위 후보 수. 7.7 tok/s 라 프롬프트가 길어지면 그대로 지연이 된다 —
+# 순위를 가르는 건 결국 상위권이므로 앞쪽에만 코드를 준다(뒤는 메타만).
+DEFAULT_MAX_CONTEXT = 10
+
+
+def build_rerank_messages(
+    cands: Sequence[Candidate],
+    *,
+    contexts: Optional[Mapping[str, str]] = None,
+    max_context: int = DEFAULT_MAX_CONTEXT,
+) -> list[dict]:
+    """candidate 목록 → chat messages. 모델은 인덱스 순열만 답하도록 유도한다.
+
+    `contexts` 는 `scanners.rag_enrich.code_context()` 가 만든 `{candidate_id: 코드 스니펫}`.
+    주면 **상위 `max_context` 개 후보에 한해** 코드 본문을 함께 싣는다(RAG). 없으면 예전처럼
+    메타만 — 인덱스 없이도(오프라인) 재랭킹은 계속 돈다.
+
+    **redaction egress 경계**: 프롬프트에 실리는 코드는 전부 `core.redaction.redact()` 를
+    거친다. 대상 소스에 하드코딩된 JWT/세션쿠키/password 가 공유 GPU 서버로 흘러가지
+    않게 하는 마지막 관문이다 — `evidence_store.write_artifact()` 가 저장 계층 한 곳에서
+    거는 것과 같은 패턴(cowork_rule 4절).
+    """
     listing = "\n".join(_candidate_brief(c, i) for i, c in enumerate(cands))
     system = (
         "You are a security triage assistant. Rank vulnerability candidates by how "
@@ -68,27 +94,48 @@ def build_rerank_messages(cands: Sequence[Candidate]) -> list[dict]:
         "Reply with ONLY the indices in ranked order, most likely/severe first, "
         "comma-separated. No prose."
     )
-    user = f"Candidates:\n{listing}\n\nRanked indices:"
-    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    parts = [f"Candidates:\n{listing}"]
+
+    if contexts:
+        blocks = []
+        for i, c in enumerate(cands[:max_context]):
+            snippet = contexts.get(c.id)
+            if snippet:
+                blocks.append(f"[{i}] {c.source_symbols[0] if c.source_symbols else '?'}\n"
+                              f"```\n{redact(snippet)}\n```")
+        if blocks:
+            parts.append("Code at each candidate location:\n" + "\n\n".join(blocks))
+
+    parts.append("Ranked indices:")
+    return [{"role": "system", "content": system},
+            {"role": "user", "content": "\n\n".join(parts)}]
 
 
 # --- 훅 팩토리 -------------------------------------------------------------------------
 
 def make_rerank_fn(
-    chat_fn: ChatFn, *, max_candidates: int = 40
+    chat_fn: ChatFn,
+    *,
+    max_candidates: int = 40,
+    contexts: Optional[Mapping[str, str]] = None,
+    max_context: int = DEFAULT_MAX_CONTEXT,
 ) -> Callable[[list[Candidate]], list[Candidate]]:
     """`aggregate(..., rerank_fn=)` 에 넣을 LLM 재랭킹 훅을 만든다.
 
     실패(네트워크/파싱 오류)하면 입력을 그대로 돌려준다 — 비파괴. aggregate 의
     휴리스틱 정렬이 이미 kept 를 정렬해 두므로, 훅 실패 시 그 순서가 유지된다.
     후보가 max_candidates 를 넘으면 상위 그만큼만 LLM 에 보내고 나머지는 뒤에 붙인다.
+
+    `contexts` 는 `scanners.rag_enrich.code_context()` 의 `{candidate_id: 코드 스니펫}`.
+    주면 상위 후보의 코드 본문이 프롬프트에 함께 실린다(R-1). 없으면 메타만.
     """
     def rerank(kept: list[Candidate]) -> list[Candidate]:
         if len(kept) <= 1:
             return kept
         head, tail = kept[:max_candidates], kept[max_candidates:]
         try:
-            text = chat_fn(build_rerank_messages(head))
+            text = chat_fn(build_rerank_messages(
+                head, contexts=contexts, max_context=max_context))
             order = _parse_rerank_order(text, len(head))
         except Exception:
             return kept

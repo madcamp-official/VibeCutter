@@ -8,17 +8,21 @@
 효과:
 - candidate 에 `rag:loc=<file:lo-hi>`, `rag:relevance=<0~1>`, `rag:symbols=<...>` signal 추가.
 - `aggregate.priority_score` 가 `rag:relevance` 를 우선순위 보너스로 반영한다.
-- 붙은 코드 컨텍스트는 P3 verifier / D4 LLM 이 근거로 소비.
+- `code_context()` 가 LLM 재랭킹/패치 합성에 넘길 **코드 본문 스니펫**을 만든다(R-1).
 
 비파괴: index 로 위치를 못 찾으면 아무 signal 도 안 붙인다(우선순위 불변).
+
+**signal 과 코드 본문을 왜 나눴나**: `Candidate.signals` 는 문자열 리스트(공통 계약)라
+40 줄 코드를 담기에 부적절하고, Day5 freeze 로 스키마에 필드를 더할 수도 없다. 그래서
+코드 본문은 candidate 를 오염시키지 않는 **곁채널**(`{candidate_id: 스니펫}` 매핑)로 나른다.
 """
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from typing import Iterable, Mapping, Optional
 
 from contracts.schemas import Candidate
-from model.code_index import CodeIndex
+from model.code_index import CodeChunk, CodeIndex
 
 # focus 별 "취약 sink/source" 어휘. chunk 토큰에 이게 있으면 그 위치가 해당 취약점군
 # 코드 흐름일 개연성이 높다(코드 검색 토크나이저가 이미 camelCase/snake 분해함).
@@ -77,6 +81,58 @@ def enrich(candidates: Iterable[Candidate], index: CodeIndex) -> list[Candidate]
         merged = list(dict.fromkeys([*c.signals, *added]))
         out.append(c.model_copy(update={"signals": merged}))
     return out
+
+
+def _snippet(chunk: CodeChunk, line: int, *, radius: int) -> str:
+    """chunk 에서 candidate 가 가리키는 줄 주변만 잘라 **줄번호를 붙여** 돌려준다.
+
+    chunk 는 40 줄 고정 창이라 그대로 넘기면 관심 없는 코드가 프롬프트 예산을 먹는다.
+    줄번호를 붙이는 건 모델이 "몇 번째 줄이 sink 다"라고 짚을 수 있게 하기 위함이고,
+    파일 안 절대 줄번호를 쓴다(스니펫 내부 상대번호가 아니라).
+    """
+    lines = chunk.text.splitlines()
+    hit = line - chunk.start_line              # chunk 내 0-based 위치
+    lo = max(0, hit - radius)
+    hi = min(len(lines), hit + radius + 1)
+    return "\n".join(
+        f"{chunk.start_line + i:>5} | {lines[i]}" for i in range(lo, hi)
+    )
+
+
+def code_context(
+    candidates: Iterable[Candidate], index: CodeIndex, *, radius: int = 10
+) -> dict[str, str]:
+    """candidate → 그 위치의 코드 스니펫 매핑 (LLM 재랭킹·패치 합성이 소비).
+
+    `enrich()` 와 같은 위치 해석(`_parse_loc` + `chunk_at`)을 쓰되, signal 대신 **코드 본문**을
+    낸다. 위치를 못 찾은 candidate 는 매핑에서 그냥 빠진다(비파괴 — 호출측은 없는 키를
+    "컨텍스트 없음"으로 다루면 된다).
+
+    redaction 은 여기서 하지 않는다 — **프롬프트를 조립하는 egress 경계**
+    (`model.serving.build_rerank_messages`)에서 일괄로 건다. `evidence_store.write_artifact()`
+    가 저장 계층 한 곳에서 redaction 을 거는 것과 같은 이유로, 생산자마다 거는 것보다
+    경계 한 곳에서 거는 편이 빠뜨릴 여지가 없다.
+    """
+    out: dict[str, str] = {}
+    for c in candidates:
+        loc = _parse_loc(c)
+        if loc is None:
+            continue
+        chunk = index.chunk_at(*loc)
+        if chunk is None:
+            continue
+        out[c.id] = _snippet(chunk, loc[1], radius=radius)
+    return out
+
+
+def has_indexable_location(candidates: Iterable[Candidate]) -> bool:
+    """`파일:줄` 위치를 가진 candidate 가 하나라도 있나.
+
+    SCA candidate 는 의존성 취약점이라 `source_symbols` 가 `파일:줄` 형태가 아니다 → 전부
+    실패한다. 호출측이 이걸 먼저 물어보고 `CodeIndex.build()` 를 **아예 건너뛰게** 하기 위한
+    것(vc_run_sca 가 헛되이 소스 트리를 훑지 않도록).
+    """
+    return any(_parse_loc(c) is not None for c in candidates)
 
 
 def rag_relevance(candidate: Candidate) -> Optional[float]:

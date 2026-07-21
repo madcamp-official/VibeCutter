@@ -41,6 +41,54 @@ def test_build_rerank_messages_lists_all_indices() -> None:
     assert "[0]" in msgs[1]["content"] and "[1]" in msgs[1]["content"]
 
 
+def test_rerank_messages_include_code_when_contexts_given() -> None:
+    cands = [_c("a", 0.8), _c("b", 0.5)]
+    msgs = build_rerank_messages(cands, contexts={"a": "SELECT * FROM u WHERE id=" + "'%s'"})
+    body = msgs[1]["content"]
+    assert "SELECT * FROM u" in body and "Code at each candidate location" in body
+
+
+def test_rerank_messages_stay_meta_only_without_contexts() -> None:
+    # 인덱스가 없는 환경(SCA만, 오프라인)에서는 예전처럼 메타만 — 재랭킹은 계속 돈다.
+    msgs = build_rerank_messages([_c("a", 0.8)])
+    assert "Code at each candidate location" not in msgs[1]["content"]
+
+
+def test_rerank_messages_cap_code_to_top_candidates() -> None:
+    # 7.7 tok/s라 프롬프트 길이가 곧 지연이다 — 상위 max_context 개만 코드를 싣는다.
+    cands = [_c(str(i), 0.5) for i in range(5)]
+    ctx = {str(i): f"CODE_MARKER_{i}" for i in range(5)}
+    body = build_rerank_messages(cands, contexts=ctx, max_context=2)[1]["content"]
+    assert "CODE_MARKER_0" in body and "CODE_MARKER_1" in body
+    assert "CODE_MARKER_2" not in body and "CODE_MARKER_4" not in body
+
+
+def test_rerank_messages_redact_secrets_in_code() -> None:
+    """egress 경계 보증: 대상 소스의 하드코딩 secret이 프롬프트로 나가지 않는다."""
+    leaky = (
+        'String jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc123";\n'
+        'password = "hunter2"\n'
+        'Cookie: JSESSIONID=A1B2C3D4E5\n'
+    )
+    body = build_rerank_messages([_c("a", 0.8)], contexts={"a": leaky})[1]["content"]
+    assert "eyJhbGciOiJIUzI1NiJ9" not in body
+    assert "hunter2" not in body
+    assert "A1B2C3D4E5" not in body
+    assert "<redacted" in body           # 자리는 남아 모델이 "여기 토큰이 있다"는 건 안다
+
+
+def test_rerank_fn_passes_contexts_to_prompt() -> None:
+    seen = {}
+
+    def capture(messages):
+        seen["body"] = messages[1]["content"]
+        return "1,0"
+
+    rerank = make_rerank_fn(capture, contexts={"a": "CODE_MARKER"})
+    rerank([_c("a", 0.8), _c("b", 0.5)])
+    assert "CODE_MARKER" in seen["body"]
+
+
 def test_rerank_fn_reorders_by_model_output() -> None:
     cands = [_c("a", 0.8), _c("b", 0.5), _c("c", 0.9)]
 

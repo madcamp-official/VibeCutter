@@ -183,7 +183,7 @@ def _prepare_scan(run_id: str, *, tool_name: str) -> Run:
     return run
 
 
-def _rerank_fn_from_env():
+def _rerank_fn_from_env(contexts=None):
     """LLM candidate 재랭킹 훅을 만든다(8.4절 "모델=가설 우선순위", RQ3, D4-P4 요청).
 
     endpoint 구성은 `model.endpoints`가 env에서 해석한다 — 큰 외부 모델(qwen3-235b)이
@@ -191,6 +191,9 @@ def _rerank_fn_from_env():
     timeout이면 자동으로 다음 tier로 넘어간다. 쓸 endpoint가 없으면(`..._DISABLE`) `None`을
     돌려 aggregate의 휴리스틱 정렬을 그대로 쓴다 — GPU/네트워크 없는 CI에서도 스캔이 돈다.
     `make_rerank_fn`은 체인이 전부 실패해도 입력을 그대로 돌려주므로(비파괴) 후보를 잃지 않는다.
+
+    `contexts`(`{candidate_id: 코드 스니펫}`)를 주면 상위 후보의 **코드 본문**이 프롬프트에
+    함께 실린다(R-1). 없으면 메타만 — 인덱싱이 안 되는 SCA 후보도 그대로 재랭킹된다.
     """
     from model.endpoints import chat_fn_from_env
     from model.serving import make_rerank_fn
@@ -198,23 +201,52 @@ def _rerank_fn_from_env():
     chat_fn = chat_fn_from_env()
     if chat_fn is None:
         return None
-    return make_rerank_fn(chat_fn)
+    return make_rerank_fn(chat_fn, contexts=contexts)
+
+
+def _rag_enrich(run: Run, candidates: list[Candidate]) -> tuple[list[Candidate], dict]:
+    """RAG 보강: candidate에 `rag:` signal을 붙이고 코드 스니펫 곁채널을 만든다(R-2).
+
+    `aggregate.priority_score`가 `rag:relevance`를 우선순위 보너스로 반영하고(최대 +0.1),
+    스니펫은 LLM 재랭킹 프롬프트로 간다. **인덱스를 만들 수 없거나 실패하면 입력을 그대로
+    돌려준다** — 비파괴(RAG는 보정이지 필수 경로가 아니다).
+
+    `CodeIndex.build()`는 소스 트리 전체를 훑으므로, **위치(`파일:줄`)를 가진 후보가 하나도
+    없으면 아예 만들지 않는다** — SCA candidate는 의존성 취약점이라 전부 여기 해당한다
+    (`vc_run_sca`가 헛되이 트리를 훑지 않게).
+    """
+    from scanners.rag_enrich import code_context, enrich, has_indexable_location
+
+    if not has_indexable_location(candidates):
+        return candidates, {}
+    try:
+        from model.code_index import CodeIndex
+
+        source_root = _service().catalog.source_root_for(run.target_id)
+        index = CodeIndex.build(source_root)
+        return enrich(candidates, index), code_context(candidates, index)
+    except Exception:
+        return candidates, {}
 
 
 def _store_scan_candidates(
     run: Run, candidates: list[Candidate], *, tool: str
 ) -> ScanResult:
-    """공통 후처리: FP reject+우선순위(`scanners.aggregate.aggregate`) → kept만 저장 → trajectory 기록.
+    """공통 후처리: RAG 보강 → FP reject+우선순위(`scanners.aggregate.aggregate`) → kept만 저장 → trajectory 기록.
 
     우선순위 정렬은 `_rerank_fn_from_env()`가 만든 LLM 재랭킹 훅을 aggregate에 주입한다
     (endpoint 미설정 시 None=휴리스틱). 후보가 우선순위순으로 저장되므로, 이후 driver/Host가
     `list_by_run` 순서대로 verify하면 유력·심각한 후보부터 검증한다.
 
+    RAG 보강(`_rag_enrich`)이 aggregate **앞에** 온다 — `rag:relevance` signal이 붙어야
+    `priority_score`가 그걸 반영하고, 코드 스니펫이 있어야 LLM이 코드를 보고 순위를 매긴다.
+
     **알려진 한계(D2-P4.md 요청 (b) 결정)**: 이 tool 자기 스캐너 결과만 aggregate하므로
     SAST·SCA 교차 중복 제거는 안 된다 — 두 tool이 독립 호출되기 때문. 스캔 완료 시점을
     묶는 별도 단계가 생기면 그때 cross-scanner aggregate로 바꾼다.
     """
-    result = aggregate(candidates, rerank_fn=_rerank_fn_from_env())
+    candidates, contexts = _rag_enrich(run, candidates)
+    result = aggregate(candidates, rerank_fn=_rerank_fn_from_env(contexts))
     for candidate in result.kept:
         save(candidate)
     record_trajectory_step(
