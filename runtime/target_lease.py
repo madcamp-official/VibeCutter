@@ -32,6 +32,15 @@ class TargetLease:
     acquired_at: datetime
     expires_at: datetime
 
+    def public_metadata(self) -> dict[str, str]:
+        """Return lease ownership metadata; no credentials or runtime logs."""
+        return {
+            "target_id": self.target_id,
+            "run_id": self.run_id,
+            "acquired_at": self.acquired_at.isoformat(),
+            "expires_at": self.expires_at.isoformat(),
+        }
+
 
 class TargetLeaseManager:
     """Acquire/release one lease per target using atomic directory creation."""

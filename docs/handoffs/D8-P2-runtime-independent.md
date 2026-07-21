@@ -27,6 +27,9 @@
   - `get(target_id) -> TargetLease | None`
   - `release(target_id, run_id) -> bool`
   - `reap_stale(target_id) -> bool`
+- `runtime.metadata.RuntimeMetadata` / `append_runtime_metadata()`
+  - P4 join용 secret-free run JSONL
+  - lease 소유 run/만료 시각은 선택 필드로만 기록
 
 ## 실패/예외
 
