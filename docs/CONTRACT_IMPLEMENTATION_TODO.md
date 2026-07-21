@@ -33,9 +33,9 @@
 - [~] **§3A-8 target별 active-run lease**: P2 runtime에 원자적 acquire/release/reap
   primitive와 단위 테스트를 추가했다. P1 orchestration의 acquire/finally-release 연결은
   아직 남아 있다.
-- [ ] **R-4/R-5 catalog 이중 출처**: built-in은 기존 source lock/bootstrap을 유지하고,
-  user target은 승인된 source path·snapshot을 사용한다. 외부 user Git repo에서
-  lifecycle/overlay/worktree가 동작하는 E2E 테스트가 필요하다.
+- [~] **R-4/R-5 catalog 이중 출처**: built-in은 기존 source lock/bootstrap을 유지하고,
+  user target은 승인된 source path·snapshot을 사용하도록 discovery/source-root 분기를
+  구현했다. user Compose overlay/worktree lifecycle E2E는 §3A-5 통합과 함께 남아 있다.
 
 ### P1 — 사용자 흐름과 산출물
 

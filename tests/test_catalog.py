@@ -7,6 +7,8 @@ import subprocess
 import yaml
 
 from runtime.catalog import TargetCatalog
+from runtime.manifest import load_manifest
+from runtime.registry import LocalRegistry
 
 
 def manifest_yaml(target_id: str) -> str:
@@ -50,6 +52,41 @@ def write_source_lock(
 
 
 class TargetCatalogTests(unittest.TestCase):
+    def test_catalog_discovers_approved_user_snapshot_without_source_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest_root = root / "manifests"
+            manifest_root.mkdir()
+            (manifest_root / "builtin.yaml").write_text(
+                manifest_yaml("builtin-api"), encoding="utf-8"
+            )
+            source = root / "user-project"
+            source.mkdir()
+            subprocess.run(["git", "-C", str(source), "init", "-q"], check=True)
+            subprocess.run(["git", "-C", str(source), "config", "user.email", "p2@example.test"], check=True)
+            subprocess.run(["git", "-C", str(source), "config", "user.name", "P2 Test"], check=True)
+            (source / "app.py").write_text("print('user')\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(source), "add", "app.py"], check=True)
+            subprocess.run(["git", "-C", str(source), "commit", "-qm", "initial"], check=True)
+
+            user_manifest_path = root / "user.yaml"
+            user_manifest_path.write_text(manifest_yaml("local-user-api"), encoding="utf-8")
+            registry = LocalRegistry.load(root / "registry")
+            registry.approve(load_manifest(user_manifest_path), source_path=source)
+
+            catalog = TargetCatalog(
+                manifest_root=manifest_root,
+                repository_root=root,
+                source_lock_path=None,
+                registry=registry,
+            )
+            catalog.load()
+            user = catalog.get("local-user-api")
+            self.assertTrue(user.user_registered)
+            self.assertEqual(catalog.source_root_for("local-user-api"), source.resolve())
+            self.assertEqual(catalog.source_repository_for("local-user-api"), source.resolve())
+            self.assertEqual(user.contract_target.allowed_hosts, ["127.0.0.1"])
+
     def test_catalog_discovers_p1_contracts_by_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

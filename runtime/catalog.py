@@ -12,6 +12,7 @@ from contracts.schemas import Target
 from .lifecycle import LifecycleManager
 from .manifest import TargetManifest, load_manifest
 from .readiness import TargetReadiness, TargetRuntimeInspector
+from .registry import LocalRegistry
 from .registration import load_contract_target
 from .source_bootstrap import SourceCheck, TargetSourceBootstrapper
 from .source_lock import SourceLock, SourceRevision
@@ -21,6 +22,22 @@ if TYPE_CHECKING:
     from adapters.base import TargetAdapter
 
 
+def _git_head(source: Path) -> str | None:
+    result = subprocess.run(
+        ["git", "-C", str(source), "rev-parse", "HEAD"],
+        capture_output=True,
+        check=False,
+        shell=False,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return value or None
+
+
 @dataclass(frozen=True)
 class RegisteredRuntimeTarget:
     """One trusted manifest and its P1-facing Target projection."""
@@ -28,10 +45,11 @@ class RegisteredRuntimeTarget:
     manifest_path: Path
     manifest: TargetManifest
     contract_target: Target
+    user_registered: bool = False
 
 
 class TargetCatalog:
-    """Discovers only repository-controlled YAML manifests, keyed by ``Target.id``."""
+    """Discover built-in manifests and explicitly approved local targets."""
 
     def __init__(
         self,
@@ -40,6 +58,7 @@ class TargetCatalog:
         repository_root: Path,
         source_commit: str | None = None,
         source_lock_path: Path | None = None,
+        registry: LocalRegistry | None = None,
     ) -> None:
         self.manifest_root = manifest_root.resolve()
         self.repository_root = repository_root.resolve()
@@ -52,37 +71,65 @@ class TargetCatalog:
             if default_source_lock.is_file()
             else None
         )
+        self.registry = registry or LocalRegistry.load()
         self._targets: dict[str, RegisteredRuntimeTarget] = {}
         self._source_lock: SourceLock | None = None
+        self._user_target_ids: set[str] = set()
 
     def load(self) -> None:
-        """Atomically replace the catalog with manifests currently under manifest_root."""
+        """Atomically load built-ins plus approved user registry snapshots."""
         if not self.manifest_root.is_dir():
             raise FileNotFoundError(
                 f"manifest root does not exist: {self.manifest_root}"
             )
-        discovered: dict[str, RegisteredRuntimeTarget] = {}
+        builtins: dict[str, RegisteredRuntimeTarget] = {}
         for path in sorted(self.manifest_root.glob("*.yaml")):
             resolved = path.resolve()
             if self.manifest_root not in resolved.parents:
                 raise ValueError("manifest path escapes manifest root")
             manifest = load_manifest(resolved)
-            if manifest.id in discovered:
+            if manifest.id in builtins:
                 raise ValueError(f"duplicate target manifest id: {manifest.id}")
-            discovered[manifest.id] = RegisteredRuntimeTarget(
+            builtins[manifest.id] = RegisteredRuntimeTarget(
                 manifest_path=resolved,
                 manifest=manifest,
                 contract_target=load_contract_target(
                     resolved, source_commit=self.source_commit
                 ),
             )
+        # Built-ins are authoritative on an ID collision. Registration normally
+        # rejects the collision, but this second layer prevents a stale registry
+        # entry from silently redirecting an audit to a user project.
+        users: dict[str, RegisteredRuntimeTarget] = {}
+        for target_id in self.registry.list_ids():
+            if target_id in builtins:
+                continue
+            approved = self.registry.get(target_id)
+            if approved is None:
+                continue
+            manifest = self.registry.manifest_for(target_id)
+            snapshot_path = self.registry.root / target_id / "manifest.yaml"
+            users[target_id] = RegisteredRuntimeTarget(
+                manifest_path=snapshot_path,
+                manifest=manifest,
+                contract_target=Target(
+                    id=manifest.id,
+                    manifest_hash=approved.manifest_sha256,
+                    source_commit=_git_head(approved.source_path),
+                    adapter=manifest.adapter.value,
+                    allowed_hosts=list(approved.allowed_hosts),
+                ),
+                user_registered=True,
+            )
+        discovered = dict(builtins)
         if self.source_lock_path is None:
-            self._targets = discovered
+            self._targets = {**discovered, **users}
+            self._user_target_ids = set(users)
             self._source_lock = None
             return
 
         source_lock = SourceLock.load(
-            self.source_lock_path, expected_target_ids=set(discovered)
+            self.source_lock_path, expected_target_ids=set(builtins)
         )
         if self.source_commit is not None:
             raise ValueError(
@@ -90,7 +137,7 @@ class TargetCatalog:
             )
         # The source lock, rather than a caller-provided catalog hint, is the
         # immutable source identity recorded in P1's Target projection.
-        self._targets = {
+        locked_builtins = {
             target_id: RegisteredRuntimeTarget(
                 manifest_path=target.manifest_path,
                 manifest=target.manifest,
@@ -99,8 +146,10 @@ class TargetCatalog:
                     source_commit=source_lock.get(target_id).revision,
                 ),
             )
-            for target_id, target in discovered.items()
+            for target_id, target in builtins.items()
         }
+        self._targets = {**locked_builtins, **users}
+        self._user_target_ids = set(users)
         self._source_lock = source_lock
 
     def list(self) -> tuple[RegisteredRuntimeTarget, ...]:
@@ -116,7 +165,9 @@ class TargetCatalog:
 
     def lifecycle_for(self, target_id: str) -> LifecycleManager:
         self.require_ready_source(target_id)
-        return LifecycleManager(self.get(target_id).manifest, self.repository_root)
+        target = self.get(target_id)
+        root = self.source_root_for(target_id) if target.user_registered else self.repository_root
+        return LifecycleManager(target.manifest, root)
 
     @property
     def source_lock(self) -> SourceLock:
@@ -128,20 +179,29 @@ class TargetCatalog:
 
     def source_revision_for(self, target_id: str) -> SourceRevision:
         self.get(target_id)
+        if target_id in self._user_target_ids:
+            raise ValueError(f"user target {target_id!r} has no built-in source lock")
         return self.source_lock.get(target_id)
 
     def source_bootstrapper(self) -> TargetSourceBootstrapper:
         return TargetSourceBootstrapper(self.repository_root, self.source_lock)
 
     def source_check_for(self, target_id: str) -> SourceCheck:
+        if target_id in self._user_target_ids:
+            raise ValueError(f"user target {target_id!r} uses its approved local source path")
         self.get(target_id)
         return self.source_bootstrapper().inspect(target_id)
 
     def bootstrap_source(self, target_id: str, *, approved: bool) -> SourceCheck:
+        if target_id in self._user_target_ids:
+            raise ValueError(f"user target {target_id!r} uses its approved local source path")
         self.get(target_id)
         return self.source_bootstrapper().bootstrap(target_id, approved=approved)
 
     def require_ready_source(self, target_id: str) -> SourceCheck | None:
+        if target_id in self._user_target_ids:
+            self._require_user_source(target_id)
+            return None
         if self._source_lock is None:
             return None
         check = self.source_check_for(target_id)
@@ -152,9 +212,21 @@ class TargetCatalog:
         return check
 
     def source_root_for(self, target_id: str) -> Path:
-        """Return the checked-in target source directory, never an MCP-supplied path."""
+        """Return a built-in locked or user-approved target source directory."""
+        target = self.get(target_id)
+        if target.user_registered:
+            approved = self.registry.get(target_id)
+            if approved is None:
+                raise ValueError(f"registry approval disappeared for {target_id}")
+            source_repo = approved.source_path.resolve()
+            source_root = (source_repo / target.manifest.source_dir).resolve()
+            if source_root != source_repo and source_repo not in source_root.parents:
+                raise ValueError("user target source directory escapes approved repository")
+            if not source_root.is_dir():
+                raise FileNotFoundError(f"target source directory does not exist: {source_root}")
+            return source_root
         checked_source = self.require_ready_source(target_id)
-        manifest = self.get(target_id).manifest
+        manifest = target.manifest
         source_root = (self.repository_root / manifest.source_dir).resolve()
         if (
             source_root != self.repository_root
@@ -190,7 +262,13 @@ class TargetCatalog:
         if result.returncode != 0:
             raise ValueError(f"target source is not a Git repository: {source_root}")
         repository = Path(result.stdout.strip()).resolve()
-        if self._source_lock is not None:
+        if target_id in self._user_target_ids:
+            approved = self.registry.get(target_id)
+            if approved is None:
+                raise ValueError(f"registry approval disappeared for {target_id}")
+            if repository != approved.source_path.resolve():
+                raise ValueError("user target Git repository does not match approved source path")
+        elif self._source_lock is not None:
             expected_repository = self.source_bootstrapper().path_for(target_id)
             if repository != expected_repository:
                 raise ValueError(
@@ -262,16 +340,28 @@ class TargetCatalog:
         )
 
     def readiness_for(self, target_id: str) -> TargetReadiness:
+        target = self.get(target_id)
+        runtime_root = self.source_root_for(target_id) if target.user_registered else self.repository_root
         readiness = TargetRuntimeInspector(
-            self.get(target_id).manifest, self.repository_root
+            target.manifest, runtime_root
         ).check_readiness()
-        if self._source_lock is None:
+        if self._source_lock is None or target.user_registered:
             return readiness
         source = self.source_check_for(target_id)
         if source.ready:
             return readiness
         issues = [*readiness.issues, f"source lock: {source.status}"]
         return readiness.model_copy(update={"ready": False, "issues": issues})
+
+    def _require_user_source(self, target_id: str) -> None:
+        """Validate an approved user repository without source-lock bootstrap."""
+        target = self.get(target_id)
+        approved = self.registry.get(target_id)
+        if approved is None:
+            raise ValueError(f"registry approval disappeared for {target_id}")
+        source = approved.source_path.resolve()
+        if not source.is_dir() or _git_head(source) is None:
+            raise ValueError(f"approved user source is not a Git repository: {source}")
 
     def adapter_for(self, target_id: str) -> "TargetAdapter":
         # Imported lazily to keep the runtime core independent from adapter imports.

@@ -62,7 +62,7 @@
     - `running_local`: `reset`(= 재시작 방법)만 필수. build/start/stop 선택
   - **loopback 검증기(`manifest.py:154`)는 손대지 않는다** — 안전 불변식 1
 
-- [ ] **R-4. `catalog.py` 이중 출처**
+- [~] **R-4. `catalog.py` 이중 출처 (discovery/source-root 구현, overlay 통합 대기)**
   - `targets/manifests/`(built-in demo 20개) + 사용자 레지스트리를 **함께** 발견
   - ⚠️ **`catalog.py:84`의 `expected_target_ids` 결합을 풀어야 한다** — 지금은 발견된 **모든** manifest가 source-lock 엔트리를 요구한다. built-in에만 요구하도록 분리
   - ⚠️ **`catalog.py:159`의 repo 탈출 검사 교체** — 목적은 docstring대로 *"never an MCP-supplied path"*다. 레지스트리의 `source_path`는 MCP 입력이 아니라 **사용자가 대역 외로 승인한 경로**이므로, "repo 안" 대신 **"승인 기록의 source_path와 일치"**로 바꾼다. 불변식이 약해지는 게 아니라 출처가 바뀌는 것
@@ -83,6 +83,7 @@
   - **왜 Juice Shop이 source-lock을 타야 하나**: image-only 동적 target으로 제한하면 static·scope 게이트와 LLM 패치가 전부 bypass된다 — `source_dir`이 실제 파일 트리를 가리켜야 한다. 그래서 pinned source를 `.vibecutter/targets/sources/juice-shop`에 vendor한다(P2 권고, P1 동의)
   - P2 몫: `external_allowlist` + `juice-shop` 엔트리를 `targets/source-lock.yaml`에 추가, source bootstrap, manifest/compose/smoke/reset 등록
   - **P1이 검증 로직을 먼저 올려야 시작 가능** → P1 W-1
+  - 사용자 로컬 target은 source-lock 없이 승인 snapshot의 source root를 사용하도록 catalog 분기를 구현했다.
   - **삭제하지 말 것**: 기존 20개의 재현성 장치다
 
 - [~] **R-6. target별 active-run lease primitive** (§3A-8; orchestration 연결 대기)

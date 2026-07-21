@@ -10,6 +10,9 @@
 - `runtime/target_lease.py`: target당 단일 active run lease의 acquire/release/reap
 - `tests/test_registry.py`: snapshot artifact·hostname-only 회귀 검증
 - `tests/test_target_lease.py`: 충돌·소유자·만료·입력 검증
+- `runtime/catalog.py`: built-in source-lock과 user registry snapshot/source path 이중 출처
+  discovery 및 user source root 분기
+- `tests/test_catalog.py`: source-lock 없는 user target discovery/source repository 검증
 - `P2_new_plan.md`: R-1/R-6를 내부 구현 완료·통합 대기 상태로 갱신
 - `docs/CONTRACT_IMPLEMENTATION_TODO.md`: §3A 진행 상태 갱신
 
@@ -34,9 +37,10 @@
 
 ## 검증
 
-- `py -3.13 -m unittest tests.test_registry tests.test_target_lease`
-  - 10/10 통과
-- snapshot과 lease는 아직 P1 driver/catalog에 연결하지 않은 상태
+- `py -3.13 -m unittest tests.test_catalog tests.test_registry tests.test_target_lease`
+  - 16/16 통과
+- snapshot과 lease primitive는 P2 runtime/catalog에 연결됨
+- lease의 P1 driver acquire/finally-release 호출과 user Compose patched-runtime 재기동은 아직 미연결
 
 ## 다른 역할에 필요한 사항
 
