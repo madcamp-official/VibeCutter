@@ -102,6 +102,17 @@ def filter_by_run_ids(samples: Iterable[dict], run_ids: Optional[set[str]]) -> l
     return [s for s in rows if str(s.get("run_id")) in run_ids]
 
 
+def filter_by_labels(samples: Iterable[dict], labels: Optional[set[str]]) -> list[dict]:
+    """지정 label 만 학습에 쓴다(예: verified,fixed,rejected,human_review — unlabeled 제외).
+
+    export 는 reward 만 있고 label 이 없는 스텝도 포함하므로(`training_samples()` 규칙),
+    라벨 품질을 올리려면 여기서 한 번 더 좁힌다. None 이면 전부."""
+    rows = list(samples)
+    if not labels:
+        return rows
+    return [s for s in rows if str(s.get("label") or "unlabeled") in labels]
+
+
 # --- 학습 (GPU 전용, 지연 import) ------------------------------------------------------
 
 def train(
@@ -115,6 +126,7 @@ def train(
     lr: float = 2e-4,
     max_seq_len: int = 2048,
     run_ids: Optional[set[str]] = None,
+    labels: Optional[set[str]] = None,
 ) -> str:
     """QLoRA(4bit) SFT. torch/transformers/peft/trl 필요(requirements-gpu.txt).
 
@@ -131,10 +143,12 @@ def train(
     )
     from trl import SFTConfig, SFTTrainer
 
-    samples = filter_by_run_ids(load_sft_samples(export_path), run_ids)
+    samples = filter_by_labels(filter_by_run_ids(load_sft_samples(export_path), run_ids), labels)
     rows = build_texts(samples)
     if run_ids:
-        print(f"[train] run_id 필터 적용: {sorted(run_ids)} → {len(samples)} rows")
+        print(f"[train] run_id 필터: {len(run_ids)}개 → {len(samples)} rows")
+    if labels:
+        print(f"[train] label 필터: {sorted(labels)} → {len(samples)} rows")
     if not rows:
         raise SystemExit(
             f"학습 샘플이 없다: {export_path}. 실제 verified/fixed evidence 가 나온 뒤 "
@@ -189,14 +203,17 @@ def _main() -> None:
     ap.add_argument("--epochs", type=float, default=3.0)
     ap.add_argument("--run-ids", default=None,
                     help="실 run_id 만 학습(쉼표구분). P3 데이터위생: test 궤적 배제")
+    ap.add_argument("--labels", default=None,
+                    help="이 label 만 학습(쉼표구분, 예: verified,fixed,rejected,human_review)")
     ap.add_argument("--dry-run", action="store_true",
                     help="학습 없이 데이터 준비만 검증(GPU 불필요)")
     args = ap.parse_args()
 
     run_ids = {r.strip() for r in args.run_ids.split(",") if r.strip()} if args.run_ids else None
+    labels = {l.strip() for l in args.labels.split(",") if l.strip()} if args.labels else None
 
     if args.dry_run:
-        samples = filter_by_run_ids(load_sft_samples(args.export), run_ids)
+        samples = filter_by_labels(filter_by_run_ids(load_sft_samples(args.export), run_ids), labels)
         rows = build_texts(samples)
         st = dataset_label_stats(samples)
         # Task 3(팀 요청): 학습 시작 전 dataset row 수 + label 분포 공유.
@@ -209,7 +226,7 @@ def _main() -> None:
             print(rows[0]["text"][:600])
         return
     train(args.export, base_model=args.base_model,
-          output_dir=args.output_dir, epochs=args.epochs, run_ids=run_ids)
+          output_dir=args.output_dir, epochs=args.epochs, run_ids=run_ids, labels=labels)
 
 
 if __name__ == "__main__":
