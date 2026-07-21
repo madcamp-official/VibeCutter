@@ -33,7 +33,7 @@
 
 ## 단계 1 — 데모 2 완주 (발표 핵심 증거)
 > 전제: 단계 0의 candidate 경로 + Docker 완료.
-- [ ] **[P3]** **J-3 완주 1회** — Juice Shop SQLi → verify(injection blind 차등) → localize → **235B 패치** → 6게이트 → **FIXED**. run_id 공유
+- [ ] **[P3]** **J-3 완주 1회** — Juice Shop SQLi → verify(injection blind 차등) → localize → **235B 패치** → 6게이트 → **FIXED**. run_id 공유. **패치 경로는 코드 완결·오프라인 검증됨(`b512141`·`faf01ab`)** — endpoint 복귀 + Docker만 남음
 - [ ] **[P1]** 완주가 **승인 흐름**(scan/verify → `PATCH_PROPOSED` 정지 → 사용자 승인 → `vc_resume_audit` → 6게이트)으로 도는지 확인
 - [ ] **[P4]** 그 run의 metadata(`llm_used`/tier/health)로 ablation 표본에 반영
 - [ ] **[P2]** 완주 후 `reset_run` + (write 없으니) baseline restore 불필요 확인, 슬롯 정리
@@ -64,4 +64,4 @@
 
 ## 크리티컬 패스 (endpoint UP 이후)
 **단계 0(Docker·ablation·SARIF 병렬 — candidate gap은 `b512141`로 해결) → 단계 1(데모 2 완주) → 단계 2(데모 1 + 측정) → 단계 3(안전·문서) → 단계 4(E2E·리허설).**
-candidate gap이 풀렸으니 이제 최대 리스크는 **실 Juice Shop Docker 실측**(P2 단계 0) — 이 위에서 verify 차등이 실제로 나면 235B 패치→FIXED 완주(J-3)가 바로 가능. 나머지는 병렬로 수렴.
+candidate gap·패치 대상파일이 다 풀렸으니(코드+오프라인 검증), 이제 최대 리스크는 **환경 2개**: (1) **235B endpoint 복귀**(재확인 시 DOWN·key:no — P2 터널/env; E-1 rag-llm 팔·J-3 실패치 둘 다 종속), (2) **실 Juice Shop Docker 실측**(P2 단계 0). 이 둘이 서면 235B 패치→FIXED 완주(J-3)가 바로 가능. 나머지는 병렬로 수렴.

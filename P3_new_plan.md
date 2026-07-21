@@ -68,10 +68,12 @@
 
 - [x] **J-1. regression 계약 A/B 회신** — **B(image smoke)** 채택·전송. `test_suites: juice-shop-search-smoke`로 매니페스트 반영됨
 - [x] **J-2. verify 계약 확정** — `vuln_class=injection`, `GET /rest/products/search?q=`, blind 차등 오라클, liveness positive, reset rollback. 전송 완료. 오라클은 J-2 실측 패턴(631/18662/30B)으로 회귀 테스트 잠금(`test_juice_shop_sqli_demo_pattern`)
-- [ ] **J-3. verified → LLM 패치 → 6게이트 완주 1회** — ❌ 미실행. 남은 전제:
-  - **(1) 실 Juice Shop Docker 실측** — candidate 공급은 코드상 해결됐으나(아래), fixture는 구조 모사일 뿐 실 서버 응답이 아니다. 실 컨테이너에서 verify가 blind 차등(J-2 오라클)을 실제로 내는지 1회 확인 필요(P2 단계 0 Docker 종속).
-  - **(2) 235B endpoint** — 현재 **UP** 확인. 실 235B로 Sequelize 템플릿 리터럴 SQLi를 파라미터화 패치할 수 있는지 J-3에서 실증.
-  - ✅ **candidate 공급 해결(`b512141`)** — surface는 이미 Node(.js/.ts)를 파싱한다(이전 "미지원" 서술은 stale). 실제 gap이던 `inject_param`(SQL 변수 criteria를 잡던 것)을 `_http_param_for`로 HTTP 파라미터(q) 역추적하도록 수정. 테스트 `test_node_sqli_traces_http_param_not_sql_variable`로 잠금.
+- [ ] **J-3. verified → LLM 패치 → 6게이트 완주 1회** — ❌ 미실행. **패치 경로는 코드상 완결·오프라인 검증 완료**, 남은 건 순수 환경 블로커 2개:
+  - **(1) 실 Juice Shop Docker 실측** — fixture는 구조 모사일 뿐 실 서버 응답이 아니다. 실 컨테이너에서 verify가 blind 차등(J-2 오라클)을 실제로 내는지 1회 확인 필요(P2 단계 0 Docker 종속).
+  - **(2) 235B endpoint** — **현재 DOWN**(재확인 시 key:no, 아까 UP이었으나 P2 터널/env 내려감). 실 235B로 Sequelize 템플릿 리터럴 SQLi 파라미터화 패치를 실증하려면 복귀 필요(P2).
+  - ✅ **candidate 공급 해결(`b512141`)** — surface는 이미 Node(.js/.ts)를 파싱한다(이전 "미지원" 서술은 stale). 실제 gap이던 `inject_param`(SQL 변수 criteria)을 `_http_param_for`로 HTTP 파라미터(q) 역추적. `test_node_sqli_traces_http_param_not_sql_variable` 잠금.
+  - ✅ **패치 대상 파일 해결(`faf01ab`)** — Express는 route 등록(server.ts)과 handler 정의(routes/search.ts)가 분리돼 root_cause.file이 SQL 없는 파일을 짚던 문제를, `extract_routes`가 handler 심볼을 정의 파일로 되짚게 + candidate source_symbols를 sink 파일:라인으로 수정. `RootCause.file=routes/search.ts` 확인.
+  - ✅ **패치 프롬프트 오프라인 검증** — 실배선(`make_llm_synthesizer` + `_code_context_for`)으로: SQL sink 노출·SQLi 파라미터화 유도(IDOR 오유도 없음)·PatchCandidate가 routes/search.ts 대상 diff 생성 확인. **endpoint만 돌아오면 J-3 완주 가능.**
 
 ---
 
