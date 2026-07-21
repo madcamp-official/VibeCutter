@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from contracts.schemas import (
     ApprovalStatus,
+    Candidate,
     Finding,
     FindingStatus,
     Patch,
@@ -50,7 +51,9 @@ from core.report import build_run_report, render_html
 from core.state_machine import transition
 from core.trajectory import record_trajectory_step
 from mcp_server.tools_inventory import _service
+from model.patch_client import build_patch_model_client
 from repair.locator import localize
+from repair.llm_synth import make_llm_synthesizer
 from repair.patcher import generate_patch
 
 
@@ -223,6 +226,77 @@ def _finalize_validation(run: Run, patch: Patch, validation: Validation) -> None
     )
 
 
+_UNSET = object()
+_llm_client_cache: object = _UNSET
+
+
+def _get_llm_client():
+    """`build_patch_model_client()`를 프로세스당 한 번만 만든다(P3 요청, 배선 #7).
+
+    매 `vc_generate_patch` 호출마다 새로 만들면 `chat_fn_from_env`의 3초 `/health` precheck을
+    호출마다 다시 물게 된다 — RETRY로 같은 finding에 여러 번 patch를 시도하면 그때마다 3초씩
+    쌓인다. `None`(endpoint 전부 DOWN)도 그대로 캐시한다 — 그 자체가 유효한 "지금은 template만"
+    상태이고, 매번 재확인해도 어차피 같은 결과이기 때문이다.
+    """
+    global _llm_client_cache
+    if _llm_client_cache is _UNSET:
+        _llm_client_cache = build_patch_model_client()
+    return _llm_client_cache
+
+
+def _reset_llm_client_cache() -> None:
+    """테스트/장수명 서버에서 endpoint 상태가 바뀐 뒤 캐시를 비우고 다시 probe하게 한다."""
+    global _llm_client_cache
+    _llm_client_cache = _UNSET
+
+
+def _line_for_root_cause(finding: Finding, root_cause: RootCause) -> int | None:
+    """finding.source_symbols(SAST "파일:줄")에서 root_cause.file과 같은 파일의 줄번호를 복원한다.
+
+    `RootCause`엔 줄번호 필드가 없다(스키마 freeze) — patcher의 `_read_source_excerpt`는 그래서
+    파일 전체를 읽는다. P4 `code_context()`는 candidate의 `source_symbols`(파일:줄)로 위치를
+    찾으므로, 여기서 줄을 못 찾으면 스니펫을 만들 수 없다 — 그 경우 `None`을 돌려줘 호출측이
+    전체 파일 폴백으로 떨어지게 한다(추측으로 줄번호를 지어내지 않는다).
+    """
+    for symbol in finding.source_symbols:
+        path, _, raw_line = symbol.rpartition(":")
+        if not path or not raw_line.isdigit():
+            continue
+        if path == root_cause.file or path.endswith(root_cause.file) or root_cause.file.endswith(path):
+            return int(raw_line)
+    return None
+
+
+def _code_context_for(finding: Finding, root_cause: RootCause, source_root: Path) -> str | None:
+    """`make_llm_synthesizer(context_provider=...)` 어댑터 — P4 `code_context()`를 배선한다.
+
+    계약 3.4의 `context_provider` 시그니처는 `(Finding, RootCause, Path) -> str | None`인데 P4
+    `scanners.rag_enrich.code_context()`는 `(candidates, index) -> {candidate_id: 스니펫}`이라
+    시그니처가 다르다(P3 2026-07-21 요청). 여기서 `root_cause.file:줄` 하나짜리 최소 probe
+    Candidate를 만들어 그 함수에 그대로 넘긴다 — rerank(`_rag_enrich`)와 패치 합성이 같은
+    스니펫 생성기(같은 CodeIndex, 같은 줄번호 부착 형식)를 공유하게 된다.
+
+    줄을 못 찾거나(`_line_for_root_cause` None) 인덱싱이 실패하면 `None` — `make_llm_synthesizer`가
+    `_read_source_excerpt`(파일 전체)로 폴백하므로 패치 합성 자체는 죽지 않는다(비파괴).
+    """
+    line = _line_for_root_cause(finding, root_cause)
+    if line is None:
+        return None
+    try:
+        from model.code_index import CodeIndex
+        from scanners.rag_enrich import code_context
+    except Exception:
+        return None
+    try:
+        index = CodeIndex.build(source_root)
+    except Exception:
+        return None
+    probe = Candidate(
+        id="root-cause-probe", run_id=finding.run_id, source_symbols=[f"{root_cause.file}:{line}"]
+    )
+    return code_context([probe], index).get(probe.id)
+
+
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
     @audited
@@ -264,6 +338,13 @@ def register(mcp: FastMCP) -> None:
         저장), RunState 전이(VERIFIED/LOCALIZING/RETRY → PATCH_PROPOSED), Patch 저장,
         trajectory 기록만 배선한다.
 
+        **LLM 합성 배선(배선 #7, P3 요청)**: `synthesize_fn=make_llm_synthesizer(_get_llm_client(),
+        context_provider=_code_context_for)`를 넘긴다. `_get_llm_client()`는
+        `build_patch_model_client()`를 프로세스당 1회 캐시(endpoint 없으면 `None` → template-only
+        degrade, 안전 불변식 3 그대로). `_code_context_for`는 P4 `code_context()`를
+        `(Finding, RootCause, Path)` 계약에 맞춘 어댑터로, root_cause 위치의 줄번호 스니펫을
+        찾으면 그걸, 못 찾으면 `None`을 돌려 `llm_synth`의 전체 파일 폴백이 대신 쓰이게 한다.
+
         **실패 처리**: 패치 후보를 하나도 합성 못 하면 `generate_patch()`가 `ValueError`를
         내는데, 이때는 RunState를 전이하지 않는다(패치가 없는데 PATCH_PROPOSED로 넘어가지
         않도록) — 실패해도 run은 원래 상태(예: VERIFIED)에 그대로 남는다.
@@ -296,7 +377,12 @@ def register(mcp: FastMCP) -> None:
             finding.root_cause = root_cause
             save(finding)
         patch = generate_patch(
-            run.id, finding, root_cause, source_root=source_root, attempt_no=attempt_no
+            run.id,
+            finding,
+            root_cause,
+            source_root=source_root,
+            synthesize_fn=make_llm_synthesizer(_get_llm_client(), context_provider=_code_context_for),
+            attempt_no=attempt_no,
         )
         save(patch)
         _advance_to_patch_proposed(run)

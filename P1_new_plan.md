@@ -18,15 +18,23 @@
 
 **다른 사람을 막고 있는 순서**로 정렬했다. 1·2번은 P2가 3시간+ 대기 중이다.
 
-| # | 항목 | 막고 있는 사람 | 크기 |
+| # | 항목 | 막고 있는 사람 | 상태 |
 |---|---|---|---|
-| **W-1** | `source_lock.py` external_allowlist | **P2 (Juice Shop 전면 대기)** | 소 |
-| **W-2** | `codex/p2-local-registry` 병합 + `kind` 노출 | **P2·P3** | 소 |
+| ~~W-1~~ | `source_lock.py` external_allowlist | P2 | ✅ **완료** |
+| ~~W-2~~ | P2 registry 병합 + `kind` 노출 | P2·P3 | ✅ **완료** |
 | **W-3** | `Validation.build_ok: bool \| None` coerce 금지 | **P3 (judge 구현 대기)** | 소 |
-| **W-4** | `vc_export_patch` + `vc_resume_audit` + driver 자동승인 제거 | P2 (lease 배선) | 중 |
-| **W-5** | R-3b `tools_repair.py:298` 배선 | P3 (완주 대기) | 소 |
+| **W-8** | **lease 배선** (acquire/renew/release) | **P2 (긴급 요청)** | 소 |
+| **W-9** | **runtime metadata JSONL 배선** | **P2 (긴급 요청)** | 중 |
+| **W-4** | `vc_export_patch` + `vc_resume_audit` + driver 자동승인 제거 | P2 | 중 |
+| ~~W-5~~ | R-3b `synthesize_fn` + `context_provider` 배선 | P3 | ✅ **완료** |
+| **W-10** | rerank를 `observed_chat_fn_from_env()`로 교체 (T-2) | — | ⏳ P4 main 반영 대기 |
 | **W-6** | `core/report.py` redaction (§3A-10) | — | 소 |
 | **W-7** | `vc_export_sarif` 배선 | P4 | 소 |
+
+> ⚠️ **스프린트 최대 리스크 — 235B endpoint 순환 대기 (2026-07-21 확인)**
+> `.env`에 `VIBECUTTER_LLM_*`가 **0건**이고 `python -m model.endpoints`는 두 tier 모두 `[DOWN]`이다.
+> P4는 P2에게 터널 URL을 요청하고(05:23·05:28), P2는 P1에게 "URL을 .env에 넣고 probe하라"고 요청했는데 **P1에게 URL이 없다.**
+> `cloudflared` 노출은 **P2_new_plan G-1(P2 소유)**이다. 터널이 실제로 생기기 전에는 아무도 probe를 초록으로 만들 수 없고, **데모 2가 여기 걸려 있다.**
 
 - [ ] **W-1. `source_lock.py` external_allowlist** — **최우선. 이미 승인받은 미이행 건**(03:09 설계 확정 → 03:12 anjonghwa 승인 → 권한 문제로 미적용)
   - 현재 `source_lock.py:14`가 `https://github.com/madcamp-official/{target_id}.git` **exact match**를 강제해 외부 repo가 구조적으로 불가
@@ -52,13 +60,38 @@
   - [ ] `driver.py:145`의 자동 `confirmed=True` **제거**
   - [ ] driver 진입 직후 `acquire_target_lease`, `finally`에서 `release_target_lease` (P2 구현 대기)
 
-- [ ] **W-5. R-3b 배선** — **조건 전부 갖춰짐.** P4 `patch_client`가 main(935e362)에 있고 P3가 05:37에 결합 검증 완료
-  ```python
-  from repair.llm_synth import make_llm_synthesizer
-  from model.patch_client import build_patch_model_client
-  patch = generate_patch(..., synthesize_fn=make_llm_synthesizer(_get_llm_client()), ...)
+- [ ] **W-8. lease 배선** (P2 긴급 요청 3번, §3A-8) — `runtime/target_lease.py`가 main에 있다
   ```
-  - `_get_llm_client()`는 lazy init + memoize, 실패 시 `None` → template-only degrade (P3와 합의)
+  run_target_audit(target_id)
+    ├─ acquire(target_id, scan_run_id)     ← 배치 진입 직후
+    ├─ worker 하나 끝날 때마다 renew()
+    └─ finally: release(target_id, scan_run_id)
+  ```
+  - **배치 전체 단위**다(worker 단위 아님) — scan run과 모든 worker가 같은 고정 포트를 공유한다
+  - `renew()`가 필요한 이유: c1-05 실측이 후보 1개에 **136초**라 후보 10개면 TTL 900초를 넘긴다. 살아 있으면 갱신, 죽으면 900초 뒤 자동 회수
+  - `TargetBusyError`(`RuntimeError` 상속)는 그대로 전파한다 — audit log의 `PermissionError` 집계를 오염시키지 않는다
+
+- [ ] **W-9. runtime metadata JSONL 배선** (P2 긴급 요청 2번) — `runtime/metadata.py`의 `append_runtime_metadata()`를 배치 종료 시점에
+  - P1이 채울 수 있는 것: `run_id`·`target_id`·`base_url`·`source_commit`·`health`·`readiness`·`reset_result`·`lease_run_id`·`lease_expires_at`
+  - ⏳ `llm_endpoint_state` — **W-10(P4 recorder) 이후.** 같은 출처를 써야 eval 표본 필터와 어긋나지 않는다
+  - ❓ `gpu_worker`·`remaining_containers/worktrees/ports` — **P2에게 출처를 물었다.** P1은 어느 GPU 워커가 응답했는지 알 방법이 없고, 잔여 리소스는 sweep/reset 결과라 P2 소관으로 보인다
+
+- [x] **W-5. R-3b `synthesize_fn` + `context_provider` 배선** — **완료(2026-07-21, 배선 #7)**. `mcp_server/tools_repair.py`
+  ```python
+  patch = generate_patch(
+      ..., synthesize_fn=make_llm_synthesizer(_get_llm_client(), context_provider=_code_context_for),
+  )
+  ```
+  - `_get_llm_client()`: `build_patch_model_client()` 프로세스당 1회 캐시(`None`도 캐시 — endpoint DOWN을 매번 재확인하지 않는다). `_reset_llm_client_cache()`로 테스트/장수명 서버에서 비울 수 있다
+  - `_code_context_for(finding, root_cause, source_root)`: P4 `code_context()` 어댑터. `context_provider` 계약은 `(Finding, RootCause, Path) -> str | None`인데 `code_context()`는 `(candidates, index) -> {id: 스니펫}`이라 **`root_cause.file:line` 하나짜리 probe `Candidate`를 만들어** 그대로 넘긴다. 이러면 rerank(`_rag_enrich`)와 패치 합성이 **같은 CodeIndex·같은 스니펫 형식**을 공유한다(계약 3.4)
+  - `RootCause`엔 줄번호가 없어(`file`/`symbol`/`rationale`만) `_line_for_root_cause()`가 `finding.source_symbols`(SAST `파일:줄`)에서 같은 파일의 줄을 복원한다. 못 찾으면(SAST가 이 파일을 안 짚었을 때) `None` → `llm_synth`가 root_cause 파일 전체(줄번호 부착)로 폴백 — 인덱싱 실패가 패치 합성을 죽이지 않는다
+  - 테스트: `tests/test_tools_repair_llm_wiring.py` 10건(줄 복원 4·code_context 어댑터 3·캐시 3), 전체 스위트 535 passed
+  - endpoint가 아직 전부 DOWN이라(⚠️ 위 리스크 박스) J-3 실행은 **터널이 뜬 뒤** P3가 완주 1회 돌릴 수 있다 — 배선 자체는 지금 template-only로도 안전하게 degrade한다
+
+- [ ] **W-10. rerank를 `observed_chat_fn_from_env()`로 교체** (P4 T-1 → T-2) — ⏳ **P4가 main에 올려야 시작**(현재 `p4` 브랜치 미커밋, main에 0건)
+  - `(chat_fn, recorder)`를 받아 `aggregate` 직후 `recorder().as_metadata()`를 trajectory step `result`에 병합
+  - `contracts` freeze를 안 건드린다(전부 `result` dict)
+  - **W-9의 `llm_endpoint_state`와 같은 출처를 쓴다** — 두 곳이 갈라지면 ablation 표본 필터와 runtime metadata가 어긋난다
 
 - [ ] **W-6. `core/report.py` redaction** — 확인된 결함: `redact()` 호출 **0건**. evidence 8건·audit 3건과 대조. HTML 리포트로 secret이 샐 수 있다
 
