@@ -45,6 +45,10 @@ class RunComposeOverlay:
     source_repository: Path
     worktree_path: Path
     run_id: str
+    # Built-in manifests resolve compose paths from VibeCutter's repository.
+    # User-approved manifests resolve them from their approved source repo while
+    # keeping generated artifacts under the VibeCutter run root.
+    project_root: Path | None = None
 
     @property
     def output_path(self) -> Path:
@@ -77,10 +81,11 @@ class RunComposeOverlay:
         if self.manifest.docker_isolation is None:
             raise ValueError("run-scoped Compose requires docker_isolation metadata")
 
+        project_root = (self.project_root or repository_root).resolve()
         original_path = _resolve_from(
-            repository_root,
+            project_root,
             self.manifest.docker_isolation.compose_file,
-            repository_root,
+            project_root,
             label="checked-in compose file",
         )
         document = yaml.safe_load(original_path.read_text(encoding="utf-8"))
@@ -89,7 +94,7 @@ class RunComposeOverlay:
         generated = _rewrite_document(
             deepcopy(document),
             compose_directory=original_path.parent,
-            repository_root=repository_root,
+            repository_root=project_root,
             source_repository=source_repository,
             worktree_path=worktree_path,
         )

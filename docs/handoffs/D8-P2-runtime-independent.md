@@ -22,17 +22,18 @@
   - 승인 당시 `<registry>/<target_id>/manifest.yaml`만 읽음
   - 사용자 원본 manifest를 재조회하지 않음
 - `TargetLeaseManager(root=None)`
-  - `acquire(target_id, run_id, timeout_seconds=900) -> TargetLease`
+  - `acquire(target_id, run_id, ttl_seconds=900) -> TargetLease` (즉시 실패, TTL 기준)
+  - `renew(target_id, run_id, ttl_seconds=900) -> TargetLease`
   - `get(target_id) -> TargetLease | None`
   - `release(target_id, run_id) -> bool`
   - `reap_stale(target_id) -> bool`
 
 ## 실패/예외
 
-- active lease가 있으면 `TargetLeaseError`
-- 다른 run이 release하면 `TargetLeaseError`
+- active lease가 있으면 `TargetBusyError` (`RuntimeError` 계열)
+- 다른 run이 release/renew하면 `TargetBusyError`
 - 만료 lease는 새 acquire 전 회수 가능
-- 잘못된 target/run slug 또는 양수 아닌 timeout은 `ValueError`
+- 잘못된 target/run slug 또는 양수 아닌 `ttl_seconds`는 `ValueError`
 - snapshot이 없는 legacy entry에서 `manifest_for()`를 호출하면 재승인 요구 `ValueError`
 
 ## 검증

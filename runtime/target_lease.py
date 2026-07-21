@@ -17,8 +17,12 @@ import tempfile
 from typing import Optional
 
 
-class TargetLeaseError(RuntimeError):
-    """Raised when a target is already leased by another active run."""
+class TargetBusyError(RuntimeError):
+    """Raised when a target lease is unavailable to the requesting run."""
+
+
+# Compatibility alias for callers written against the initial P2 primitive.
+TargetLeaseError = TargetBusyError
 
 
 @dataclass(frozen=True)
@@ -38,12 +42,12 @@ class TargetLeaseManager:
         self.root = (root or self.DEFAULT_ROOT).expanduser().resolve()
 
     def acquire(
-        self, target_id: str, run_id: str, *, timeout_seconds: float = 900.0
+        self, target_id: str, run_id: str, *, ttl_seconds: float = 900.0
     ) -> TargetLease:
         _validate_slug(target_id, "target_id")
         _validate_slug(run_id, "run_id")
-        if timeout_seconds <= 0:
-            raise ValueError("timeout_seconds must be positive")
+        if ttl_seconds <= 0:
+            raise ValueError("ttl_seconds must be positive")
 
         self.root.mkdir(parents=True, exist_ok=True)
         lease_dir = self._path_for(target_id)
@@ -52,7 +56,7 @@ class TargetLeaseManager:
             target_id=target_id,
             run_id=run_id,
             acquired_at=now,
-            expires_at=now + timedelta(seconds=timeout_seconds),
+            expires_at=now + timedelta(seconds=ttl_seconds),
         )
 
         try:
@@ -60,7 +64,7 @@ class TargetLeaseManager:
         except FileExistsError:
             existing = self._read(lease_dir)
             if existing is not None and existing.expires_at > now:
-                raise TargetLeaseError(
+                raise TargetBusyError(
                     f"target {target_id!r} is leased by run {existing.run_id!r} "
                     f"until {existing.expires_at.isoformat()}"
                 )
@@ -91,11 +95,37 @@ class TargetLeaseManager:
         if current is None:
             return False
         if current.run_id != run_id:
-            raise TargetLeaseError(
+            raise TargetBusyError(
                 f"target {target_id!r} is owned by run {current.run_id!r}, not {run_id!r}"
             )
         shutil.rmtree(lease_dir)
         return True
+
+    def renew(
+        self, target_id: str, run_id: str, *, ttl_seconds: float = 900.0
+    ) -> TargetLease:
+        """Extend an active lease owned by ``run_id`` and return its new value."""
+        _validate_slug(target_id, "target_id")
+        _validate_slug(run_id, "run_id")
+        if ttl_seconds <= 0:
+            raise ValueError("ttl_seconds must be positive")
+        lease_dir = self._path_for(target_id)
+        current = self._read(lease_dir)
+        now = datetime.now(timezone.utc)
+        if current is None or current.expires_at <= now:
+            raise TargetBusyError(f"target {target_id!r} has no active lease to renew")
+        if current.run_id != run_id:
+            raise TargetBusyError(
+                f"target {target_id!r} is owned by run {current.run_id!r}, not {run_id!r}"
+            )
+        renewed = TargetLease(
+            target_id=current.target_id,
+            run_id=current.run_id,
+            acquired_at=current.acquired_at,
+            expires_at=now + timedelta(seconds=ttl_seconds),
+        )
+        _atomic_write_json(lease_dir / "lease.json", _lease_payload(renewed))
+        return renewed
 
     def reap_stale(self, target_id: str) -> bool:
         """Remove one expired lease and report whether anything was removed."""
@@ -127,7 +157,7 @@ class TargetLeaseManager:
                 expires_at=datetime.fromisoformat(payload["expires_at"]),
             )
         except (OSError, ValueError, TypeError, KeyError) as exc:
-            raise TargetLeaseError(f"invalid lease artifact: {path}") from exc
+            raise TargetBusyError(f"invalid lease artifact: {path}") from exc
 
 
 def _validate_slug(value: str, label: str) -> None:

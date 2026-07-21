@@ -41,6 +41,63 @@ def _manifest() -> TargetManifest:
 
 
 class RunComposeOverlayTests(unittest.TestCase):
+    def test_user_project_compose_resolves_from_approved_source_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "user-project"
+            source.mkdir()
+            _git(source, "init")
+            _git(source, "config", "user.email", "p2@example.test")
+            _git(source, "config", "user.name", "P2 Test")
+            (source / "app.py").write_text("print('user')\n", encoding="utf-8")
+            (source / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+            (source / "compose.yaml").write_text(
+                """services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports: [127.0.0.1:18080:8080]
+    networks: [vc-internal]
+networks:
+  vc-internal:
+    internal: true
+""",
+                encoding="utf-8",
+            )
+            _git(source, "add", "app.py", "Dockerfile", "compose.yaml")
+            _git(source, "commit", "-m", "initial")
+            worktrees = WorktreeManager(
+                source, artifact_root=root / ".vibecutter" / "worktrees" / "local-user"
+            )
+            worktree = worktrees.create("run-1")
+            try:
+                manifest = _manifest().model_copy(
+                    update={
+                        "id": "local-user",
+                        "source_dir": ".",
+                        "commands": {
+                            key: value.model_copy(
+                                update={"argv": [arg.replace("targets/compose/demo-api.yaml", "compose.yaml") for arg in value.argv]}
+                            )
+                            for key, value in _manifest().commands.items()
+                        },
+                        "docker_isolation": _manifest().docker_isolation.model_copy(
+                            update={"compose_file": "compose.yaml"}
+                        ),
+                    }
+                )
+                overlay = RunComposeOverlay(
+                    manifest, root, source, worktree, "run-1", project_root=source
+                )
+                document = yaml.safe_load(overlay.prepare().read_text(encoding="utf-8"))
+                self.assertEqual(
+                    Path(document["services"]["app"]["build"]["context"]), worktree
+                )
+                self.assertTrue(overlay.inspect().compliant)
+            finally:
+                worktrees.remove("run-1", approved=True)
+
     def test_generated_compose_uses_target_worktree_and_preserves_isolation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

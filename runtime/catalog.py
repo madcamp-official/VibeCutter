@@ -337,6 +337,7 @@ class TargetCatalog:
             self.source_repository_for(target_id),
             worktrees.path_for(run_id),
             run_id,
+            project_root=(self.source_repository_for(target_id) if self.get(target_id).user_registered else None),
         )
 
     def readiness_for(self, target_id: str) -> TargetReadiness:
