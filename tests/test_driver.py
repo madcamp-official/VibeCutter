@@ -326,5 +326,85 @@ class TargetLeaseWiringTests(unittest.TestCase):
         self.assertIsNone(self.lease_manager.get(REGISTERED_TARGET_ID))
 
 
+class RuntimeMetadataWiringTests(unittest.TestCase):
+    """W-9: 배치 종료 시점 runtime metadata 배선(P2 긴급 요청 2번)."""
+
+    def setUp(self) -> None:
+        self.runtime = FakeToolRuntime()
+        self._lease_tmp = TemporaryDirectory()
+        self.addCleanup(self._lease_tmp.cleanup)
+        self.lease_manager = TargetLeaseManager(Path(self._lease_tmp.name))
+
+        self.service = MagicMock()
+        self.service.reset_run.return_value = True
+        fake_target = MagicMock()
+        fake_target.manifest.base_url = "http://127.0.0.1:3000"
+        fake_target.contract_target.source_commit = "deadbeef"
+        self.service.catalog.get.return_value = fake_target
+        self.service.catalog.adapter_for.return_value.health.return_value.status = "ready"
+        self.service.check_readiness.return_value.ready = True
+
+    def _run(self):
+        return run_target_audit(
+            REGISTERED_TARGET_ID,
+            service=self.service,
+            invoke=self.runtime.invoke,
+            lease_manager=self.lease_manager,
+        )
+
+    def _records_for(self, report):
+        from runtime.metadata import load_runtime_metadata
+
+        return [r for r in load_runtime_metadata() if r.run_id == report.scan_run_id]
+
+    def test_appends_one_record_with_p1_owned_fields(self) -> None:
+        report = self._run()
+        records = self._records_for(report)
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record.target_id, REGISTERED_TARGET_ID)
+        self.assertEqual(record.base_url, "http://127.0.0.1:3000")
+        self.assertEqual(record.source_commit, "deadbeef")
+        self.assertTrue(record.health)
+        self.assertTrue(record.readiness)
+        self.assertEqual(record.lease_run_id, report.scan_run_id)
+        self.assertIsNotNone(record.lease_expires_at)
+        # P4/P2가 아직 채울 수 없는 필드는 지어내지 않고 스키마 기본값 그대로여야 한다.
+        self.assertEqual(record.llm_endpoint_state, "unknown")
+        self.assertIsNone(record.gpu_worker)
+        self.assertEqual(record.remaining_containers, [])
+
+    def test_reset_result_true_when_verified_worker_overlay_reset_succeeds(self) -> None:
+        # FakeToolRuntime 기본 시나리오는 verified 1개 + rejected 1개 → overlay 1개 생성·정리.
+        report = self._run()
+        self.assertTrue(self._records_for(report)[0].reset_result)
+
+    def test_reset_result_none_when_no_worker_creates_overlay(self) -> None:
+        def only_rejected(*, run_id: str) -> None:
+            run = get(Run, run_id)
+            run.status = RunState.CANDIDATE_SCAN
+            save(run)
+            save(
+                Candidate(
+                    id=f"scan-cand-rejected-{uuid4().hex[:6]}",
+                    run_id=run_id,
+                    cwe="CWE-639",
+                    vuln_class="idor",
+                    attack_params={"_verdict": "rejected"},
+                )
+            )
+
+        self.runtime._on_vc_scan_access_control = only_rejected
+        report = self._run()
+        self.assertIsNone(self._records_for(report)[0].reset_result)
+
+    def test_metadata_append_failure_does_not_crash_batch(self) -> None:
+        # catalog 조회 자체가 예외를 던져도(P2 카탈로그 문제 등) 감사 배치는 완주해야 한다.
+        self.service.catalog.get.side_effect = RuntimeError("catalog unavailable")
+        report = self._run()  # 예외 전파 없이 완주
+        self.assertEqual(len(report.worker_results), 2)
+        self.assertEqual(self._records_for(report), [])  # 기록은 실패해 남지 않는다
+
+
 if __name__ == "__main__":
     unittest.main()
