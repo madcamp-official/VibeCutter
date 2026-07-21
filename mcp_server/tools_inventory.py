@@ -76,13 +76,18 @@ def _service() -> TargetRuntimeService:
 # --- 사용자 로컬 프로젝트 등록 (TEAM_CONTRACT 3.1 / P1 R1-2) ---------------------------
 
 
-def _git_state(source_path: Path) -> tuple[list[str], list[str]]:
+def _git_state(source_path: Path, *, for_closed_loop: bool = True) -> tuple[list[str], list[str]]:
     """(blockers, warnings). 사용자 프로젝트가 패치 경로를 탈 수 있는지 확인한다.
 
     **git 저장소는 선택이 아니라 전제다.** `runtime/worktree.py:43`이 대상 소스에
     `git worktree add`를 하고, 패치 apply와 6게이트 전체가 그 worktree 위에서 돈다
     (`catalog.py:234` — "run worktrees from the target app repository"). git이 아니면
     추측으로 진행하지 않고 명확한 사유로 막는다.
+
+    `for_closed_loop=True`(기본)면 **dirty worktree도 차단**한다(계약 3A-4). 실행 중인
+    서비스는 dirty 코드인데 worktree는 마지막 commit이라, 그대로 두면 **verify한 코드와
+    패치한 코드가 다르다** — 편의 문제가 아니라 정합성 결함이다. 패치를 만들지 않는
+    scan/verify 전용 조회라면 `False`로 낮춰 경고만 남긴다.
     """
     import subprocess
 
@@ -113,18 +118,37 @@ def _git_state(source_path: Path) -> tuple[list[str], list[str]]:
                 "최초 커밋을 만든 뒤 다시 등록하세요."
             )
         elif _git("status", "--porcelain").stdout.strip():
-            warnings.append(
-                "커밋되지 않은 변경이 있습니다. worktree는 커밋 상태를 기준으로 만들어지므로 "
-                "작업 중인 변경은 검사 대상에 포함되지 않습니다."
+            message = (
+                "커밋되지 않은 변경이 있습니다. worktree는 마지막 커밋을 기준으로 만들어지므로, "
+                "지금 실행 중인 서비스의 코드와 검사·패치 대상이 서로 다를 수 있습니다 "
+                "— 커밋하거나 stash한 뒤 다시 시도하세요."
             )
+            (blockers if for_closed_loop else warnings).append(message)
     except (OSError, subprocess.SubprocessError) as exc:
         blockers.append(f"git 상태를 확인하지 못했습니다: {exc}")
 
     return blockers, warnings
 
 
+def _builtin_target_ids() -> set[str]:
+    """`policies/scope.yaml`의 built-in demo target id 집합."""
+    from core.policy_engine import load_scope
+
+    return set(load_scope())
+
+
 def _build_preview(manifest, source_path: Path, *, confirmed: bool) -> RegistrationPreview:
     blockers, warnings = _git_state(source_path)
+
+    # 계약 3A-3: built-in과 id가 겹치면 조회 시 built-in이 이겨서 **사용자 프로젝트가 아닌
+    # 것이 검사된다**. 조용히 틀린 대상을 스캔하는 것보다 등록을 거부하는 편이 안전하다.
+    if manifest.id in _builtin_target_ids():
+        blockers.append(
+            f"target_id={manifest.id!r}는 built-in demo target과 겹칩니다. "
+            f"그대로 두면 이 프로젝트가 아니라 데모 target이 검사됩니다 — "
+            f"'local-{manifest.id}' 처럼 다른 id를 쓰세요."
+        )
+
     return RegistrationPreview(
         target_id=manifest.id,
         kind=getattr(manifest, "kind", "compose_project"),

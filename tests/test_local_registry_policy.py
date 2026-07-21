@@ -118,21 +118,69 @@ class GitPreconditionTests(unittest.TestCase):
         self.assertEqual(blockers, [])
         self.assertEqual(warnings, [])
 
-    def test_dirty_worktree_warns_but_does_not_block(self) -> None:
+    def _dirty_repo(self, path: Path) -> None:
+        self._git(path, "init")
+        self._git(path, "config", "user.email", "t@example.com")
+        self._git(path, "config", "user.name", "t")
+        (path / "app.py").write_text("print('hi')\n", encoding="utf-8")
+        self._git(path, "add", "-A")
+        self._git(path, "commit", "-m", "init")
+        (path / "app.py").write_text("print('changed')\n", encoding="utf-8")
+
+    def test_dirty_worktree_blocks_closed_loop(self) -> None:
+        """계약 3A-4: dirty면 verify한 코드와 패치한 코드가 달라진다 — 정합성 결함."""
         from mcp_server.tools_inventory import _git_state
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)
-            self._git(path, "init")
-            self._git(path, "config", "user.email", "t@example.com")
-            self._git(path, "config", "user.name", "t")
-            (path / "app.py").write_text("print('hi')\n", encoding="utf-8")
-            self._git(path, "add", "-A")
-            self._git(path, "commit", "-m", "init")
-            (path / "app.py").write_text("print('changed')\n", encoding="utf-8")
-            blockers, warnings = _git_state(path)
+            self._dirty_repo(path)
+            blockers, _ = _git_state(path)
+        self.assertTrue(any("커밋하거나 stash" in b for b in blockers))
+
+    def test_dirty_worktree_only_warns_for_scan_only(self) -> None:
+        """패치를 만들지 않는 조회는 경고만 — 정합성 문제가 생기지 않는다."""
+        from mcp_server.tools_inventory import _git_state
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)
+            self._dirty_repo(path)
+            blockers, warnings = _git_state(path, for_closed_loop=False)
         self.assertEqual(blockers, [])
         self.assertTrue(warnings)
+
+
+class TargetIdCollisionTests(unittest.TestCase):
+    """계약 3A-3: built-in과 id가 겹치면 등록을 거부한다."""
+
+    def _manifest(self, target_id: str):
+        from runtime.manifest import TargetManifest
+
+        return TargetManifest.model_validate({
+            "id": target_id, "display_name": "x", "adapter": "node",
+            "base_url": "http://127.0.0.1:3000",
+            "commands": {
+                "build": {"argv": ["true"]}, "start": {"argv": ["true"]},
+                "stop": {"argv": ["true"]}, "reset": {"argv": ["true"]},
+            },
+            "reset": {"command_id": "reset"},
+        })
+
+    def test_collision_with_builtin_is_blocked(self) -> None:
+        from mcp_server.tools_inventory import _build_preview
+
+        with tempfile.TemporaryDirectory() as tmp:
+            preview = _build_preview(
+                self._manifest(BUILTIN_TARGET_ID), Path(tmp), confirmed=True
+            )
+        self.assertTrue(any("built-in demo target과 겹칩니다" in b for b in preview.blockers))
+        self.assertFalse(preview.registered)
+
+    def test_distinct_id_has_no_collision_blocker(self) -> None:
+        from mcp_server.tools_inventory import _build_preview
+
+        with tempfile.TemporaryDirectory() as tmp:
+            preview = _build_preview(self._manifest("local-my-app"), Path(tmp), confirmed=False)
+        self.assertFalse(any("겹칩니다" in b for b in preview.blockers))
 
 
 if __name__ == "__main__":

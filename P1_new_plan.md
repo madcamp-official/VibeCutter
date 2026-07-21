@@ -27,30 +27,42 @@
 
 ---
 
-## P1 — 정책을 로컬 레지스트리로 (P2와 짝)
+## P1 — 정책을 로컬 레지스트리로 (P2와 짝) — ✅ **P1 몫 완료 (2026-07-21)**
 
 **의존**: P2의 `runtime/registry.py`(계약 3.1). D1 오전에 시그니처만 확정되면 **P2 구현 완료 전에도** 내 쪽을 목으로 짤 수 있다.
+→ 실제로 그렇게 진행했다. **P1 쪽은 전부 끝났고, `confirmed=True` 저장 경로만 P2 대기 중**이다.
 
-- [ ] **R1-1. `core/policy_engine.py` 이중 출처 전환**
-  - `require_target_allowed(target_id, *, registry=None)`가 ① `policies/scope.yaml`(built-in demo 20개) ② `LocalRegistry`(사용자 승인) 순으로 조회
-  - **기존 20개 경로를 깨지 않는다** — c1-05 gold가 fallback이라 필수
-  - `require_host_allowed`도 같은 이중 출처. loopback 검증은 manifest 계층에 있으므로 여기선 host 일치만
-  - 테스트: built-in만 / registry만 / 둘 다 없으면 거부 / registry의 non-loopback은 P2가 이미 막으므로 여기선 신뢰
+- [x] **R1-1. `core/policy_engine.py` 이중 출처 전환** — **완료**
+  - `require_target_allowed(target_id, *, path=, registry=)`가 ① `policies/scope.yaml`(built-in 20개) → ② 사용자 로컬 레지스트리 순으로 조회. `is_target_allowed`·`require_host_allowed`도 동일
+  - **P2의 `runtime.registry`를 import 하지 않는다** — `_ApprovedTargetLike`/`_RegistryLike` Protocol에만 의존. 레지스트리가 아직 main에 없어도 이 모듈과 테스트가 정상 동작하고, 없으면 **built-in만으로 판정하며 계속**한다(정책 게이트가 판단 자체를 못 하고 죽는 것보다 낫다)
+  - `_default_registry()` 지연 로드 + 캐시, `reset_registry_cache()`로 등록 직후 즉시 반영
+  - 두 출처를 **같은 모양의 dict**로 정규화 → `require_host_allowed`는 출처를 몰라도 된다
+  - **built-in 우선 순서 확정**: 사용자가 실수로 같은 target_id를 등록해도 팀이 체크인한 정의가 이긴다 (c1-05 gold 보호)
+  - 거부 메시지에 다음 행동을 담았다 — "자기 프로젝트라면 vc_register_local_target으로 먼저 승인하세요"
 
-- [ ] **R1-2. `vc_register_local_target` tool 신규** (`mcp_server/tools_inventory.py`)
-  ```python
-  def vc_register_local_target(
-      manifest: dict, source_path: str, confirmed: bool = False
-  ) -> RegistrationPreview | Target
-  ```
-  - `confirmed=False`: **저장하지 않고 preview 반환** — base_url, source_path, git 상태, **argv 전문(요약·생략 금지)**
-  - `confirmed=True`: `LocalRegistry.approve()` 호출 → audit log
-  - **argv 전문 표시가 git PR 리뷰를 대체하는 지점이다**(안전 불변식 2). 줄이지 않는다
-  - `vc_apply_patch(confirmed=True)`와 완전히 같은 패턴이라 새 개념이 아니다
+- [x] **R1-2. `vc_register_local_target` tool 신규** (`mcp_server/tools_inventory.py`) — **완료**
+  - 2단계 승인. `confirmed=False`(기본)면 **아무것도 저장하지 않고** `RegistrationPreview`만 반환
+  - preview에 **argv 전문**을 담는다(`{"build": ["docker","compose","build"], ...}`) — 요약·생략 없음. 이 표시가 "우리 저장소에 커밋되고 PR 리뷰됨"을 대체하는 승인 근거다(안전 불변식 2)
+  - `TargetManifest.model_validate()`를 **먼저** 통과시킨다 → loopback이 구조적으로 강제된다. 실측 확인: `https://victim.example.com` → `ValueError: base_url must be a plain http loopback URL`
+  - `_git_state()` 사전조건 검사 추가 (R1-5)
+  - `confirmed=True` 경로는 **P2의 `runtime/registry.py` 대기 중** — 없으면 blocker 메시지로 명확히 알린다(조용히 실패하지 않음)
 
-- [ ] **R1-3. 기존 `vc_register_target` 정리** — 이름과 달리 "체크인 manifest와 byte 비교"만 한다. docstring을 사실대로 고치고 built-in demo 전용임을 명시. **삭제하지 않는다**(기존 테스트·데모가 씀)
+- [x] **R1-3. 기존 `vc_register_target` docstring 정정** — **완료**. "새 target을 만들지 않는다. 체크인 manifest와 byte 단위 동일성만 확인하는 **built-in demo 전용** tool"이라고 명시하고 `vc_register_local_target`으로 안내. 삭제하지 않음
 
-- [ ] **R1-4. `tools_analysis.py` host 검사** — `require_host_allowed`가 이중 출처를 타므로 자동으로 따라온다. **테스트만 추가**(사용자 target의 verify가 통과하는지)
+- [x] **R1-4. 테스트 11건 신규** (`tests/test_local_registry_policy.py`) — **완료**
+  - 이중 출처 7건: built-in 유지 / 사용자 target 통과 / 둘 다 없으면 거부 / **id 충돌 시 built-in 승리** / host 검사 / `is_target_allowed` / 레지스트리 부재 시 degrade
+  - git 사전조건 4건: 비-git 차단 / 커밋 없음 차단 / 정상 통과 / dirty는 경고만
+  - 가짜 레지스트리를 주입해 **P2 구현 없이** P1 계약을 고정
+  - **전체 회귀 488건 통과** (기존 463 → 488)
+
+- [x] **R1-5. [신규] git 사전조건 검사** — **완료**. 계획에 없었으나 코드 훑기에서 발견해 추가
+  - `runtime/worktree.py:57`이 대상 소스에 `git worktree add --detach`를 하고 패치 apply·6게이트 전체가 그 worktree 위에서 돈다 → **사용자 프로젝트가 git repo가 아니면 패치 경로가 통째로 불가**
+  - 비-git이면 `git init && git add -A && git commit -m init` 안내와 함께 **명확한 사유로 차단**(추측으로 진행 금지). 커밋 없는 repo도 차단, dirty worktree는 경고만
+  - 확인된 좋은 점: `catalog.py:243`이 `artifact_root`를 우리 저장소 아래로 명시 지정한다 → **사용자 프로젝트 디렉터리에는 우리가 아무 파일도 만들지 않는다**
+
+### R1에서 P2에게 넘길 발견
+
+- [ ] **R1-X. `adapter` 열거형 확장 필요** — `AdapterKind`가 `spring-boot | fastapi | node | generic-docker` 넷뿐이다. 사용자 프로젝트가 여기 안 맞으면 **manifest 검증 단계에서 막힌다**. P2의 R-3(kind 추가)와 함께 검토 요청 → Discord로 전달
 
 ---
 
