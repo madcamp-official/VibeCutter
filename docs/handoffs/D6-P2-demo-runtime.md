@@ -81,6 +81,11 @@ orchestration은 변경하지 않는다.
 - camp1의 기존 `c1-05` container는 healthy이며, 프로세스 범위 일회성 secret env를 주입한
   worker-local preflight에서 `ready=True`, source lock `ready`, listening port를 확인했다.
   secret 값은 저장·출력하지 않았다. 이제 P3가 camp1에서 fresh verifier run을 발급할 수 있다.
+- 이후 P3 sanctioned fresh run에서 `app` connection refused가 발생했다. 원인은 기존 MySQL
+  volume과 새 run secret 불일치로 판단했고, P2가 CAMP-1에서 `down --volumes → build →
+  up --wait`를 동일 프로세스의 일회성 secret으로 재실행해 database/app/frontend
+  모두 Healthy 및 `/api/health` 200을 복원했다. 다음 fresh run도 secret 생성부터 volume
+  초기화까지 같은 프로세스에서 수행해야 하며, P2는 secret을 공유·저장하지 않는다.
 
 ## 결정·가정·리스크
 
