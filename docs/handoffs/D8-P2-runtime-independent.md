@@ -12,6 +12,8 @@
 - `tests/test_target_lease.py`: 충돌·소유자·만료·입력 검증
 - `runtime/catalog.py`: built-in source-lock과 user registry snapshot/source path 이중 출처
   discovery 및 user source root 분기
+- `runtime/run_overlay.py`: patched Compose의 build context와 source Dockerfile을 모두
+  run worktree로 재지정해 패치가 실제 이미지 빌드에 반영되도록 보강
 - `tests/test_catalog.py`: source-lock 없는 user target discovery/source repository 검증
 - `P2_new_plan.md`: R-1/R-6를 내부 구현 완료·통합 대기 상태로 갱신
 - `docs/CONTRACT_IMPLEMENTATION_TODO.md`: §3A 진행 상태 갱신
@@ -41,8 +43,8 @@
 
 ## 검증
 
-- `py -3.13 -m unittest tests.test_catalog tests.test_registry tests.test_target_lease`
-  - 16/16 통과
+- `py -3.13 -m unittest tests.test_run_overlay tests.test_runtime_metadata tests.test_target_lease tests.test_catalog tests.test_registry`
+  - 23/23 통과
 - snapshot과 lease primitive는 P2 runtime/catalog에 연결됨
 - lease의 P1 driver acquire/finally-release 호출과 user Compose patched-runtime 재기동은 아직 미연결
 
