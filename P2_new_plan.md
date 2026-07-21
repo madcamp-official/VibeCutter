@@ -39,13 +39,20 @@
   - 저장 위치 `~/.vibecutter/registry/` — **repo의 `.vibecutter/`(evidence.db)와 분리**
   - `manifest_sha256`은 **이미 있다** — `runtime/registration.py:13`. 새로 만들지 말 것
   - `commands_sha256`: manifest의 `commands` 전체(argv 포함)를 정규화해 해시. **argv가 바뀌면 재승인 강제**가 목적
+  - **§3A-2:** hash만 저장하지 않는다. `~/.vibecutter/registry/<target_id>/manifest.yaml`에
+    승인 당시 manifest snapshot을, `approval.yaml`에 source path·hash·승인 시각을 저장한다.
+    catalog는 사용자 원본 파일이 아니라 이 snapshot만 소비한다
+  - `allowed_hosts`는 hostname만 저장한다(예: `["127.0.0.1"]`). port는 승인된 `base_url`의
+    명시 port로만 결정한다
   - `approve()`는 **승인 여부를 판단하지 않는다.** 사용자 승인은 P1의 tool이 받고 나는 기록만 한다
   - `base_url`은 `TargetManifest` 검증기를 **반드시** 통과시킨 뒤 저장 — loopback 불변식의 집행 지점
 
 - [ ] **R-2. 사용자 프로젝트 사전조건 검사** (`registry.approve()` 안)
   - ⚠️ **git 저장소여야 한다.** `runtime/worktree.py:43`이 대상 소스에 `git worktree add`를 하고, 패치 apply·6게이트 전체가 그 위에서 돈다
   - git이 아니면 **명확한 사유로 거부**한다(추측으로 진행 금지). `git init` 안내 문구 제공
-  - 커밋되지 않은 변경이 있으면 경고 — worktree는 커밋 상태 기준
+  - **§3A-4:** closed-loop 등록/실행은 dirty worktree를 거부한다. 실행 중인 코드와
+    worktree의 마지막 commit이 달라져 verify·patch 정합성이 깨지기 때문이다
+  - patch를 만들지 않는 scan/verify 전용만 `for_closed_loop=False`로 경고 허용한다
 
 - [ ] **R-3. `TargetManifest`에 `kind` 추가** (`runtime/manifest.py`)
   - `kind: Literal["compose_project", "running_local"] = "compose_project"` (기본값이 기존 동작 = 하위호환)
@@ -59,6 +66,9 @@
   - `targets/manifests/`(built-in demo 20개) + 사용자 레지스트리를 **함께** 발견
   - ⚠️ **`catalog.py:84`의 `expected_target_ids` 결합을 풀어야 한다** — 지금은 발견된 **모든** manifest가 source-lock 엔트리를 요구한다. built-in에만 요구하도록 분리
   - ⚠️ **`catalog.py:159`의 repo 탈출 검사 교체** — 목적은 docstring대로 *"never an MCP-supplied path"*다. 레지스트리의 `source_path`는 MCP 입력이 아니라 **사용자가 대역 외로 승인한 경로**이므로, "repo 안" 대신 **"승인 기록의 source_path와 일치"**로 바꾼다. 불변식이 약해지는 게 아니라 출처가 바뀌는 것
+  - **§3A-3 방어 심층화:** built-in target과 충돌하는 registry entry는 catalog 조회에서도
+    built-in이 우선한다. 등록 단계의 충돌 거부(P1)와 함께 조용히 다른 target을 검사하는
+    일을 막는다
 
 - [ ] **R-5. `source_lock.py` / `source_bootstrap.py`** — ⚠️ **2026-07-21 03:09 합의로 방향 정정됨**
 
@@ -74,6 +84,12 @@
   - P2 몫: `external_allowlist` + `juice-shop` 엔트리를 `targets/source-lock.yaml`에 추가, source bootstrap, manifest/compose/smoke/reset 등록
   - **P1이 검증 로직을 먼저 올려야 시작 가능** → P1 W-1
   - **삭제하지 말 것**: 기존 20개의 재현성 장치다
+
+- [ ] **R-6. target별 active-run lease** (§3A-8)
+  - 고정 loopback port를 공유하므로 target당 lifecycle mutation run은 하나만 허용한다
+  - lease에는 `target_id`, 소유 `run_id`, 취득 시각, timeout을 기록한다
+  - 정상 reset/kill 시 해제하고, timeout된 lease는 명시적으로 회수한다
+  - 이 잠금은 driver 내부의 순차 candidate 처리와 별개로 여러 MCP 요청·배치를 막는다
 
 ---
 

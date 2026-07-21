@@ -87,7 +87,7 @@ class ApprovedTarget:
     target_id: str
     kind: TargetKind
     base_url: str              # loopback 검증 통과 보장 (http + localhost/127.0.0.1/::1 + 명시 port)
-    allowed_hosts: list[str]
+    allowed_hosts: list[str]     # hostname만 저장. 예: ["127.0.0.1"]
     source_path: Path          # 사용자 프로젝트 절대경로 (repo 밖 허용)
     manifest_sha256: str       # 승인 시점 manifest 내용 고정
     commands_sha256: str       # 승인 시점 argv 집합 고정  ★ 변경 시 재승인 강제
@@ -106,6 +106,9 @@ class LocalRegistry:
 
 **불변식** (P2가 `approve()` 안에서 강제, P1은 신뢰):
 - `base_url`은 loopback만 — `TargetManifest` 검증기를 통과해야만 저장된다
+- `allowed_hosts`에는 **hostname만** 저장한다. port는 목록에 넣지 않으며, 실행 목적지의
+  port는 승인된 `base_url`의 명시 port로만 결정한다. 따라서 임의 tool 입력으로 loopback의
+  다른 port를 선택할 수 없다
 - `approve()`는 **승인 여부를 판단하지 않는다**. 사용자 승인은 P1의 tool 계층이 받고, P2는 기록만 한다
 - 저장 경로는 `~/.vibecutter/registry/` — **repo의 `.vibecutter/`(evidence.db)와 섞지 않는다**
 
@@ -192,6 +195,10 @@ vc_register_local_target(manifest: dict, source_path: str, confirmed: bool = Fal
   ├─ approval.yaml     ← source_path, hashes, approved_at
 ```
 사용자가 원본 manifest 파일을 나중에 고쳐도 **실행에는 영향이 없다.** 해시 불일치는 "재승인이 필요하다"를 알리는 용도이지, 실행 대상을 바꾸는 근거가 아니다.
+
+`approval.yaml`의 `allowed_hosts`는 hostname만 가진다(예: `["127.0.0.1"]`). 실행 port는
+snapshot의 `base_url`에 고정한다. P1 정책은 host 허용 여부를 확인하고, P2 runtime은
+실제 lifecycle/health 대상이 승인된 `base_url`과 정확히 일치하는지 확인한다.
 
 ### 3A-3. `target_id` 충돌 규칙 (P1) — ⚠️ 구현 변경
 
