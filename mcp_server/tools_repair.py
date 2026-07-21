@@ -55,6 +55,7 @@ from core.db import DATA_DIR
 from core.kill_switch import check_not_paused
 from core.planner import enforce_retry_budget, patch_attempt_count
 from core.report import build_run_report, render_html
+from eval.report_export import render_sarif
 from core.state_machine import transition
 from core.trajectory import record_trajectory_step
 from mcp_server.tools_inventory import _service
@@ -721,9 +722,18 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     @audited
     def vc_export_sarif(run_id: str) -> ReportResult:
-        """SARIF 포맷으로 export한다.
+        """SARIF 2.1.0 포맷으로 export한다(W-7).
 
         `vc_generate_report`와 동일한 `core.report.build_run_report(run_id)` 데이터 소스를
-        SARIF 스키마로 변환하면 된다(P4 소유, 미배선).
+        `eval.report_export.render_sarif()`(P4 소유, 렌더링 로직·테스트 완료)로 변환해
+        `.vibecutter/runs/{run_id}/report.sarif`에 저장한다. P1은 조회·파일 쓰기 배선만
+        담당한다 — HTML(`vc_generate_report`)과 같은 데이터 소스를 쓰므로 두 export가
+        서로 다른 값을 낼 수 없다.
         """
-        raise NotImplementedError("Day3에 P4 SARIF export로 구현 — core.report.build_run_report가 입력 데이터")
+        report = build_run_report(run_id)
+        document = json.dumps(render_sarif(report), indent=2, ensure_ascii=False)
+        out_dir = DATA_DIR / "runs" / run_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        report_path = out_dir / "report.sarif"
+        report_path.write_text(document, encoding="utf-8")
+        return ReportResult(run_id=run_id, artifact_uri=f"file://{report_path}", format="sarif")

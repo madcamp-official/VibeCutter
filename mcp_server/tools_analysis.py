@@ -183,25 +183,33 @@ def _prepare_scan(run_id: str, *, tool_name: str) -> Run:
     return run
 
 
-def _rerank_fn_from_env(contexts=None):
-    """LLM candidate 재랭킹 훅을 만든다(8.4절 "모델=가설 우선순위", RQ3, D4-P4 요청).
+def _rerank_hook_from_env(contexts=None):
+    """LLM candidate 재랭킹 훅 + 관측기를 만든다(8.4절 "모델=가설 우선순위", RQ3, D4-P4 요청;
+    W-10: P4 T-1/T-2 `observed_chat_fn_from_env` 배선).
 
     endpoint 구성은 `model.endpoints`가 env에서 해석한다 — 큰 외부 모델(qwen3-235b)이
     primary(내부망→외부망), 기존 7B가 fallback인 티어 체인. 앞 tier가 답을 못 주거나
-    timeout이면 자동으로 다음 tier로 넘어간다. 쓸 endpoint가 없으면(`..._DISABLE`) `None`을
-    돌려 aggregate의 휴리스틱 정렬을 그대로 쓴다 — GPU/네트워크 없는 CI에서도 스캔이 돈다.
-    `make_rerank_fn`은 체인이 전부 실패해도 입력을 그대로 돌려주므로(비파괴) 후보를 잃지 않는다.
+    timeout이면 자동으로 다음 tier로 넘어간다. `make_rerank_fn`은 체인이 전부 실패해도
+    입력을 그대로 돌려주므로(비파괴) 후보를 잃지 않는다.
 
     `contexts`(`{candidate_id: 코드 스니펫}`)를 주면 상위 후보의 **코드 본문**이 프롬프트에
     함께 실린다(R-1). 없으면 메타만 — 인덱싱이 안 되는 SCA 후보도 그대로 재랭킹된다.
+
+    반환값은 `(rerank_fn 또는 None, outcome_fn)` 쌍이다. `outcome_fn()`은 방금 재랭킹 호출이
+    실제로 어느 tier에서 답했는지(`LlmCallOutcome`) 준다 — 쓸 endpoint가 없으면(`..._DISABLE`
+    등) `rerank_fn`은 `None`(aggregate 휴리스틱 정렬, GPU/네트워크 없는 CI에서도 스캔이 돈다)
+    이지만 `outcome_fn()`은 여전히 `LlmCallOutcome.unavailable()`을 돌려줘 "이 run은 LLM 없이
+    휴리스틱으로 돌았다"를 호출측이 trajectory에 명시적으로 남길 수 있게 한다(T-2/T-3 표본
+    무결성 — endpoint가 죽어 조용히 degrade한 run이 rag-llm 팔에 섞이면 안 된다).
     """
-    from model.endpoints import chat_fn_from_env
+    from model.endpoints import LlmCallOutcome, observed_chat_fn_from_env
     from model.serving import make_rerank_fn
 
-    chat_fn = chat_fn_from_env()
-    if chat_fn is None:
-        return None
-    return make_rerank_fn(chat_fn, contexts=contexts)
+    observed = observed_chat_fn_from_env()
+    if observed is None:
+        return None, (lambda: LlmCallOutcome.unavailable())
+    chat_fn, recorder = observed
+    return make_rerank_fn(chat_fn, contexts=contexts), recorder
 
 
 def _rag_enrich(run: Run, candidates: list[Candidate]) -> tuple[list[Candidate], dict]:
@@ -234,26 +242,33 @@ def _store_scan_candidates(
 ) -> ScanResult:
     """공통 후처리: RAG 보강 → FP reject+우선순위(`scanners.aggregate.aggregate`) → kept만 저장 → trajectory 기록.
 
-    우선순위 정렬은 `_rerank_fn_from_env()`가 만든 LLM 재랭킹 훅을 aggregate에 주입한다
+    우선순위 정렬은 `_rerank_hook_from_env()`가 만든 LLM 재랭킹 훅을 aggregate에 주입한다
     (endpoint 미설정 시 None=휴리스틱). 후보가 우선순위순으로 저장되므로, 이후 driver/Host가
     `list_by_run` 순서대로 verify하면 유력·심각한 후보부터 검증한다.
 
     RAG 보강(`_rag_enrich`)이 aggregate **앞에** 온다 — `rag:relevance` signal이 붙어야
     `priority_score`가 그걸 반영하고, 코드 스니펫이 있어야 LLM이 코드를 보고 순위를 매긴다.
 
+    **W-10(T-2)**: aggregate 직후 `outcome_fn()`(어느 tier가 답했는지/휴리스틱 degrade
+    여부)을 trajectory step `result`에 병합한다 — `model.trajectory.llm_usage_from_trajectories()`
+    가 이 `llm_used`/`tier` 키를 읽어 T-3 표본 필터(`eval.sample_filter.filter_llm_condition`)가
+    endpoint 죽어 heuristic으로 샌 run을 rag-llm 팔에서 제외할 수 있게 한다. `contracts`
+    schema는 건드리지 않는다(자유 형식 `result` dict에만 추가).
+
     **알려진 한계(D2-P4.md 요청 (b) 결정)**: 이 tool 자기 스캐너 결과만 aggregate하므로
     SAST·SCA 교차 중복 제거는 안 된다 — 두 tool이 독립 호출되기 때문. 스캔 완료 시점을
     묶는 별도 단계가 생기면 그때 cross-scanner aggregate로 바꾼다.
     """
     candidates, contexts = _rag_enrich(run, candidates)
-    result = aggregate(candidates, rerank_fn=_rerank_fn_from_env(contexts))
+    rerank_fn, llm_outcome = _rerank_hook_from_env(contexts)
+    result = aggregate(candidates, rerank_fn=rerank_fn)
     for candidate in result.kept:
         save(candidate)
     record_trajectory_step(
         run.id,
         state=run.status,
         action={"tool": tool},
-        result=result.summary,
+        result={**result.summary, **llm_outcome().as_metadata()},
         next_state=run.status,
     )
     return ScanResult(run_id=run.id, tool=tool, candidate_ids=[c.id for c in result.kept])

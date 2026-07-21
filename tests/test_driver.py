@@ -24,6 +24,7 @@ from core.evidence_store import (
     update_finding_status,
     write_artifact,
 )
+from core.trajectory import record_trajectory_step
 from mcp_server.driver import run_target_audit
 from runtime.target_lease import TargetBusyError, TargetLeaseManager
 
@@ -387,6 +388,54 @@ class RuntimeMetadataWiringTests(unittest.TestCase):
         report = self._run()  # 예외 전파 없이 완주
         self.assertEqual(len(report.worker_results), 2)
         self.assertEqual(self._records_for(report), [])  # 기록은 실패해 남지 않는다
+
+
+class LlmEndpointStateForTests(unittest.TestCase):
+    """W-10: `_llm_endpoint_state_for`가 T-3(`eval.sample_filter`)와 같은 소스
+    (`model.trajectory.llm_usage_from_trajectories`)로 up/down/unknown을 판독하는지 고정한다."""
+
+    def test_unknown_when_no_trajectory_file(self) -> None:
+        from mcp_server.driver import _llm_endpoint_state_for
+
+        self.assertEqual(_llm_endpoint_state_for(f"run-{uuid4().hex[:12]}"), "unknown")
+
+    def test_up_when_rerank_step_recorded_llm_used(self) -> None:
+        from mcp_server.driver import _llm_endpoint_state_for
+
+        run_id = f"run-{uuid4().hex[:12]}"
+        record_trajectory_step(
+            run_id, state=RunState.CANDIDATE_SCAN,
+            action={"tool": "vc_run_sast"},
+            result={"kept": 1, "llm_used": True, "tier": "primary", "endpoint_health": "up"},
+            next_state=RunState.CANDIDATE_SCAN,
+        )
+        self.assertEqual(_llm_endpoint_state_for(run_id), "up")
+
+    def test_down_when_rerank_step_recorded_unavailable(self) -> None:
+        from mcp_server.driver import _llm_endpoint_state_for
+
+        run_id = f"run-{uuid4().hex[:12]}"
+        record_trajectory_step(
+            run_id, state=RunState.CANDIDATE_SCAN,
+            action={"tool": "vc_run_sast"},
+            result={"kept": 1, "llm_used": False, "tier": "none", "endpoint_health": "down"},
+            next_state=RunState.CANDIDATE_SCAN,
+        )
+        self.assertEqual(_llm_endpoint_state_for(run_id), "down")
+
+    def test_unknown_when_trajectory_has_no_llm_metadata_steps(self) -> None:
+        """이 run에 trajectory는 있지만 llm 메타 없는 스텝뿐이면(예: 스캐너가 전부 실패해
+        _store_scan_candidates까지 못 갔을 때) unknown — degrade를 지어내지 않는다."""
+        from mcp_server.driver import _llm_endpoint_state_for
+
+        run_id = f"run-{uuid4().hex[:12]}"
+        record_trajectory_step(
+            run_id, state=RunState.READY,
+            action={"tool": "vc_build_target"},
+            result={"ok": True},
+            next_state=RunState.READY,
+        )
+        self.assertEqual(_llm_endpoint_state_for(run_id), "unknown")
 
 
 if __name__ == "__main__":

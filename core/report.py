@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from contracts.schemas import Finding, Observation, Patch, Validation
 from core.evidence_store import get, list_by_run
+from core.redaction import redact
 
 
 class FindingReportEntry(BaseModel):
@@ -73,7 +74,16 @@ _GATE_LABELS = (
 
 
 def _esc(value: object) -> str:
-    return html.escape("" if value is None else str(value))
+    """모든 렌더링 값이 거치는 단일 지점 — 여기서 redaction 후 HTML escape한다(§3A-10).
+
+    `_render_finding`/`render_html`의 모든 동적 값(특히 `patch.diff`, `finding.impact`,
+    `root_cause.rationale`처럼 자유 텍스트인 필드)이 예외 없이 `_esc()`를 거치므로,
+    `evidence_store.write_artifact()`/prompt 조립과 같은 원칙으로 egress 경계 한 곳에서
+    redaction을 걸면 개별 호출부마다 잊고 빠뜨릴 여지가 없다. HTML escape보다 먼저
+    적용한다 — escape 후 문자열은 `&`/`<` 등이 엔티티로 바뀌어 redaction 정규식이
+    원문과 다르게 매치될 수 있다.
+    """
+    return html.escape(redact("" if value is None else str(value)))
 
 
 def _gate_cell(value: object) -> str:
