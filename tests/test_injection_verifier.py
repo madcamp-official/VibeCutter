@@ -37,6 +37,20 @@ class InjectionOracleTests(unittest.TestCase):
         verified, _ = injection.injection_oracle(200, "a" * 20, 200, "")
         self.assertFalse(verified)
 
+    def test_juice_shop_sqli_demo_pattern(self):
+        # 데모 2 회귀 잠금 — J-2 실측(Juice Shop GET /rest/products/search?q=):
+        # baseline apple=631B, true(OR 1=1)=18662B, false(AND 1=2)=30B, status 전부 200.
+        # _MIN_DELTA 등 변경이 이 데모 verify 케이스를 깨면 여기서 실패한다.
+        verified, reason = injection.injection_oracle(200, "x" * 18662, 200, "x" * 30, baseline_variance=0)
+        self.assertTrue(verified)  # 취약: verified
+        self.assertIn("CWE-89", reason)
+        # 검색 응답이 요청마다 500B 흔들려도(노이즈) verified 유지 (18632 >> 임계 1048)
+        verified_noise, _ = injection.injection_oracle(200, "x" * 18662, 200, "x" * 30, baseline_variance=500)
+        self.assertTrue(verified_noise)
+        # 패치(파라미터화) 후 true≈false → attack 게이트 통과(verified=False)
+        verified_patched, _ = injection.injection_oracle(200, "x" * 631, 200, "x" * 631)
+        self.assertFalse(verified_patched)
+
     def test_natural_variance_suppresses_false_positive(self):
         # 하드닝: 참-거짓 차이 120(옛 임계 48이면 탐지)이라도, 엔드포인트 자연 변동이 120이면
         # 노이즈 바닥(48 + 2×120)에 못 미쳐 오탐 안 함 — 타임스탬프/nonce/페이지네이션 방어.
