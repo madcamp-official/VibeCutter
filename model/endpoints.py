@@ -28,7 +28,7 @@ env (모두 선택 — 없으면 아래 기본값):
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Mapping, Optional, Sequence
 
 from model.serving import ChatFn, liveness_check, make_chained_chat_fn, openai_chat_fn
@@ -121,9 +121,21 @@ def resolve_tiers(env: Mapping[str, str]) -> list[Endpoint]:
     return tiers
 
 
+def _with_max_tokens(tiers: Sequence[Endpoint], max_tokens: Optional[int]) -> list[Endpoint]:
+    """override 가 주어지면 모든 tier 의 `max_tokens` 를 그것으로 교체한다.
+
+    rerank 는 인덱스 나열이면 충분해 env 기본(512)을 쓰지만, 패치 합성은 diff 본문에
+    (qwen3 는 `<think>` 사고까지) 더 많은 토큰이 필요하다. 그 용도에서 큰 예산을 주입한다.
+    """
+    if max_tokens is None:
+        return list(tiers)
+    return [replace(t, max_tokens=max_tokens) for t in tiers]
+
+
 def chat_fn_from_env(
     env: Optional[Mapping[str, str]] = None, *,
     precheck: bool = True, precheck_timeout: float = 3.0,
+    max_tokens: Optional[int] = None,
 ) -> Optional[ChatFn]:
     """env 로 구성한 티어 체인 ChatFn. 쓸 endpoint 가 없으면 None.
 
@@ -132,10 +144,13 @@ def chat_fn_from_env(
     primary timeout(600s)만큼 통째로 멈춘다 — 3초 probe 한 번이 그걸 막는다. 살아있는 게
     하나도 없으면 None 을 돌려 호출측이 휴리스틱으로 진행하게 한다.
 
+    `max_tokens` override(선택): 주어지면 모든 tier 의 응답 토큰 상한을 그것으로 바꾼다.
+    패치 합성처럼 rerank 기본(512)보다 긴 출력이 필요할 때 쓴다(`model.patch_client`).
+
     체인 자체가 호출 실패를 다음 tier 로 흘려보내므로, probe 이후에 primary 가 느려지거나
     죽어도 fallback 은 그대로 동작한다.
     """
-    tiers = resolve_tiers(os.environ if env is None else env)
+    tiers = _with_max_tokens(resolve_tiers(os.environ if env is None else env), max_tokens)
     if precheck:
         tiers = [t for t in tiers if liveness_check(t.base_url, timeout=precheck_timeout)]
     if not tiers:
