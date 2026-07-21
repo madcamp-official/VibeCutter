@@ -45,7 +45,7 @@ target 등록 → build/start/health → scan → candidate
 | CAMP-1 c1-05 | 복구·건강 | fresh volume + 같은 실행의 secret 생성 규칙으로 DB/app/frontend healthy 복구 |
 | 대형 API/fallback | 배선 완료 | primary/fallback endpoint tier와 health probe가 main에 통합됨 |
 | LLM patch synthesis | 통합 중 | P3 adapter와 P1/P4의 호출·문맥 배선이 진행 중 |
-| SQLi 일반화 demo | manifest 준비 | OWASP Juice Shop v17.3.0 pinned source-lock·external allowlist·loopback Compose·read-only smoke manifest 등록 완료. 실제 bootstrap/build/health/reset은 Docker 실행 시 검증 필요 |
+| SQLi 일반화 demo | runtime 부분 검증 | OWASP Juice Shop v17.3.0 pinned source bootstrap·Compose build·start/reset 통과. Windows Docker Desktop `internal: true` published loopback은 host에서 timeout되어 health/smoke 운영 Linux 재검증 대기 |
 
 `c1-05`의 gold 결과와 `c2-04`의 reject 결과는 이미 발표·평가의 핵심 근거가 된다. 단, 그 결과는 P3의 로컬 실행 기록이므로 CAMP-1의 새 run과 혼동하지 않는다.
 

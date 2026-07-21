@@ -62,6 +62,7 @@ class SourceBootstrapTests(unittest.TestCase):
         self.commands.append(list(argv))
         if "clone" in argv:
             self.assertIn("protocol.file.allow=never", argv)
+            self.assertIn("core.longpaths=true", argv)
             checkout = Path(argv[-1])
             result = subprocess.run(
                 [

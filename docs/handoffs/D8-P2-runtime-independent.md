@@ -1,7 +1,7 @@
 # D8 / P2 Handoff
 
 ## 상태
-진행 중 — P2 runtime primitive와 P1 orchestration lease 배선 완료, P4 T-2/P3 J-3 실측 대기
+진행 중 — P2 runtime primitive와 P1 orchestration lease 배선 완료. Juice Shop source/build/reset은 통과했으나 Windows Docker Desktop의 `internal: true` 네트워크에서 host health/smoke가 timeout되어 운영 Linux 재검증 대기
 
 ## 변경 파일
 
@@ -18,6 +18,8 @@
   `targets/compose/juice-shop.yaml`: P3 SQLi 계약용 Juice Shop pinned source와
   loopback/read-only smoke runtime 등록
 - `tools/juice_shop_smoke.py`: 고정 loopback search endpoint의 비파괴 regression smoke
+- `runtime/source_bootstrap.py`: Windows 긴 경로 checkout 오판을 막기 위한 `core.longpaths=true` clone/checkout 옵션
+- `targets/dockerfiles/juice-shop.Dockerfile`: pinned upstream Dockerfile의 EOL Buster base를 Bookworm으로 치환한 빌드 호환 overlay
 - `tests/test_catalog.py`: source-lock 없는 user target discovery/source repository 검증
 - `P2_new_plan.md`: R-1/R-6를 내부 구현 완료·통합 대기 상태로 갱신
 - `docs/CONTRACT_IMPLEMENTATION_TODO.md`: §3A 진행 상태 갱신
@@ -51,6 +53,10 @@
   - 23/23 통과
 - snapshot과 lease primitive는 P2 runtime/catalog에 연결됨
 - lease의 P1 driver acquire/finally-release 호출과 user Compose patched-runtime 재기동은 아직 미연결
+- pinned source bootstrap: `ready`, revision `1867b926c5f50e4e692dc9c8f61821413cebe0cd`
+- `docker compose ... build`: 통과. upstream Buster mirror EOL로 Bookworm overlay 필요
+- lifecycle `start`와 `reset(approved=True)`: 통과, reset 후 Juice Shop container/network 잔여 없음
+- lifecycle `health`/`search_smoke`: Windows Docker Desktop에서 `internal: true` network의 published loopback port가 host에서 연결 거부되어 timeout. 동일 image를 default bridge로 직접 실행하면 search HTTP 200으로 앱 자체 기동은 확인
 
 ## 다른 역할에 필요한 사항
 

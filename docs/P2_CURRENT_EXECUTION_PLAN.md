@@ -28,7 +28,7 @@ P2가 하지 않는 일은 다음과 같다.
 - **c1-05**: IDOR gold. self-signup/bearer 방식이라 별도 fixture 불필요. P3가 공격마다 ephemeral 계정을 만든다.
 - **c2-04**: IDOR true-negative. `PUT /vocabs/{id}/description`, 관측 `/vocabs/?owner_id={owner}`, rollback은 target reset. fixture는 승인된 `prepare_idor_fixture`만 사용한다.
 - **c3-09**: holdout/clean-room 재현용이다.
-- **Juice Shop SQLi 후보**: `bkimminich/juice-shop:v17.3.0`, source revision `1867b926c5f50e4e692dc9c8f61821413cebe0cd`를 후보로 검증했다. loopback health와 정상/boolean-differential search는 확인했으며, regression은 고정 Docker image의 health + 정상 search smoke를 사용한다.
+- **Juice Shop SQLi 후보**: `bkimminich/juice-shop:v17.3.0`, source revision `1867b926c5f50e4e692dc9c8f61821413cebe0cd`의 source bootstrap/build/start/reset을 통과했다. Windows Docker Desktop의 `internal: true` published loopback은 host에서 timeout되어 health/smoke는 운영 Linux 재검증이 필요하다.
 
 ## 3. 운영 계약
 
@@ -70,7 +70,7 @@ LLM health 실패·fallback·잔여 리소스가 확인된 run은 `FIXED` 통계
 
 1. **P3 c1-05 fresh run 보호**: P3가 CAMP-1 closed-loop를 실행하는 동안 14006/14007과 baseline을 건드리지 않는다. P3 요청 시에만 사전 합의된 reset/restore를 수행한다.
 2. **P1 source-lock 병합 완료**: external repository는 체크인된 `external_allowlist`에 정확히 일치하는 URL만 허용한다. 무제한 clone은 허용하지 않는다.
-3. **Juice Shop runtime 검증**: `juice-shop` pinned managed checkout bootstrap → manifest/Compose → loopback health → normal-search smoke → reset/teardown을 Docker 가능한 환경에서 수행한다. 실제 source checkout은 `.vibecutter/targets/sources/`에 두고 Git에는 source identity만 남긴다.
+3. **Juice Shop runtime 검증**: source bootstrap → Compose build/start/reset은 완료했다. Windows Docker Desktop의 `internal: true` 네트워크 published loopback이 host에서 timeout되어 health/smoke는 운영 Linux에서 재검증한다. 실제 source checkout은 `.vibecutter/targets/sources/`에 두고 Git에는 source identity만 남긴다.
 4. **P4 T-2 배선 확인**: P4의 `observed_chat_fn`/recorder가 rerank trajectory `result`에 들어가도록 P1이 main에 연결한 뒤, LLM 사용 여부가 기록되는지 확인한다.
 5. **P3 J-3 실행 지원**: P3가 Juice Shop SQLi verify → LLM patch → 6-gate를 수행할 때 target lease와 fixed port를 보호한다.
 6. **runtime metadata attach**: P3가 fresh `run_id`와 evidence 결과를 주면 source revision/readiness/reset/잔여 리소스/LLM 상태를 기록한다.

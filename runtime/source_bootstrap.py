@@ -109,6 +109,8 @@ class TargetSourceBootstrapper:
                     "git",
                     "-c",
                     "protocol.file.allow=never",
+                    "-c",
+                    "core.longpaths=true",
                     "clone",
                     "--no-checkout",
                     entry.repository,
@@ -121,7 +123,16 @@ class TargetSourceBootstrapper:
                     f"source clone failed for target {target_id}"
                 )
             checkout_result = self._run_git(
-                ["git", "-C", str(checkout), "checkout", "--detach", entry.revision],
+                [
+                    "git",
+                    "-c",
+                    "core.longpaths=true",
+                    "-C",
+                    str(checkout),
+                    "checkout",
+                    "--detach",
+                    entry.revision,
+                ],
                 300,
             )
             if checkout_result.returncode != 0:

@@ -2,7 +2,7 @@ services:
   juice-shop:
     build:
       context: ../../.vibecutter/targets/sources/juice-shop
-      dockerfile: Dockerfile
+      dockerfile: ../../../../targets/dockerfiles/juice-shop.Dockerfile
     ports:
       - "127.0.0.1:14020:3000"
     networks:
