@@ -197,6 +197,50 @@ class LocalizeSastFallbackTests(unittest.TestCase):
         self.assertIn("SAST가 지목한 위치", rc.rationale)
 
 
+class LocalizeVulnClassReasonTests(unittest.TestCase):
+    """rationale 근본 원인 서술이 CWE(취약점 클래스)별로 갈리는지 — LLM 합성기가 근거로 소비.
+
+    IDOR 전용 문구를 3군 전체에 쓰면 XSS/SQLi에서 모델이 소유권 가드를 만들어 attack 게이트가
+    계속 reject한다(D6 LLM-patch 확장 대응).
+    """
+
+    def _finding_cwe(self, cwe: str, endpoint: str, sast: list[str] | None = None) -> Finding:
+        return Finding(
+            id="f", run_id="r", title="t", cwe=cwe,
+            affected_endpoint=endpoint, source_symbols=sast or [],
+        )
+
+    def test_idor_reason_unchanged(self) -> None:
+        finding = self._finding_cwe("CWE-639", "GET /orders/{id}")
+        routes = [_route("GET", "/orders/{id}", "OrderController.get", "src/OrderController.java:5")]
+        with patch("repair.locator.extract_routes", return_value=routes):
+            rc = localize(finding, source_root="/nonexistent")
+        self.assertIn("소유권/권한", rc.rationale)
+
+    def test_xss_reason_is_output_encoding_not_ownership(self) -> None:
+        finding = self._finding_cwe("CWE-79", "POST /comments")
+        routes = [_route("POST", "/comments", "CommentController.add", "src/CommentController.java:8")]
+        with patch("repair.locator.extract_routes", return_value=routes):
+            rc = localize(finding, source_root="/nonexistent")
+        self.assertIn("이스케이프/인코딩", rc.rationale)
+        self.assertNotIn("소유권/권한", rc.rationale)
+
+    def test_sqli_reason_is_parameterization(self) -> None:
+        finding = self._finding_cwe("CWE-89", "GET /search")
+        routes = [_route("GET", "/search", "SearchController.q", "src/SearchController.java:3")]
+        with patch("repair.locator.extract_routes", return_value=routes):
+            rc = localize(finding, source_root="/nonexistent")
+        self.assertIn("파라미터", rc.rationale)
+        self.assertNotIn("소유권/권한", rc.rationale)
+
+    def test_sast_fallback_carries_class_reason(self) -> None:
+        finding = self._finding_cwe("CWE-79", "POST /no/match", ["app/render.py:42"])
+        with patch("repair.locator.extract_routes", return_value=[]):
+            rc = localize(finding, source_root="/nonexistent")
+        self.assertIn("이스케이프/인코딩", rc.rationale)
+        self.assertIn("SAST가 지목한 위치", rc.rationale)  # 기존 마커 보존
+
+
 class LocalizeCodeIndexFallbackTests(unittest.TestCase):
     """route/SAST 모두 실패 → P4 code_index 폴백. 프론트엔드 후보는 건너뛰고 백엔드만 채택."""
 
