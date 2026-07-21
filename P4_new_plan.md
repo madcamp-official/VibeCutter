@@ -20,15 +20,9 @@
 
 - [ ] **C-1. P2의 Cloudflare endpoint 연결** — G-3으로 URL을 받으면 `.env`의 `VIBECUTTER_LLM_ENDPOINTS`만 바꾸면 된다. 티어 체인(235B → 7B fallback)·`<think>` 제거·600초 timeout은 이미 `model/endpoints.py`에 있다
 - [ ] **C-2. `python -m model.endpoints`가 `[UP]`을 보이는지 확인** — 이게 초록이 되는 순간이 이번 스프린트의 분기점이다
-- [ ] **C-3. `model/patch_client.py` 신규** — 계약 3.3
-  ```python
-  def build_patch_model_client() -> Optional[PatchModelClient]:
-      """chat_fn_from_env() 위 얇은 래퍼. prompt 문자열 → messages 1개 → diff 포함 응답.
-      endpoint 불가 시 None (P3 어댑터가 no-op → template-only degrade)."""
-  ```
+- [x] **C-3. `model/patch_client.py` 신규** — 계약 3.3 ✅ **완료·커밋(`379ce8c`… 실제 patch_client는 `935e362`)**. `build_patch_model_client()` + `_ChatPatchClient`, max_tokens 2048(>512). P1 배선 확인됨: `tools_repair.py:418 synthesize_fn=make_llm_synthesizer(_get_llm_client(), context_provider=_code_context_for)`
   - P3의 `PatchModelClient` 프로토콜은 `synthesize_patch(prompt: str) -> str` 하나뿐이다. **어댑터를 새로 짜지 않는다** — P3가 이미 만들었다(`a189c17`)
-  - 패치 합성은 rerank보다 출력이 길다. `max_tokens`를 rerank 기본값(512)보다 크게 잡을 것
-- [ ] **C-4. P1에게 "client 준비됨" 공지** — P1의 L-1/L-2 배선이 이걸 기다린다
+- [x] **C-4. P1에게 "client 준비됨" 공지** ✅ 공지함 → P1이 배선 #7 완료
 
 ---
 
@@ -36,10 +30,11 @@
 
 터널/endpoint가 죽은 채로 돈 run이 ablation 표본에 섞이면 **측정이 통째로 무의미해진다.** 내가 이미 D5에 지적한 문제이기도 하다("health/readiness가 false였던 run은 비교 표본에서 빼야 한다").
 
-- [ ] **T-1. `make_chained_chat_fn(on_fallback=)` 훅 활용** — 이미 시그니처가 있다. 어느 tier가 응답했는지 기록
-- [ ] **T-2. run 메타데이터에 남기기** — `llm_used`(bool), `tier`(primary/fallback/none), `endpoint_health`
-  ⚠️ **`contracts/schemas.py`는 D1 오전 이후 freeze**다. 스키마 필드를 더하지 말고 **trajectory step의 `result` dict**에 담는다(추가 계약 불필요)
-- [ ] **T-3. `eval`에서 이 값으로 표본을 거른다** — `llm_used=False`인 run은 LLM 조건 표본에서 제외
+- [x] **T-1. `make_chained_chat_fn(on_fallback=)` 훅 활용** ✅ **완료·커밋(`379ce8c`)**. `make_observed_chain`/`observed_chat_fn_from_env`/`LlmCallOutcome`. 실패 카운트로 답한 tier 복원. 테스트 19/19
+- [~] **T-2. run 메타데이터에 남기기** — `llm_used`/`tier`/`endpoint_health` (result dict, freeze 우회)
+  - ✅ **P4 판독부 완료**: `LlmCallOutcome.as_metadata()` + `llm_usage_from_trajectories()`(`379ce8c`, 테스트 13/13)
+  - ⚠️ **P1 실기록 배선 미확인**: rerank(`tools_analysis.py`)가 아직 `chat_fn_from_env()`(관측 안 됨)를 씀. `observed_chat_fn_from_env()`로 바꿔 `as_metadata()`를 trajectory result에 넣어야 end-to-end. **P1에 확인 요청 필요**(Discord claim은 코드에 안 보임)
+- [x] **T-3. `eval`에서 이 값으로 표본을 거른다** ✅ **완료·커밋(`379ce8c`)**. `eval/sample_filter.py`(`filter_llm_condition`/`llm_used_map`), 보수적 all 정책. 테스트 7/7
 
 ---
 
@@ -47,10 +42,9 @@
 
 `origin/rag`(c8e48f8)에 배선 완료. main 병합 후 다음을 개선한다.
 
-- [ ] **G-1. idor sink 어휘 변별력** — 실측: `find/get/where/user/id`가 너무 일반적이라 청크의 **44%가 relevance 0.67 이상**을 받는다(injection 0.9%, xss 2.6%는 정상). 우선순위 신호로 쓰려면 순위가 갈려야 한다
-  - `authorize/permission/owner` 쪽에 가중치를 주거나, `CodeIndex._idf`(이미 계산돼 있다)로 흔한 토큰을 깎는다
+- [x] **G-1. idor sink 어휘 변별력** ✅ **완료**. `rag_enrich._relevance`를 매칭 개수 → **가중 합**으로 변경. 범용 CRUD 토큰(find/get/where/user/id=0.4) 깎고 접근제어 토큰(owner/authorize/permission=1.2) 올림. 범용만 있는 청크 1.0→0.67로 하락, 접근제어 청크는 1.0 유지 → 순위 갈림. **가중 없는 injection/xss는 기존과 동일**(회귀 방지 테스트 포함). rag_enrich 12/12, aggregate 9/9, surface_idor 5/5
 - [ ] **G-2. 인덱스 캐시**(선택) — `CodeIndex.build`가 2806 chunks에 0.6초. 급하진 않지만 scan tool 3개 + `repair.locator`가 run당 4~5회 빌드한다. 캐시 키는 **경로+mtime** — 패치 적용 후 worktree는 소스가 바뀌므로 경로만으로는 stale해진다
-- [ ] **G-3. P3와 컨텍스트 빌더 공유 확인** — `code_context()`가 P3의 `build_prompt`에도 쓰이는지. 계약 3.4
+- [x] **G-3. P3와 컨텍스트 빌더 공유 확인** ✅ **코드 확인 완료**. `tools_repair.py:_code_context_for`(P1)가 내 `rag_enrich.code_context()`를 `make_llm_synthesizer(context_provider=...)`(P3, `llm_synth.py:203/221`)에 배선 → rerank와 패치 합성이 같은 스니펫 생성기 공유. 조치 불필요
 
 ---
 
@@ -63,16 +57,16 @@
 - [ ] **E-1. ablation 2회 주행** — `--label heuristic`(`VIBECUTTER_LLM_DISABLE=1`) vs `--label rag-llm`
   - 하네스는 **코드 변경 없이 재사용된다** — `eval/run_baseline.py`가 `--label`로 임의 두 산출물을 비교
   - 벤치마크 정답: `datasets/inventory_benchmark.yaml`
-- [ ] **E-2. `eval/compare.py` 문구 정리** — `compare(base, full)`은 순수 함수라 **로직은 라벨 무관**이다. `base`/`full`이라는 **이름과 docstring만** fine-tuned 전제라 문구만 고친다(동작 영향 없음)
-- [ ] **E-3. `mcp_server/tools_analysis.py:187`의 "RQ3" 주석** — P1 파일이므로 **내가 고치지 않고** P1에게 요청
-- [ ] **E-4. 학습 경로는 삭제하지 않는다** — `model/train_lora.py`, `export_training_dataset()`, `to_sft_sample()`. trajectory 기록은 감사·리포트에 계속 쓰이고, "구현했으나 데이터 부족으로 접었다"가 발표 근거가 된다
+- [x] **E-2. `eval/compare.py` 문구 정리** ✅ **완료**. module docstring·CLI help의 fine-tuned/QLoRA 전제를 ablation(base=heuristic vs full=rag-llm)으로 교체. 로직·파라미터명 무변경, test_compare 4/4 그대로
+- [x] **E-3. `mcp_server/tools_analysis.py:187`의 "RQ3" 주석** — 확인 결과 현재 주석("모델=가설 우선순위, RQ3")은 **새 RQ3와 정합** → 폐기된 LoRA-RQ3 참조 아님. **조치 불필요**(P1 요청 취소)
+- [x] **E-4. 학습 경로는 삭제하지 않는다** ✅ 준수 — `train_lora.py`·`export_training_dataset()`·`to_sft_sample()` 보존. "구현했으나 데이터 부족으로 접음"이 발표 근거
 
 ---
 
 ## P4 — SARIF (P1과 짝)
 
-- [ ] **R-1. `eval/report_export.py`의 `render_sarif`는 이미 동작한다** — P3가 real evidence(`run-897ad65c686f`)로 검증했고 SARIF 2.1.0 valid, CWE-639 result 1개 확인
-- [ ] **R-2. tool 배선은 P1이 한다** — `vc_export_sarif`가 `NotImplementedError`인 건 `mcp_server/tools_repair.py`(P1 소유). 렌더러는 내 것, 배선은 P1. **내가 그 파일을 고치지 않는다**
+- [x] **R-1. `eval/report_export.py`의 `render_sarif`는 이미 동작한다** ✅ 확인 완료(SARIF 2.1.0 valid). 내 렌더러 쪽 조치 없음
+- [ ] **R-2. tool 배선은 P1이 한다** — `vc_export_sarif` 배선. 렌더러는 내 것, 배선은 P1. **P1 대기**(P1의 `vc_export_patch`는 됐으나 SARIF export 배선은 미확인)
 
 ---
 
