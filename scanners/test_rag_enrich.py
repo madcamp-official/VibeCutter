@@ -7,7 +7,7 @@ from pathlib import Path
 from contracts.schemas import Candidate
 from model.code_index import CodeIndex
 from scanners.aggregate import priority_score
-from scanners.rag_enrich import enrich, rag_relevance
+from scanners.rag_enrich import code_context, enrich, has_indexable_location, rag_relevance
 
 REPO = Path(__file__).parent.parent / "model" / "testdata" / "sample_repo"
 
@@ -68,6 +68,43 @@ def test_rag_relevance_raises_priority() -> None:
     base = _cand("app/users.py:5", "injection")
     enriched = enrich([base], idx)[0]
     assert priority_score(enriched) > priority_score(base)   # RAG 보너스로 상승
+
+
+def test_code_context_returns_numbered_snippet_around_line() -> None:
+    idx = _index()
+    ctx = code_context([_cand("app/users.py:5", "injection")], idx, radius=2)
+    snippet = ctx["c1"]
+    # 파일 안 절대 줄번호가 붙고, 지정 줄이 포함되며, radius 만큼만 나온다.
+    assert "    5 |" in snippet
+    assert len(snippet.splitlines()) <= 5           # 5 ± 2
+    assert "def get_user_by_id" in snippet or "SELECT" in snippet.upper()
+
+
+def test_code_context_skips_candidates_without_location() -> None:
+    idx = _index()
+    # 위치가 없거나 인덱스에 없는 후보는 매핑에서 그냥 빠진다(비파괴).
+    ctx = code_context(
+        [_cand("app/users.py:5", "injection", cid="ok"),
+         _cand("nonexistent.py:9", "injection", cid="miss")],
+        idx,
+    )
+    assert "ok" in ctx and "miss" not in ctx
+
+
+def test_code_context_clamps_at_file_start() -> None:
+    # 파일 첫 줄 근처면 radius 가 음수 인덱스로 새지 않아야 한다.
+    idx = _index()
+    snippet = code_context([_cand("app/users.py:1", "injection")], idx, radius=10)["c1"]
+    assert snippet.splitlines()[0].strip().startswith("1 |")
+
+
+def test_has_indexable_location_gates_index_build() -> None:
+    # SCA 후보는 `파일:줄`이 아니라 전부 걸러진다 → 인덱스를 만들 이유가 없다.
+    sca = Candidate(id="s1", run_id="r", source_symbols=["pkg:npm/lodash@4.17.20"],
+                    confidence=0.5, signals=["sca:osv"])
+    assert has_indexable_location([sca]) is False
+    assert has_indexable_location([sca, _cand("app/users.py:5", "injection")]) is True
+    assert has_indexable_location([]) is False
 
 
 def _run() -> None:

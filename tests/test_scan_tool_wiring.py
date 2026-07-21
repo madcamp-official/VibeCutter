@@ -29,6 +29,13 @@ def _run(target_id: str = REGISTERED_TARGET_ID, status: RunState = RunState.MAPP
     return run
 
 
+def _candidate(run_id: str, loc: str) -> Candidate:
+    """RAG 배선 테스트용 최소 candidate. `loc`이 `파일:줄`이면 인덱싱 대상이다."""
+    return Candidate(id=f"cand-{uuid4().hex[:8]}", run_id=run_id, confidence=0.5,
+                     vuln_class="injection", cwe="CWE-89", source_symbols=[loc],
+                     signals=["focus:injection", "severity:ERROR"])
+
+
 class PrepareScanTests(unittest.TestCase):
     def test_rejects_unregistered_target(self) -> None:
         run = _run(target_id="not-in-scope-yaml")
@@ -165,6 +172,48 @@ class RerankHookTests(unittest.TestCase):
 
         with patch("model.endpoints.liveness_check", return_value=True):
             self.assertTrue(callable(_rerank_fn_from_env()))
+
+    def test_rag_enrich_is_nondestructive_when_index_fails(self) -> None:
+        """RAG는 보정이지 필수 경로가 아니다 — 인덱싱이 깨져도 후보를 그대로 돌려준다."""
+        from mcp_server.tools_analysis import _rag_enrich
+
+        run = _run(status=RunState.CANDIDATE_SCAN)
+        cands = [_candidate(run.id, "app/users.py:5")]
+        with patch("model.code_index.CodeIndex.build", side_effect=OSError("no source")):
+            out, contexts = _rag_enrich(run, cands)
+        self.assertEqual(out, cands)
+        self.assertEqual(contexts, {})
+
+    def test_rag_enrich_skips_index_build_without_locations(self) -> None:
+        """SCA 후보만 있으면 소스 트리를 아예 훑지 않는다(vc_run_sca 낭비 방지)."""
+        from mcp_server.tools_analysis import _rag_enrich
+
+        run = _run(status=RunState.CANDIDATE_SCAN)
+        sca = _candidate(run.id, "pkg:npm/lodash@4.17.20")
+        with patch("model.code_index.CodeIndex.build") as mock_build:
+            out, contexts = _rag_enrich(run, [sca])
+        mock_build.assert_not_called()
+        self.assertEqual(out, [sca])
+        self.assertEqual(contexts, {})
+
+    def test_store_scan_candidates_enriches_before_aggregate(self) -> None:
+        """RAG 보강이 aggregate보다 먼저 와야 rag:relevance가 우선순위에 반영된다."""
+        from mcp_server import tools_analysis
+
+        run = _run(status=RunState.CANDIDATE_SCAN)
+        enriched = [_candidate(run.id, "app/users.py:5")]
+        with (
+            patch.object(tools_analysis, "_rag_enrich",
+                         return_value=(enriched, {"x": "CODE"})) as mock_enrich,
+            patch.object(tools_analysis, "_rerank_fn_from_env") as mock_rerank,
+            patch.object(tools_analysis, "aggregate") as mock_agg,
+        ):
+            mock_agg.return_value = MagicMock(kept=[], summary={})
+            tools_analysis._store_scan_candidates(run, [], tool="vc_run_sast")
+        mock_enrich.assert_called_once()
+        self.assertIs(mock_agg.call_args.args[0], enriched)
+        # 코드 스니펫 곁채널이 재랭킹 훅까지 전달된다(R-1).
+        self.assertEqual(mock_rerank.call_args.args[0], {"x": "CODE"})
 
     def test_store_scan_candidates_passes_rerank_fn_to_aggregate(self) -> None:
         from mcp_server import tools_analysis
