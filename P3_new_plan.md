@@ -1,6 +1,10 @@
 # P3 — 2일 스프린트 계획
 
 > 상위 문서: **[TEAM_CONTRACT.md](TEAM_CONTRACT.md)** — 충돌 시 그쪽이 이긴다.
+>
+> **상태(2026-07-21 갱신)**: 엔진(판정·오라클·패치 어댑터·배선·테스트)·계약 P3 몫 **완료**. 남은 건
+> **J-3 완주**뿐인데, endpoint 외에 **Juice Shop injection candidate 생성 gap**(surface가 Node.js 미지원)이
+> 새 블로커로 발견됨 — J-3 아래 참고.
 
 ## 내 역할 한 줄
 
@@ -18,10 +22,9 @@
 
 `origin/security/agent`에만 있는 두 커밋이 main에 들어가야 나머지가 시작된다.
 
-- [ ] **M-1. `a189c17`(`repair/llm_synth.py`) main 병합** — P1이 집행, 나는 충돌 해소 지원
-- [ ] **M-2. `015f23c`(locator rationale CWE 분기) main 병합**
-  - XSS/SQLi finding에도 IDOR "소유권 검사 누락" 문구가 나가던 것을 고친 것. **안 들어가면 모델이 소유권 가드를 만들어 attack 게이트가 계속 reject한다** — 데모 2의 숨은 블로커
-- [ ] **M-3. 병합 후 `test_llm_synth`(7건) + `test_locator`(37건) main에서 재확인**
+- [x] **M-1. `a189c17`(`repair/llm_synth.py`) main 병합** — 완료
+- [x] **M-2. `015f23c`(locator rationale CWE 분기) main 병합** — 완료
+- [x] **M-3. 병합 후 `test_llm_synth` + `test_locator` main에서 재확인** — 완료 (현재 llm_synth 17 / locator 40)
 
 ---
 
@@ -30,7 +33,7 @@
 **이번 스프린트에서 가장 설계가 필요한 항목이다.** 사용자가 "이미 떠 있는 서비스"를 등록하면 build 명령이 없다.
 그런데 6게이트 중 **build·regression이 명령 실행을 전제**한다.
 
-- [ ] **K-1. kind별 게이트 의미 확정** (`core/judge.py`)
+- [x] **K-1. kind별 게이트 의미 확정** (`core/judge.py`) — `_target_kind` + running_local이면 `check_build`→None
 
   | 게이트 | `compose_project` | `running_local` |
   |---|---|---|
@@ -41,9 +44,9 @@
   | static | Semgrep 재실행 | 현행 (소스만 있으면 됨) |
   | scope | diff 경로 검사 | 현행 |
 
-- [ ] **K-2. "N/A 게이트"를 통과로 위조하지 않는다.** `Validation`에 그대로 `None`을 남기고 `compute_verdict()`가 **FIXED로 올리지 않게** 한다. 게이트를 못 돌린 것과 통과한 것은 다르다
-- [ ] **K-3. 사용자에게 뭐가 부족한지 알려준다** — "test_suite가 없어 regression 게이트를 못 돌립니다. FIXED 대신 PATCH_PROPOSED까지만 갑니다" 같은 명시적 사유
-- [ ] **K-4. c1-05 gold가 안 깨지는지 확인** — `compose_project` 경로는 현행 유지가 원칙
+- [x] **K-2. "N/A 게이트"를 통과로 위조하지 않는다.** `compute_verdict()`가 게이트 None이면 verdict 안 냄 + `check_regression` 빈 test_suites=False — 기존 구현으로 자동 강제 (P1 3A-11#3 인정). 테스트: `test_judge.test_running_local_returns_none_without_attempting_build`
+- [ ] **K-3. 사용자에게 뭐가 부족한지 알려준다** — "test_suite 없어 regression 못 돌림, PATCH_PROPOSED까지만" 같은 명시적 사유. ⚠️ **부분**: judge는 None 반환(✅)하나 **user-facing 사유 표시는 미구현** — report/tool 레이어(P1)로 보임
+- [x] **K-4. c1-05 gold가 안 깨지는지 확인** — `_target_kind` 기본 compose_project라 inert. `run-897ad65c686f` 6게이트 全1·FIXED 유지 확인(2026-07-21)
 
 ⚠️ 이 설계 없이 `running_local`을 열면 **"게이트를 안 돌리고 FIXED"**가 나온다. 그건 제품 주장 자체를 무너뜨린다.
 
@@ -51,38 +54,29 @@
 
 ## P2 — LLM 패치 합성 완성 (데모 2)
 
-`repair/llm_synth.py`는 이미 만들었다(`a189c17`, 테스트 7/7). 남은 건 정렬과 실검증이다.
+`repair/llm_synth.py`는 이미 만들었다(`a189c17`). 남은 건 정렬과 실검증이다.
 
-- [ ] **S-1. P4의 공유 컨텍스트 빌더와 정렬** — 계약 3.4
-  - `scanners.rag_enrich.code_context()`가 `{candidate_id: 줄번호 붙은 스니펫}`을 준다
-  - 지금 `build_prompt`는 root_cause 파일 소스를 자체 redaction해 싣는다. **급히 걷어낼 필요 없다** — `core.redaction`은 idempotent라 중복 적용이 무해하다
-  - 다만 **줄번호가 붙은 스니펫이 모델에게 훨씬 유용하다**(모델이 "6번 줄이 sink"라고 짚을 수 있음). 여유가 있으면 전환
-- [ ] **S-2. `PatchModelClient` 실물로 검증** — P4가 `build_patch_model_client()`를 주면 목이 아닌 실제 235B로 1회 합성. 지금까지는 목으로만 검증됨
-- [ ] **S-3. diff 파싱 견고성** — 모델이 fenced block·설명문·경로 오타를 섞어 낼 때 후보를 버리되 예외로 터지지 않는지. `expected-file 필터`가 이미 있으니 실응답으로 재확인
-- [ ] **S-4. `assert_diff_within_worktree` 통과 확인** — worktree 밖 경로를 건드리는 후보는 `core.judge`가 막지만, 합성 단계에서 미리 버리는 게 낫다
+- [x] **S-1. P4의 공유 컨텍스트 빌더와 정렬** (계약 3.4) — `make_llm_synthesizer(context_provider=...)` 주입점 + `_number_lines`로 폴백 소스 줄번호화(code_context와 동일 형식). P1이 `_code_context_for`로 배선함
+- [x] **S-2. `PatchModelClient` 검증** — 현재 어댑터 ↔ 실 `_ChatPatchClient` 결합 오프라인 스모크 통과(degrade/wrap/integration). **실 235B 1회 합성은 J-3에서** (endpoint 종속)
+- [x] **S-3. diff 파싱 견고성** — 펜스 언어 무관·설명문·탭 타임스탬프 내성 + 어떤 입력에도 예외 미발생. 테스트 추가
+- [x] **S-4. `assert_diff_within_worktree` 사전거부** — `_is_scope_safe_path`로 절대경로·`..` 후보 합성 단계에서 drop. 테스트 추가
 
 ---
 
-## P3 — Juice Shop verify 계약 (데모 2의 전제, P2 대기 중)
+## P3 — Juice Shop verify 계약 (데모 2의 전제)
 
-**P2가 2026-07-21 02:46부터 내 회신을 기다리고 있다. 이게 D1 최우선 회신이다.**
-
-- [ ] **J-1. regression 계약 A/B 회신**
-  - A: `npm install` 후 `npm run test:server`
-  - B: 공식 이미지 smoke(health + 정상 검색 + SQLi 수정 후 동일 검색)
-  - ⚠️ **판단 기준**: `test_suites=[]`면 regression 게이트가 False라 **FIXED가 안 나온다.** 데모 2가 "LLM 패치로 FIXED까지"를 보여주는 거라면 반드시 하나를 골라야 한다
-  - 내 권고: **B가 결정적이고 빠르다.** A는 `package-lock` 부재로 `npm ci` 불가 상태라 재현성이 흔들린다
-- [ ] **J-2. verify 계약 확정** — `vuln_class=injection`, safe payload/observe/positive-liveness/rollback
-  - 검색 endpoint `GET /rest/products/search?q=`는 **read**라 우리 injection verifier의 안전 계약(SELECT-only·불리언 tautology·파괴적 write 금지)에 부합
-  - 로그인 SQLi(`' OR 1=1--`)는 auth-bypass tautology라 **blind 차등 오라클과 결이 다르다** — 2순위
-- [ ] **J-3. verified → LLM 패치 → 6게이트 완주 1회** (P4의 client 확보 후)
+- [x] **J-1. regression 계약 A/B 회신** — **B(image smoke)** 채택·전송. `test_suites: juice-shop-search-smoke`로 매니페스트 반영됨
+- [x] **J-2. verify 계약 확정** — `vuln_class=injection`, `GET /rest/products/search?q=`, blind 차등 오라클, liveness positive, reset rollback. 전송 완료. 오라클은 J-2 실측 패턴(631/18662/30B)으로 회귀 테스트 잠금(`test_juice_shop_sqli_demo_pattern`)
+- [ ] **J-3. verified → LLM 패치 → 6게이트 완주 1회** — ❌ 미실행. 블로커 2개:
+  - **(1) 235B endpoint/키** — 환경(P2 로컬 .env, tunnel). 이 Mac엔 없어 401.
+  - **(2) 🔴 Juice Shop injection candidate 생성 안 됨** — `surface/candidates.py`의 `injection_xss_candidates`/`_handlers_for`가 `.java`·`.py`만 파싱, **Node.js(.js/.ts) 미지원** → Juice Shop SQLi 후보가 소스 스캔에서 안 나옴. **해결안**: (b) Juice Shop injection fixture/candidate seed(P2, 추천) / (a) surface에 JS 파싱 추가(P3) / (c) SAST JS(P4)
 
 ---
 
-## P4 — 데모 리허설 (D2)
+## P4 — 데모 리허설 (D2)  *(P4 소유 — P3 참고용)*
 
-- [ ] **F-1. 데모 2 완주** (Juice Shop SQLi → LLM 패치 → FIXED)
-- [ ] **F-2. fallback 확인** — c1-05 gold(`run-897ad65c686f`)가 여전히 도는지. **깨지면 최우선 복구**
+- [ ] **F-1. 데모 2 완주** (Juice Shop SQLi → LLM 패치 → FIXED) — J-3 종속
+- [ ] **F-2. fallback 확인** — c1-05 gold(`run-897ad65c686f`). P3 확인: 로컬 evidence.db에서 6게이트 全1·FIXED 유지(2026-07-21) ✅
 - [ ] **F-3. 한계 문서화** — injection positive=liveness까지 / xss positive=benign 반영 확인 / `running_local`의 N/A 게이트
 
 ---
@@ -97,4 +91,4 @@
 
 ## 보고
 
-계약 규칙 3 형식. **J-1(regression A/B)은 P2가 대기 중이라 D1 오전 최우선.**
+계약 규칙 3 형식.
