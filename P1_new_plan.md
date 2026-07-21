@@ -27,7 +27,7 @@
 | ~~W-9~~ | **runtime metadata JSONL 배선** | P2 | ✅ **완료** |
 | ~~W-4~~ | `vc_export_patch` + `vc_resume_audit` + driver 자동승인 제거 | P2 | ✅ **완료** |
 | ~~W-5~~ | R-3b `synthesize_fn` + `context_provider` 배선 | P3 | ✅ **완료** |
-| **W-10** | rerank를 `observed_chat_fn_from_env()`로 교체 (T-2) | — | ⏳ P4 main 반영 대기 |
+| ~~W-10~~ | rerank를 `observed_chat_fn_from_env()`로 교체 (T-2) | P4 | ✅ **완료** |
 | **W-6** | `core/report.py` redaction (§3A-10) | — | 소 |
 | **W-7** | `vc_export_sarif` 배선 | P4 | 소 |
 
@@ -79,12 +79,12 @@
   - `lease_manager` 파라미터 주입 가능(기본 `~/.vibecutter/leases`) — `service`/`invoke`와 같은 DI 패턴, 테스트는 임시 디렉터리로 격리
   - 테스트: `tests/test_driver.py::TargetLeaseWiringTests` 5건(release/held-before-build/renew-per-worker/busy-target/finally-release-on-unexpected-error) 신규 + 기존 11건 전부 `lease_manager` 주입으로 갱신, 16건 전체 통과
 
-> ⚠️ **W-8과 무관한 새 블로커 발견(2026-07-21) — `datasets/inventory.yaml`에 juice-shop 누락**
-> `8b794b5`(P2, "register pinned Juice Shop SQLi runtime")가 `targets/manifests/juice-shop.yaml` + `source-lock.yaml`은 정확히 채웠지만(W-1에서 요청한 그대로), **P4 소유 `datasets/inventory.yaml`에는 juice-shop 항목을 추가하지 않았다.** `tests/test_inventory_manifest_contract.py`(체크인된 모든 manifest가 inventory에도 있어야 한다는 계약, P4 소유)가 지금 브랜치에서 **1 failure + 1 error**로 깨져 있다 — 내 W-8 변경과 무관, 순수하게 이 커밋 이후 상태다. **P2/P4 조율 필요**: `datasets/inventory.yaml`에 `juice-shop`(focus=injection) 항목 추가.
+> ✅ **해소됨 — `datasets/inventory.yaml`에 juice-shop 누락 건**(2026-07-21 발견 → 같은 날 `99d98e9`로 해소)
+> P2/P4가 `datasets/inventory.yaml`에 juice-shop을 등재해 `test_inventory_manifest_contract.py`가 다시 통과한다. 전체 스위트 562 passed, 0 failure.
 
 - [x] **W-9. runtime metadata JSONL 배선** (P2 긴급 요청 2번) — **완료(2026-07-21)**. `mcp_server/driver.py:_record_runtime_metadata`, 배치 종료 시점(`finally` 직전)에 1건 기록
   - P1이 채운 것: `run_id`(=scan_run_id)·`target_id`·`base_url`(`catalog.get().manifest.base_url`)·`source_commit`(`catalog.get().contract_target.source_commit`)·`health`(`adapter_for().health()` 재확인)·`readiness`(`check_readiness().ready`)·`reset_result`(이 배치 worker들이 만든 overlay가 전부 정리됐는지 — overlay를 하나도 안 만들었으면 `None`, 지어내지 않음)·`lease_run_id`·`lease_expires_at`(마지막 `acquire`/`renew` 결과)
-  - ⏳ `llm_endpoint_state` — **W-10(P4 recorder) 이후.** 같은 출처를 써야 eval 표본 필터와 어긋나지 않는다(스키마 기본값 `"unknown"` 그대로 둠)
+  - [x] `llm_endpoint_state` — **W-10 완료로 채워짐.** `_llm_endpoint_state_for(scan_run_id)`가 `model.trajectory.llm_usage_from_trajectories()`(T-3와 같은 함수)로 그 scan run의 trajectory를 읽어 "up"/"down"/"unknown"으로 접는다
   - ❓ `gpu_worker`·`remaining_containers/worktrees/ports` — **P2에게 출처를 물었다.** 여전히 스키마 기본값(`None`/빈 리스트) 그대로 — 모르는 값을 지어내지 않는다
   - 기록 자체가 실패해도(catalog 조회 예외, IO 등) 로깅만 하고 감사 배치는 완주한다 — worker/scanner 예외 격리와 같은 원칙
   - 테스트: `tests/test_driver.py::RuntimeMetadataWiringTests` 4건(P1 필드 기록·reset_result true/None·실패해도 배치 완주) 신규. 전체 스위트 546 passed(juice-shop/inventory 1건 제외 — 무관·기존 블로커)
@@ -101,10 +101,12 @@
   - 테스트: `tests/test_tools_repair_llm_wiring.py` 10건(줄 복원 4·code_context 어댑터 3·캐시 3), 전체 스위트 535 passed
   - endpoint가 아직 전부 DOWN이라(⚠️ 위 리스크 박스) J-3 실행은 **터널이 뜬 뒤** P3가 완주 1회 돌릴 수 있다 — 배선 자체는 지금 template-only로도 안전하게 degrade한다
 
-- [ ] **W-10. rerank를 `observed_chat_fn_from_env()`로 교체** (P4 T-1 → T-2) — ⏳ **P4가 main에 올려야 시작**(현재 `p4` 브랜치 미커밋, main에 0건)
-  - `(chat_fn, recorder)`를 받아 `aggregate` 직후 `recorder().as_metadata()`를 trajectory step `result`에 병합
-  - `contracts` freeze를 안 건드린다(전부 `result` dict)
-  - **W-9의 `llm_endpoint_state`와 같은 출처를 쓴다** — 두 곳이 갈라지면 ablation 표본 필터와 runtime metadata가 어긋난다
+- [x] **W-10. rerank를 `observed_chat_fn_from_env()`로 교체** (P4 T-1/T-2/T-3, `379ce8c` main 반영 확인) — **완료(2026-07-21)**
+  - `mcp_server/tools_analysis.py`: `_rerank_fn_from_env(contexts)` → `_rerank_hook_from_env(contexts) -> (rerank_fn | None, outcome_fn)`. `observed_chat_fn_from_env()`가 `None`이면 `rerank_fn=None`(휴리스틱)이지만 `outcome_fn`은 항상 `LlmCallOutcome.unavailable()`을 내 "이 run은 휴리스틱으로 돌았다"를 감춘 채 넘어가지 않는다
+  - `_store_scan_candidates`가 `aggregate` 직후 `outcome_fn().as_metadata()`를 trajectory step `result`에 병합(`{**result.summary, **outcome.as_metadata()}`) — `AggregateResult.summary`(`kept`/`rejected`/`by_focus`/`reject_reasons`)와 키 충돌 없음 확인
+  - `contracts` freeze를 안 건드린다(전부 자유 형식 `result` dict)
+  - **W-9의 `llm_endpoint_state`와 같은 출처를 쓴다** — `mcp_server/driver.py:_llm_endpoint_state_for(scan_run_id)`가 `model.trajectory.llm_usage_from_trajectories()`로 그 trajectory를 다시 읽어 "up"/"down"/"unknown"으로 접는다. T-3 표본 필터(`eval.sample_filter.filter_llm_condition`)도 **같은 함수**를 쓰므로 두 값이 구조적으로 어긋날 수 없다
+  - 테스트: `tests/test_scan_tool_wiring.py::RerankHookTests` 갱신(이름 변경 3건 + trajectory 병합 신규 2건), `tests/test_driver.py::LlmEndpointStateForTests` 4건 신규. 전체 스위트 **562 passed, 0 failure**(juice-shop/inventory 블로커도 이제 해소됨)
 
 - [ ] **W-6. `core/report.py` redaction** — 확인된 결함: `redact()` 호출 **0건**. evidence 8건·audit 3건과 대조. HTML 리포트로 secret이 샐 수 있다
 

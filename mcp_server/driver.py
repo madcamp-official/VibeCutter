@@ -179,6 +179,28 @@ DEFAULT_SCAN_TOOLS: tuple[str, ...] = (
 )
 
 
+def _llm_endpoint_state_for(scan_run_id: str) -> str:
+    """T-3(`eval.sample_filter`)와 같은 소스로 이 scan run의 LLM 사용 여부를 읽는다(W-10).
+
+    `mcp_server.tools_analysis._store_scan_candidates`가 rerank 단계마다 trajectory
+    `result`에 `llm_used`/`tier` 메타를 남긴다(P4 `LlmCallOutcome.as_metadata()`, T-2).
+    여기서 그 trajectory 파일을 `model.trajectory.llm_usage_from_trajectories()`로 — T-3
+    표본 필터가 쓰는 **바로 그 함수**로 — 다시 읽어 "up"/"down"/"unknown"으로 접는다.
+    runtime metadata와 eval 표본 필터가 서로 다른 값을 보면 ablation 표본과 관측이
+    어긋나므로(P4 요청), 별도로 계산하지 않고 반드시 같은 판독 경로를 공유한다.
+    """
+    from core.trajectory import TRAJECTORY_DIR
+    from model.trajectory import llm_usage_from_trajectories, load_trajectories
+
+    path = TRAJECTORY_DIR / f"{scan_run_id}.jsonl"
+    if not path.exists():
+        return "unknown"
+    usage = llm_usage_from_trajectories(load_trajectories(path)).get(scan_run_id)
+    if usage is None:
+        return "unknown"
+    return "up" if usage.any_used else "down"
+
+
 def _record_runtime_metadata(
     service,
     target_id: str,
@@ -195,8 +217,11 @@ def _record_runtime_metadata(
     안 만들었으면 `None` — 해당 없음, K-2 원칙과 동일하게 모르는/해당 없는 값을 지어내지 않는다),
     `lease_run_id`/`lease_expires_at`은 방금 갱신된 lease 그대로.
 
-    `llm_endpoint_state`(W-10, P4 recorder 대기)와 `gpu_worker`/`remaining_*`(P2 runtime 소관,
-    출처 확인 중)는 스키마 기본값(`"unknown"`/`None`/빈 리스트)으로 남겨 둔다.
+    `llm_endpoint_state`(W-10)는 이 scan run의 rerank 단계가 남긴 trajectory를
+    `model.trajectory.llm_usage_from_trajectories()`로 읽어 채운다 — T-3 표본 필터
+    (`eval.sample_filter`)가 **같은 함수, 같은 파일**을 읽으므로 두 값이 서로 어긋날 수 없다.
+    `gpu_worker`/`remaining_*`(P2 runtime 소관, 출처 확인 중)는 스키마 기본값(`None`/빈
+    리스트)으로 남겨 둔다.
 
     이 기록 자체의 실패(디스크 IO, catalog 조회 예외 등)는 로깅만 하고 삼킨다 — observability
     부가 정보일 뿐이라 감사 배치의 안전 불변식과 무관하다(worker/scanner 예외 격리와 같은 원칙).
@@ -219,6 +244,7 @@ def _record_runtime_metadata(
             reset_result=reset_result,
             lease_run_id=lease.run_id,
             lease_expires_at=lease.expires_at,
+            llm_endpoint_state=_llm_endpoint_state_for(scan_run_id),
         )
         append_runtime_metadata(metadata)
     except Exception:  # noqa: BLE001 — 관측 기록 실패가 감사 배치를 죽이면 안 된다

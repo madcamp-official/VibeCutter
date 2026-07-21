@@ -151,27 +151,40 @@ class ScanToolWiringTests(unittest.TestCase):
 
 
 class RerankHookTests(unittest.TestCase):
-    """D4-P4: LLM candidate 재랭킹 훅을 aggregate에 주입한다(8.4절 가설 우선순위)."""
+    """D4-P4: LLM candidate 재랭킹 훅을 aggregate에 주입한다(8.4절 가설 우선순위).
 
-    def test_disabled_yields_none(self) -> None:
+    W-10(T-2): `_rerank_hook_from_env()`는 이제 `(rerank_fn, outcome_fn)` 쌍을 준다 —
+    endpoint가 없어도 `outcome_fn()`은 항상 `LlmCallOutcome`을 돌려줘 "이 run은 휴리스틱으로
+    돌았다"를 trajectory에 명시적으로 남길 수 있다(T-3 표본 필터가 근거로 쓴다).
+    """
+
+    def test_disabled_yields_none_rerank_and_unavailable_outcome(self) -> None:
         import os
-        from mcp_server.tools_analysis import _rerank_fn_from_env
+        from mcp_server.tools_analysis import _rerank_hook_from_env
 
         # DISABLE이면 네트워크를 아예 건드리지 않고 휴리스틱으로 떨어진다(CI 경로).
         with patch.dict(os.environ, {"VIBECUTTER_LLM_DISABLE": "1"}):
-            self.assertIsNone(_rerank_fn_from_env())
+            rerank_fn, outcome_fn = _rerank_hook_from_env()
+        self.assertIsNone(rerank_fn)
+        outcome = outcome_fn()
+        self.assertFalse(outcome.llm_used)
+        self.assertEqual(outcome.tier, "none")
 
-    def test_all_endpoints_down_yields_none(self) -> None:
-        from mcp_server.tools_analysis import _rerank_fn_from_env
+    def test_all_endpoints_down_yields_none_rerank_and_unavailable_outcome(self) -> None:
+        from mcp_server.tools_analysis import _rerank_hook_from_env
 
         with patch("model.endpoints.liveness_check", return_value=False):
-            self.assertIsNone(_rerank_fn_from_env())
+            rerank_fn, outcome_fn = _rerank_hook_from_env()
+        self.assertIsNone(rerank_fn)
+        self.assertFalse(outcome_fn().llm_used)
 
-    def test_live_endpoint_yields_callable_rerank_fn(self) -> None:
-        from mcp_server.tools_analysis import _rerank_fn_from_env
+    def test_live_endpoint_yields_callable_rerank_fn_and_recorder(self) -> None:
+        from mcp_server.tools_analysis import _rerank_hook_from_env
 
         with patch("model.endpoints.liveness_check", return_value=True):
-            self.assertTrue(callable(_rerank_fn_from_env()))
+            rerank_fn, outcome_fn = _rerank_hook_from_env()
+        self.assertTrue(callable(rerank_fn))
+        self.assertTrue(callable(outcome_fn))
 
     def test_rag_enrich_is_nondestructive_when_index_fails(self) -> None:
         """RAG는 보정이지 필수 경로가 아니다 — 인덱싱이 깨져도 후보를 그대로 돌려준다."""
@@ -199,13 +212,15 @@ class RerankHookTests(unittest.TestCase):
     def test_store_scan_candidates_enriches_before_aggregate(self) -> None:
         """RAG 보강이 aggregate보다 먼저 와야 rag:relevance가 우선순위에 반영된다."""
         from mcp_server import tools_analysis
+        from model.endpoints import LlmCallOutcome
 
         run = _run(status=RunState.CANDIDATE_SCAN)
         enriched = [_candidate(run.id, "app/users.py:5")]
         with (
             patch.object(tools_analysis, "_rag_enrich",
                          return_value=(enriched, {"x": "CODE"})) as mock_enrich,
-            patch.object(tools_analysis, "_rerank_fn_from_env") as mock_rerank,
+            patch.object(tools_analysis, "_rerank_hook_from_env",
+                         return_value=(None, lambda: LlmCallOutcome.unavailable())) as mock_rerank,
             patch.object(tools_analysis, "aggregate") as mock_agg,
         ):
             mock_agg.return_value = MagicMock(kept=[], summary={})
@@ -217,17 +232,63 @@ class RerankHookTests(unittest.TestCase):
 
     def test_store_scan_candidates_passes_rerank_fn_to_aggregate(self) -> None:
         from mcp_server import tools_analysis
+        from model.endpoints import LlmCallOutcome
 
         run = _run(status=RunState.CANDIDATE_SCAN)
         sentinel = object()
         with (
-            patch.object(tools_analysis, "_rerank_fn_from_env", return_value=sentinel),
+            patch.object(tools_analysis, "_rerank_hook_from_env",
+                         return_value=(sentinel, lambda: LlmCallOutcome.unavailable())),
             patch.object(tools_analysis, "aggregate") as mock_agg,
         ):
             mock_agg.return_value = MagicMock(kept=[], summary={})
             tools_analysis._store_scan_candidates(run, [], tool="vc_run_sast")
         mock_agg.assert_called_once()
         self.assertIs(mock_agg.call_args.kwargs["rerank_fn"], sentinel)
+
+    def test_store_scan_candidates_records_llm_outcome_in_trajectory(self) -> None:
+        """W-10(T-2): outcome_fn()의 as_metadata()가 trajectory result에 병합된다 —
+        `model.trajectory.llm_usage_from_trajectories()`가 이 값을 읽어 T-3 표본 필터가
+        쓴다."""
+        from mcp_server import tools_analysis
+        from model.endpoints import LlmCallOutcome
+        from model.trajectory import load_trajectories
+
+        run = _run(status=RunState.CANDIDATE_SCAN)
+        outcome = LlmCallOutcome(llm_used=True, tier="primary", tier_index=0)
+        with (
+            patch.object(tools_analysis, "_rerank_hook_from_env",
+                         return_value=(MagicMock(), lambda: outcome)),
+            patch.object(tools_analysis, "aggregate") as mock_agg,
+        ):
+            mock_agg.return_value = MagicMock(kept=[], summary={"kept": 0})
+            tools_analysis._store_scan_candidates(run, [], tool="vc_run_sast")
+
+        step = load_trajectories(TRAJECTORY_DIR / f"{run.id}.jsonl")[-1]
+        self.assertTrue(step.result["llm_used"])
+        self.assertEqual(step.result["tier"], "primary")
+        self.assertEqual(step.result["endpoint_health"], "up")
+        self.assertEqual(step.result["kept"], 0)  # aggregate summary도 그대로 남는다.
+
+    def test_store_scan_candidates_records_unavailable_when_no_endpoint(self) -> None:
+        """endpoint가 전부 죽었을 때도(조용히 휴리스틱으로 새지 않고) 그 사실이 남는다."""
+        from mcp_server import tools_analysis
+        from model.endpoints import LlmCallOutcome
+        from model.trajectory import load_trajectories
+
+        run = _run(status=RunState.CANDIDATE_SCAN)
+        with (
+            patch.object(tools_analysis, "_rerank_hook_from_env",
+                         return_value=(None, lambda: LlmCallOutcome.unavailable())),
+            patch.object(tools_analysis, "aggregate") as mock_agg,
+        ):
+            mock_agg.return_value = MagicMock(kept=[], summary={"kept": 0})
+            tools_analysis._store_scan_candidates(run, [], tool="vc_run_sast")
+
+        step = load_trajectories(TRAJECTORY_DIR / f"{run.id}.jsonl")[-1]
+        self.assertFalse(step.result["llm_used"])
+        self.assertEqual(step.result["tier"], "none")
+        self.assertEqual(step.result["endpoint_health"], "down")
 
 
 if __name__ == "__main__":
