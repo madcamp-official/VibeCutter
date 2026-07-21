@@ -73,6 +73,35 @@ def _classify_layer(symbol: str, file: str) -> str:
     return "controller_hotfix"  # 못 고르면 요청이 처음 닿는 곳(controller)을 기본으로
 
 
+def _cwe_num(cwe: str | None) -> str:
+    """"CWE-639" → "639". 숫자가 없으면 ""."""
+    m = re.search(r"\d+", cwe or "")
+    return m.group() if m else ""
+
+
+# sink형 취약점: 고칠 곳이 요청 진입 handler가 아니라 sink(XSS=출력 렌더, SQLi=쿼리 조립)다.
+# route-first locator는 handler를 앵커로 주므로, 이 클래스에선 SAST가 짚은 sink 위치를 rationale에
+# 실어 LLM이 진짜 취약 지점을 향하게 한다(D6 LLM-patch 확장). 확장 시 78/90/91/94 등 추가.
+_SINK_TYPE_CWES = frozenset({"79", "89"})
+
+
+def _root_cause_reason(cwe: str | None) -> str:
+    """CWE(취약점 클래스)별 근본 원인 서술.
+
+    LLM 합성기(`repair/llm_synth`)가 이 rationale을 "근거"로 모델에 그대로 전달하므로,
+    클래스별로 정확한 진단을 줘야 옳은 패치가 나온다(진단이 다르면 패치도 다르다):
+    IDOR=소유권 가드 / XSS=출력 인코딩 / SQLi=쿼리 파라미터화. IDOR 전용 문구를 3군 전체에
+    쓰면 XSS/SQLi에서 모델이 소유권 가드를 만들어 attack 게이트가 계속 reject한다.
+    """
+    code = _cwe_num(cwe)
+    if code == "79":  # XSS
+        return "사용자 입력이 출력 시 이스케이프/인코딩 없이 렌더돼 스크립트로 실행되는 것"
+    if code == "89":  # SQL Injection
+        return "사용자 입력이 파라미터 바인딩 없이 쿼리 문자열에 직접 이어붙는 것"
+    # CWE-639 등 IDOR/접근제어(및 미상): 요청자 소유권/권한 검사 누락(기본).
+    return "이 handler가 요청자 소유권/권한 검사를 하지 않는 것"
+
+
 def _sast_files(finding: Finding) -> set[str]:
     """Finding.source_symbols("파일:줄")에서 파일 경로만 뽑는다(SAST 교차검증용)."""
     return {s.split(":")[0] for s in finding.source_symbols if ":" in s}
@@ -83,6 +112,15 @@ def _files_agree(route_file: str, sast_files: set[str]) -> bool:
     return any(
         route_file == f or route_file.endswith(f) or f.endswith(route_file) for f in sast_files
     )
+
+
+def _sast_sink_locations(finding: Finding, *, limit: int = 3) -> list[str]:
+    """Finding.source_symbols에서 SAST가 짚은 'file:line' 위치를 순서·중복제거로 뽑는다(sink 후보)."""
+    seen: list[str] = []
+    for s in finding.source_symbols:
+        if ":" in s and s not in seen:
+            seen.append(s)
+    return seen[:limit]
 
 
 # 프론트엔드/빌드 산출물 시그니처 — code_index 폴백이 이런 파일을 근본 원인으로 짚지 않게 한다.
@@ -98,7 +136,7 @@ def _is_frontend_file(file: str) -> bool:
     return any(f"/{part}/" in f"/{low}" for part in _FRONTEND_DIR_PARTS)
 
 
-def _locate_by_code_index(source_root: Path, endpoint: str) -> RootCause | None:
+def _locate_by_code_index(source_root: Path, endpoint: str, cwe: str | None = None) -> RootCause | None:
     """route/SAST가 모두 실패했을 때 P4 code_index로 폴백 검색한다.
 
     model.code_index가 없거나(선택적 의존) 백엔드 히트가 없으면 None. **프론트엔드 파일은 건너뛰고**
@@ -121,7 +159,8 @@ def _locate_by_code_index(source_root: Path, endpoint: str) -> RootCause | None:
             symbol=None,
             rationale=(
                 f"소스 route 매핑에서 endpoint {endpoint!r}를 못 찾아, code_index 검색 상위(프론트엔드 제외) "
-                f"백엔드 후보를 근본 원인으로 채택했다(신뢰 낮음, 수동 확인 권장)."
+                f"백엔드 후보를 근본 원인으로 채택했다(신뢰 낮음, 수동 확인 권장). "
+                f"의심 원인: {_root_cause_reason(cwe)}."
             ),
         )
     return None  # 백엔드 후보가 없으면(전부 프론트엔드/무결과) 추측하지 않는다
@@ -147,11 +186,21 @@ def localize(finding: Finding, *, source_root: str | Path) -> RootCause:
         symbol = route.handler
         layer = _classify_layer(symbol, file)
         agree = _files_agree(file, sast)
+        # sink형(XSS/SQLi)은 고칠 곳이 진입 handler가 아니라 sink다. SAST가 sink 위치를 짚었으면
+        # rationale에 실어 LLM/사람이 그쪽을 향하게 한다(앵커 file/symbol은 도달 증명된 handler로 유지).
+        sink_note = ""
+        if _cwe_num(finding.cwe) in _SINK_TYPE_CWES:
+            sinks = _sast_sink_locations(finding)
+            if sinks:
+                sink_note = (
+                    f" 단, 실제 취약 지점(sink)은 SAST 기준 {', '.join(sinks)}일 수 있다 — "
+                    f"이 handler와 다른 파일/메서드면 거기를 우선 수정하라."
+                )
         rationale = (
             f"검증된 endpoint {endpoint!r}를 처리하는 handler가 여기다({route.source}). "
             f"공격이 실제로 이 경로로 도달했다"
             f"{' — SAST 지목 위치와도 일치' if agree else ''}. "
-            f"{finding.cwe or 'IDOR'}의 원인은 이 handler가 요청자 소유권/권한 검사를 하지 않는 것. "
+            f"{finding.cwe or 'IDOR'}의 원인은 {_root_cause_reason(finding.cwe)}.{sink_note} "
             f"권장 수정 계층: {layer}."
         )
         return RootCause(file=file, symbol=symbol, rationale=rationale)
@@ -164,12 +213,14 @@ def localize(finding: Finding, *, source_root: str | Path) -> RootCause:
             symbol=None,
             rationale=(
                 f"소스 route 매핑에서 endpoint {endpoint!r}를 못 찾아(비-Spring이거나 파서 한계), "
-                f"SAST가 지목한 위치를 근본 원인 후보로 채택했다. 수정 계층은 파일 확인 후 결정 권장."
+                f"SAST가 지목한 위치를 근본 원인 후보로 채택했다. "
+                f"{finding.cwe or '취약점'}의 원인은 {_root_cause_reason(finding.cwe)}. "
+                f"수정 계층은 파일 확인 후 결정 권장."
             ),
         )
 
     # 3) code_index 폴백.
-    fallback = _locate_by_code_index(source_root, endpoint or "")
+    fallback = _locate_by_code_index(source_root, endpoint or "", finding.cwe)
     if fallback is not None:
         return fallback
 
