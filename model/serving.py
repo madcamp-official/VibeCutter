@@ -121,17 +121,41 @@ def _post_json(url: str, payload: dict, *, api_key: Optional[str], timeout: floa
         return json.loads(resp.read().decode("utf-8"))
 
 
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def strip_reasoning(text: str) -> str:
+    """추론형 모델(qwen3 등)의 `<think>...</think>` 블록을 제거한다.
+
+    rerank 파서는 텍스트에서 정수를 전부 긁어오므로, 사고 과정에 섞인 숫자가 순열을
+    오염시킨다. 닫히지 않은 `<think>` (출력이 잘린 경우)는 그 뒤 전부를 버린다.
+    """
+    text = _THINK_RE.sub(" ", text)
+    if "<think>" in text.lower():
+        text = text[: text.lower().index("<think>")]
+    return text.strip()
+
+
 def openai_chat_fn(
     base_url: str, model: str, *,
     api_key: Optional[str] = None, timeout: float = 60.0, temperature: float = 0.0,
+    max_tokens: Optional[int] = None, extra_body: Optional[dict] = None,
 ) -> ChatFn:
-    """vLLM `/v1/chat/completions` 를 부르는 ChatFn. base_url 예: http://host:8000/v1"""
+    """OpenAI 호환 `/v1/chat/completions` 를 부르는 ChatFn. base_url 예: http://host:8080/v1
+
+    `extra_body` 는 서버별 확장 필드(예: qwen3 의 `chat_template_kwargs`)를 그대로 실어
+    보낸다. 응답의 `<think>` 블록은 제거해서 돌려준다(rerank 파서 오염 방지).
+    """
     url = base_url.rstrip("/") + "/chat/completions"
 
     def chat(messages: list[dict]) -> str:
         body = {"model": model, "messages": messages, "temperature": temperature}
+        if max_tokens is not None:
+            body["max_tokens"] = max_tokens
+        if extra_body:
+            body.update(extra_body)
         out = _post_json(url, body, api_key=api_key, timeout=timeout)
-        return out["choices"][0]["message"]["content"]
+        return strip_reasoning(out["choices"][0]["message"]["content"] or "")
 
     return chat
 
@@ -163,3 +187,61 @@ def health_check(base_url: str, *, timeout: float = 5.0) -> bool:
         return bool(body.get("data"))
     except (urllib.error.URLError, OSError, ValueError, KeyError):
         return False
+
+
+def _server_root(base_url: str) -> str:
+    """`http://host:8080/v1` → `http://host:8080`. /health 는 /v1 아래가 아니다."""
+    root = base_url.rstrip("/")
+    if root.endswith("/v1"):
+        root = root[: -len("/v1")]
+    return root
+
+
+def liveness_check(base_url: str, *, timeout: float = 5.0) -> bool:
+    """서버 루트의 `GET /health` 확인(인증 불필요).
+
+    외부 API(qwen3-235b)는 `/health` 를 인증 없이 열어두므로, 도달 가능한 endpoint 를
+    고를 때 이쪽을 쓴다. `/v1/models` 는 인증이 필요할 수 있어 도달성 판정에 부적합.
+    """
+    url = _server_root(base_url) + "/health"
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            return 200 <= resp.status < 300
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+
+
+def make_chained_chat_fn(
+    chat_fns: Sequence[ChatFn], *, on_fallback: Optional[Callable[[int, Exception], None]] = None,
+) -> ChatFn:
+    """여러 ChatFn 을 순서대로 시도하는 ChatFn (앞이 primary, 뒤가 fallback).
+
+    앞의 endpoint 가 **답을 못 주거나(연결 실패/HTTP 오류) 너무 오래 걸리면**(각 ChatFn 의
+    timeout 이 socket timeout 으로 터진다) 다음 것으로 넘어간다. 큰 모델(qwen3-235b)을
+    primary 로, 기존 7B 를 fallback 으로 두는 구성이 이 함수의 용도다.
+
+    빈 응답도 실패로 본다 — rerank 파서가 빈 텍스트를 항등 순열로 삼켜버려서 fallback
+    기회를 잃기 때문. 전부 실패하면 마지막 예외를 올린다(호출측 `make_rerank_fn` 이
+    잡아서 비파괴로 처리한다).
+    """
+    fns = list(chat_fns)
+    if not fns:
+        raise ValueError("chat_fns must not be empty")
+
+    def chat(messages: list[dict]) -> str:
+        last: Exception = RuntimeError("no chat endpoint attempted")
+        for i, fn in enumerate(fns):
+            try:
+                text = fn(messages)
+            except Exception as exc:  # 네트워크/타임아웃/응답형식 — 다음 tier 로.
+                last = exc
+            else:
+                if text and text.strip():
+                    return text
+                last = RuntimeError("empty completion")
+            if on_fallback is not None:
+                on_fallback(i, last)
+        raise last
+
+    return chat

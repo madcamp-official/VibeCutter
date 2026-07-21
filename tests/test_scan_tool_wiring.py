@@ -146,19 +146,24 @@ class ScanToolWiringTests(unittest.TestCase):
 class RerankHookTests(unittest.TestCase):
     """D4-P4: LLM candidate 재랭킹 훅을 aggregate에 주입한다(8.4절 가설 우선순위)."""
 
-    def test_no_endpoint_yields_none(self) -> None:
+    def test_disabled_yields_none(self) -> None:
         import os
         from mcp_server.tools_analysis import _rerank_fn_from_env
 
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("VIBECUTTER_MODEL_ENDPOINT", None)
+        # DISABLE이면 네트워크를 아예 건드리지 않고 휴리스틱으로 떨어진다(CI 경로).
+        with patch.dict(os.environ, {"VIBECUTTER_LLM_DISABLE": "1"}):
             self.assertIsNone(_rerank_fn_from_env())
 
-    def test_endpoint_yields_callable_rerank_fn(self) -> None:
-        import os
+    def test_all_endpoints_down_yields_none(self) -> None:
         from mcp_server.tools_analysis import _rerank_fn_from_env
 
-        with patch.dict(os.environ, {"VIBECUTTER_MODEL_ENDPOINT": "http://127.0.0.1:8000/v1"}):
+        with patch("model.endpoints.liveness_check", return_value=False):
+            self.assertIsNone(_rerank_fn_from_env())
+
+    def test_live_endpoint_yields_callable_rerank_fn(self) -> None:
+        from mcp_server.tools_analysis import _rerank_fn_from_env
+
+        with patch("model.endpoints.liveness_check", return_value=True):
             self.assertTrue(callable(_rerank_fn_from_env()))
 
     def test_store_scan_candidates_passes_rerank_fn_to_aggregate(self) -> None:

@@ -183,26 +183,22 @@ def _prepare_scan(run_id: str, *, tool_name: str) -> Run:
     return run
 
 
-DEFAULT_MODEL_NAME = "Qwen/Qwen2.5-Coder-7B-Instruct"
-
-
 def _rerank_fn_from_env():
     """LLM candidate 재랭킹 훅을 만든다(8.4절 "모델=가설 우선순위", RQ3, D4-P4 요청).
 
-    `VIBECUTTER_MODEL_ENDPOINT`(예: `http://127.0.0.1:8000/v1`)가 설정돼 있으면 P4 서빙
-    endpoint로 `make_rerank_fn(openai_chat_fn(...))`를 만들어 반환하고, 없으면 `None`을
-    돌려 aggregate의 휴리스틱 정렬을 그대로 쓴다 — GPU 없는 환경/CI에서도 스캔이 돈다.
-    `make_rerank_fn`은 네트워크/파싱 실패 시 입력을 그대로 돌려주므로(비파괴), endpoint가
-    죽어 있어도 후보를 잃지 않는다. endpoint를 env로 두면 loop을 GPU 서버에서 돌리든
-    로컬에서 돌리든 이 변수만 맞추면 된다(D4-P4 배포 결정과 독립).
+    endpoint 구성은 `model.endpoints`가 env에서 해석한다 — 큰 외부 모델(qwen3-235b)이
+    primary(내부망→외부망), 기존 7B가 fallback인 티어 체인. 앞 tier가 답을 못 주거나
+    timeout이면 자동으로 다음 tier로 넘어간다. 쓸 endpoint가 없으면(`..._DISABLE`) `None`을
+    돌려 aggregate의 휴리스틱 정렬을 그대로 쓴다 — GPU/네트워크 없는 CI에서도 스캔이 돈다.
+    `make_rerank_fn`은 체인이 전부 실패해도 입력을 그대로 돌려주므로(비파괴) 후보를 잃지 않는다.
     """
-    base_url = os.environ.get("VIBECUTTER_MODEL_ENDPOINT")
-    if not base_url:
-        return None
-    model_name = os.environ.get("VIBECUTTER_MODEL_NAME", DEFAULT_MODEL_NAME)
-    from model.serving import make_rerank_fn, openai_chat_fn
+    from model.endpoints import chat_fn_from_env
+    from model.serving import make_rerank_fn
 
-    return make_rerank_fn(openai_chat_fn(base_url, model_name))
+    chat_fn = chat_fn_from_env()
+    if chat_fn is None:
+        return None
+    return make_rerank_fn(chat_fn)
 
 
 def _store_scan_candidates(
