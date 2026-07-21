@@ -18,8 +18,8 @@
 
 **현재 모든 run이 휴리스틱으로 돌고 있다.** endpoint에 못 닿으면 3초 probe 후 조용히 degrade하는데, 그게 로그에 드러나지 않는다. 발표에서 "235B가 후보를 재정렬하고 패치를 만든다"고 말하려면 이게 한 번은 실제로 돌아야 한다. **이번 스프린트 최대 리스크다.**
 
-- [ ] **C-1. P2의 Cloudflare endpoint 연결** — G-3으로 URL을 받으면 `.env`의 `VIBECUTTER_LLM_ENDPOINTS`만 바꾸면 된다. 티어 체인(235B → 7B fallback)·`<think>` 제거·600초 timeout은 이미 `model/endpoints.py`에 있다
-- [ ] **C-2. `python -m model.endpoints`가 `[UP]`을 보이는지 확인** — 이게 초록이 되는 순간이 이번 스프린트의 분기점이다
+- [x] **C-1. P2의 Cloudflare endpoint 연결** ✅ `.env` 배선(`VIBECUTTER_LLM_ENDPOINTS=https://organizer-naturally-ann-viewers.trycloudflare.com/v1`, model=qwen3-235b, key). ⚠️ Quick Tunnel이라 재시작 시 URL 바뀜 — 데모 직전 재확인
+- [x] **C-2. `python -m model.endpoints`가 `[UP]`을 보이는지 확인** ✅ **`[UP] primary ... qwen3-235b key:yes` 확인 — 스프린트 분기점 통과.** 라이브 rerank 실증: 235B가 candidate를 severity/exploitability 순으로 실제 재정렬(injection/critical→idor→xss), T-1 관측도 `llm_used=True/tier=primary` 실측
 - [x] **C-3. `model/patch_client.py` 신규** — 계약 3.3 ✅ **완료·커밋(`379ce8c`… 실제 patch_client는 `935e362`)**. `build_patch_model_client()` + `_ChatPatchClient`, max_tokens 2048(>512). P1 배선 확인됨: `tools_repair.py:418 synthesize_fn=make_llm_synthesizer(_get_llm_client(), context_provider=_code_context_for)`
   - P3의 `PatchModelClient` 프로토콜은 `synthesize_patch(prompt: str) -> str` 하나뿐이다. **어댑터를 새로 짜지 않는다** — P3가 이미 만들었다(`a189c17`)
 - [x] **C-4. P1에게 "client 준비됨" 공지** ✅ 공지함 → P1이 배선 #7 완료
@@ -31,9 +31,7 @@
 터널/endpoint가 죽은 채로 돈 run이 ablation 표본에 섞이면 **측정이 통째로 무의미해진다.** 내가 이미 D5에 지적한 문제이기도 하다("health/readiness가 false였던 run은 비교 표본에서 빼야 한다").
 
 - [x] **T-1. `make_chained_chat_fn(on_fallback=)` 훅 활용** ✅ **완료·커밋(`379ce8c`)**. `make_observed_chain`/`observed_chat_fn_from_env`/`LlmCallOutcome`. 실패 카운트로 답한 tier 복원. 테스트 19/19
-- [~] **T-2. run 메타데이터에 남기기** — `llm_used`/`tier`/`endpoint_health` (result dict, freeze 우회)
-  - ✅ **P4 판독부 완료**: `LlmCallOutcome.as_metadata()` + `llm_usage_from_trajectories()`(`379ce8c`, 테스트 13/13)
-  - ⚠️ **P1 실기록 배선 미확인**: rerank(`tools_analysis.py`)가 아직 `chat_fn_from_env()`(관측 안 됨)를 씀. `observed_chat_fn_from_env()`로 바꿔 `as_metadata()`를 trajectory result에 넣어야 end-to-end. **P1에 확인 요청 필요**(Discord claim은 코드에 안 보임)
+- [x] **T-2. run 메타데이터에 남기기** ✅ **end-to-end 완료(rebase로 P1 W-10 배선 병합됨)**. ①관측 `observed_chat_fn_from_env`(P4) → ②`tools_analysis._store_scan_candidates`가 `record_trajectory_step(result={**summary, **llm_outcome().as_metadata()})`로 병합(P1) → ③`llm_usage_from_trajectories`로 되읽음(P4, T-3와 같은 함수). `driver._llm_endpoint_state_for`도 같은 판독 경로 공유. contracts freeze 안 건드림(result dict)
 - [x] **T-3. `eval`에서 이 값으로 표본을 거른다** ✅ **완료·커밋(`379ce8c`)**. `eval/sample_filter.py`(`filter_llm_condition`/`llm_used_map`), 보수적 all 정책. 테스트 7/7
 
 ---
@@ -54,9 +52,8 @@
 
 > 새 RQ3: **RAG 코드 컨텍스트 + LLM 재랭킹이 휴리스틱 대비 가설 우선순위·패치 성공률을 개선하는가**
 
-- [ ] **E-1. ablation 2회 주행** — `--label heuristic`(`VIBECUTTER_LLM_DISABLE=1`) vs `--label rag-llm`
-  - 하네스는 **코드 변경 없이 재사용된다** — `eval/run_baseline.py`가 `--label`로 임의 두 산출물을 비교
-  - 벤치마크 정답: `datasets/inventory_benchmark.yaml`
+- [x] **E-1. ablation** ✅ **올바른 하네스 구축 + 235B 라이브 검증**. ⚠️ **plan 원안 정정**: `run_baseline`(focus-set precision/recall)로는 못 잼 — rerank는 candidate SET을 안 바꾸고 ORDER만 바꿔(FP reject는 rerank 前) 두 팔 지표가 동일. RQ3 '우선순위'는 **순위 지표**로 재야 맞음 → `eval/priority_ablation.py`(first_true_rank/MRR, 테스트 6/6). **라이브 235B: 진짜 취약점 순위 heuristic 2위→rag-llm 1위, MRR 0.5→1.0(Δ+0.5).**
+  - **남은 것(P2 필요)**: 16개 벤치 앱 소스가 로컬에 없음(`.vibecutter/targets/sources/` 비어있음) → 전체 벤치 실주행은 P2 runtime 소스 확보 후. 기제·지표는 준비 완료
 - [x] **E-2. `eval/compare.py` 문구 정리** ✅ **완료**. module docstring·CLI help의 fine-tuned/QLoRA 전제를 ablation(base=heuristic vs full=rag-llm)으로 교체. 로직·파라미터명 무변경, test_compare 4/4 그대로
 - [x] **E-3. `mcp_server/tools_analysis.py:187`의 "RQ3" 주석** — 확인 결과 현재 주석("모델=가설 우선순위, RQ3")은 **새 RQ3와 정합** → 폐기된 LoRA-RQ3 참조 아님. **조치 불필요**(P1 요청 취소)
 - [x] **E-4. 학습 경로는 삭제하지 않는다** ✅ 준수 — `train_lora.py`·`export_training_dataset()`·`to_sft_sample()` 보존. "구현했으나 데이터 부족으로 접음"이 발표 근거
