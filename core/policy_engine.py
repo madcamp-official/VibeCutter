@@ -7,14 +7,24 @@
 거부는 항상 `PolicyViolation` 예외로 표현한다. 이 모듈 자체는 로깅하지 않는다 — 호출자
 (MCP tool 배선, Day2~)가 이 예외를 잡아 audit log(item 10)에 남긴다.
 
-target 허용 목록은 `policies/scope.yaml`, 실행 가능한 command_id는
-`policies/commands.yaml`이 정의한다. 두 파일 다 사람이 직접 편집하는 정책 소스이며,
-이 모듈은 정책을 읽고 강제하기만 한다 — 정책 값 자체를 코드에 하드코딩하지 않는다.
+target 허용 목록은 **두 출처**를 가진다(TEAM_CONTRACT 3.2):
+  ① `policies/scope.yaml` — 팀이 체크인한 built-in demo target(기존 20개).
+  ② 사용자 로컬 승인 레지스트리(`runtime.registry.LocalRegistry`, P2 소유) — 사용자가
+     자기 프로젝트를 명시 승인해 자기 머신에 기록한 것.
+
+②가 이번 스프린트의 방향 전환이다. **allowlist라는 안전 원칙은 유지하고 소유자만 옮긴다** —
+"우리 저장소에 커밋됐다"가 아니라 "사용자가 그 내용을 보고 승인했다"가 승인의 근거가 된다.
+loopback 강제는 이 모듈이 아니라 `runtime.manifest.TargetManifest`의 스키마 검증기가
+구조적으로 하므로, 출처가 늘어도 "localhost 외에는 공격 불가"는 그대로다.
+
+실행 가능한 command_id는 `policies/commands.yaml`이 정의한다. 이 모듈은 정책을 읽고
+강제하기만 한다 — 정책 값 자체를 코드에 하드코딩하지 않는다.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 import yaml
@@ -49,18 +59,113 @@ def load_commands(path: Path = _DEFAULT_COMMANDS_PATH) -> dict[str, dict]:
     return _load_yaml(path).get("commands") or {}
 
 
-def is_target_allowed(target_id: str, *, path: Path = _DEFAULT_SCOPE_PATH) -> bool:
-    return target_id in load_scope(path)
+# --- 사용자 로컬 승인 레지스트리 (P2 소유 `runtime.registry`) ---------------------------
+#
+# P1은 아래 두 Protocol에만 의존한다. P2의 구현 클래스를 직접 import 하지 않으므로
+# 레지스트리가 아직 없는 상태(브랜치 병합 전)에서도 이 모듈과 테스트가 정상 동작한다.
 
 
-def require_target_allowed(target_id: str, *, path: Path = _DEFAULT_SCOPE_PATH) -> dict:
-    """등록되지 않은 target_id는 무조건 거부한다 (Definition of Done: 미등록 target_id 전부 거부)."""
+@runtime_checkable
+class _ApprovedTargetLike(Protocol):
+    """`runtime.registry.ApprovedTarget`이 만족해야 하는 최소 형태 (TEAM_CONTRACT 3.1)."""
+
+    target_id: str
+    allowed_hosts: list[str]
+
+
+@runtime_checkable
+class _RegistryLike(Protocol):
+    def get(self, target_id: str) -> Optional[_ApprovedTargetLike]: ...
+
+
+_REGISTRY_UNSET = object()
+_registry_cache: object = _REGISTRY_UNSET
+
+
+def _default_registry() -> Optional[_RegistryLike]:
+    """`runtime.registry.LocalRegistry`를 지연 로드한다. 없으면 None.
+
+    P2가 아직 레지스트리를 main에 올리지 않았거나, 사용자가 자기 프로젝트를 하나도
+    등록하지 않은 환경에서도 built-in demo target 경로는 그대로 돌아야 한다 —
+    c1-05 gold가 fallback이라 이게 깨지면 안 된다(TEAM_CONTRACT 0절).
+    """
+    global _registry_cache
+    if _registry_cache is _REGISTRY_UNSET:
+        try:
+            from runtime.registry import LocalRegistry  # type: ignore[import-not-found]
+
+            _registry_cache = LocalRegistry.load()
+        except Exception:
+            # ImportError(미구현) / 손상된 레지스트리 파일 모두 여기로 온다. 정책 게이트가
+            # 판단 자체를 못 하고 죽는 것보다, built-in만으로 판정하고 계속하는 편이 낫다.
+            _registry_cache = None
+    return _registry_cache  # type: ignore[return-value]
+
+
+def reset_registry_cache() -> None:
+    """테스트/재등록 후 지연 로드 캐시를 비운다."""
+    global _registry_cache
+    _registry_cache = _REGISTRY_UNSET
+
+
+def _registry_entry(target_id: str, registry: Optional[_RegistryLike]) -> Optional[dict]:
+    """레지스트리의 승인 기록을 scope.yaml 엔트리와 같은 모양의 dict로 바꾼다.
+
+    두 출처가 같은 형태를 내야 `require_host_allowed`가 출처를 몰라도 된다.
+    """
+    if registry is None:
+        return None
+    approved = registry.get(target_id)
+    if approved is None:
+        return None
+    return {
+        "allowed_hosts": list(approved.allowed_hosts),
+        "source": "user_registry",
+        "base_url": getattr(approved, "base_url", None),
+    }
+
+
+# --- target 허용 판정 (이중 출처) ------------------------------------------------------
+
+
+def is_target_allowed(
+    target_id: str,
+    *,
+    path: Path = _DEFAULT_SCOPE_PATH,
+    registry: Optional[_RegistryLike] = None,
+) -> bool:
+    if target_id in load_scope(path):
+        return True
+    reg = registry if registry is not None else _default_registry()
+    return _registry_entry(target_id, reg) is not None
+
+
+def require_target_allowed(
+    target_id: str,
+    *,
+    path: Path = _DEFAULT_SCOPE_PATH,
+    registry: Optional[_RegistryLike] = None,
+) -> dict:
+    """등록되지 않은 target_id는 무조건 거부한다 (DoD: 미등록 target_id 전부 거부).
+
+    built-in demo(`policies/scope.yaml`) → 사용자 로컬 승인 레지스트리 순으로 조회한다.
+    **built-in을 먼저 보는 순서가 중요하다** — 사용자가 실수로 같은 target_id를 등록해도
+    팀이 체크인한 데모 target의 정의가 이긴다.
+    """
     scope = load_scope(path)
-    if target_id not in scope:
-        raise PolicyViolation(
-            f"target_id={target_id!r}는 policies/scope.yaml에 등록되지 않았습니다"
-        )
-    return scope[target_id]
+    if target_id in scope:
+        return scope[target_id]
+
+    reg = registry if registry is not None else _default_registry()
+    entry = _registry_entry(target_id, reg)
+    if entry is not None:
+        return entry
+
+    raise PolicyViolation(
+        f"target_id={target_id!r}는 승인되지 않았습니다 "
+        f"(policies/scope.yaml의 built-in target도, 로컬 승인 레지스트리에도 없음). "
+        f"자기 프로젝트라면 vc_register_local_target으로 먼저 승인하세요."
+    )
 
 
 def _extract_host(url_or_host: str) -> str:
@@ -75,10 +180,18 @@ def _extract_host(url_or_host: str) -> str:
 
 
 def require_host_allowed(
-    target_id: str, url_or_host: str, *, path: Path = _DEFAULT_SCOPE_PATH
+    target_id: str,
+    url_or_host: str,
+    *,
+    path: Path = _DEFAULT_SCOPE_PATH,
+    registry: Optional[_RegistryLike] = None,
 ) -> None:
-    """target의 allowed_hosts 밖의 URL/IP는 전부 거부한다. 임의 네트워크 목적지 구성을 막는 게이트."""
-    entry = require_target_allowed(target_id, path=path)
+    """target의 allowed_hosts 밖의 URL/IP는 전부 거부한다. 임의 네트워크 목적지 구성을 막는 게이트.
+
+    출처(built-in / 사용자 레지스트리)를 구분하지 않는다 — `require_target_allowed`가 두
+    출처를 같은 모양의 엔트리로 정규화해 주기 때문이다.
+    """
+    entry = require_target_allowed(target_id, path=path, registry=registry)
     allowed_hosts = entry.get("allowed_hosts") or []
     host = _extract_host(url_or_host)
     if host not in allowed_hosts:
