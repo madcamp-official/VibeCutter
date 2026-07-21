@@ -135,6 +135,37 @@ class CheckBuildTests(unittest.TestCase):
             ):
                 self.assertFalse(check_build(run.id, p.id))
 
+    def test_running_local_returns_none_without_attempting_build(self) -> None:
+        """W-3/§3A-5: 이미 떠 있는 사용자 서비스는 patched worktree를 build/restart 못 한다.
+
+        `None`은 "실행 안 함"이지 "실패"가 아니다 — `False`로 두면 RETRY가 되고 `True`로
+        두면 못 돌린 게이트를 통과로 위조하는 것이라 둘 다 틀렸다. `compute_verdict`는 게이트가
+        하나라도 `None`이면 verdict를 내지 않으므로, running_local target은 이 게이트가 절대
+        채워지지 않아 FIXED가 구조적으로 불가능해진다(추가 방어 불필요, `ComputeVerdictTests`가
+        일반 케이스를 이미 고정).
+        """
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td) / "repo"
+            worktree.mkdir(parents=True)
+            run, p = _run_and_patch_with_worktree(worktree)
+
+            fake_manifest = MagicMock()
+            fake_manifest.kind = "running_local"
+            fake_service = _fake_service_with_worktree(worktree)
+            fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest)
+
+            fake_lifecycle_cls = MagicMock()
+            with (
+                patch("core.judge._service", return_value=fake_service),
+                patch("runtime.lifecycle.LifecycleManager", fake_lifecycle_cls),
+            ):
+                self.assertIsNone(check_build(run.id, p.id))
+            # None은 "build를 시도했는데 확인 못 함"이 아니라 "애초에 시도하지 않음"이어야 한다.
+            fake_lifecycle_cls.assert_not_called()
+            fake_service.catalog.run_overlay_for.assert_not_called()
+
     def test_missing_worktree_raises(self) -> None:
         run = Run(id=f"run-{uuid4().hex[:12]}", target_id="fake-target", status=RunState.PATCH_APPLIED)
         save(run)
