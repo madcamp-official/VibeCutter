@@ -57,6 +57,7 @@
 - `docker compose ... build`: 통과. upstream Buster mirror EOL로 Bookworm overlay 필요
 - lifecycle `start`와 `reset(approved=True)`: 통과, reset 후 Juice Shop container/network 잔여 없음
 - lifecycle `health`/`search_smoke`: Windows Docker Desktop에서 `internal: true` network의 published loopback port가 host에서 연결 거부되어 timeout. 동일 image를 default bridge로 직접 실행하면 search HTTP 200으로 앱 자체 기동은 확인
+- CAMP-1 (`172.10.5.178`)에서 최신 main pull 및 source bootstrap은 성공. Linux Docker build는 `npm install --omit=dev --unsafe-perm` 단계에서 502.8초 동안 진전 없이 대기해 중단했으며, 이는 앱 코드 실패가 아니라 CAMP↔npm registry 경로/의존성 설치 지연으로 분류한다. 중단 후 Juice Shop active container와 14006/14007/14020 포트는 없었다. 서버에는 이전 target의 exited container 기록이 남아 있으나 이번 실행에서 생성하지 않았다.
 
 ## 다른 역할에 필요한 사항
 
@@ -65,6 +66,7 @@
 - P4/P1: observed LLM recorder 결과를 rerank trajectory `result`에 저장하는 T-2 배선을
   main에 반영해 주세요.
 - P3: `running_local` patched-worktree restart 조건은 §3A-5 그대로 유지합니다.
+- P3: CAMP-1 Docker build가 npm registry 지연으로 중단되었으므로 J-3 실행 전 의존성 cache/registry 경로를 확인해 주세요.
 
 ## 결정·가정·리스크
 
