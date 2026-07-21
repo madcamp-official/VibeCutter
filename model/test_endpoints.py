@@ -9,6 +9,7 @@ from model.endpoints import (
     DEFAULT_FALLBACK_MODEL,
     DEFAULT_PRIMARY_ENDPOINTS,
     DEFAULT_PRIMARY_MODEL,
+    _with_max_tokens,
     resolve_tiers,
 )
 from model.serving import make_chained_chat_fn, strip_reasoning
@@ -56,6 +57,17 @@ def test_api_key_and_overrides_applied() -> None:
 
 def test_disable_yields_no_tiers() -> None:
     assert resolve_tiers({"VIBECUTTER_LLM_DISABLE": "1"}) == []
+
+
+def test_max_tokens_override_replaces_all_tiers() -> None:
+    # 패치 합성은 rerank 기본(512)보다 큰 예산이 필요 → 모든 tier(primary+fallback)에 주입.
+    tiers = resolve_tiers({
+        "VIBECUTTER_LLM_ENDPOINTS": "http://a:8080/v1",
+        "VIBECUTTER_LLM_MAX_TOKENS": "512",
+        "VIBECUTTER_LLM_FALLBACK_ENDPOINT": "http://127.0.0.1:8000/v1",
+    })
+    assert [t.max_tokens for t in _with_max_tokens(tiers, 2048)] == [2048, 2048]
+    assert _with_max_tokens(tiers, None) == tiers  # override 없으면 그대로(비파괴)
 
 
 def test_bad_numbers_fall_back_to_defaults() -> None:
