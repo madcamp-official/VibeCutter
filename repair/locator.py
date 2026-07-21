@@ -73,6 +73,18 @@ def _classify_layer(symbol: str, file: str) -> str:
     return "controller_hotfix"  # 못 고르면 요청이 처음 닿는 곳(controller)을 기본으로
 
 
+def _cwe_num(cwe: str | None) -> str:
+    """"CWE-639" → "639". 숫자가 없으면 ""."""
+    m = re.search(r"\d+", cwe or "")
+    return m.group() if m else ""
+
+
+# sink형 취약점: 고칠 곳이 요청 진입 handler가 아니라 sink(XSS=출력 렌더, SQLi=쿼리 조립)다.
+# route-first locator는 handler를 앵커로 주므로, 이 클래스에선 SAST가 짚은 sink 위치를 rationale에
+# 실어 LLM이 진짜 취약 지점을 향하게 한다(D6 LLM-patch 확장). 확장 시 78/90/91/94 등 추가.
+_SINK_TYPE_CWES = frozenset({"79", "89"})
+
+
 def _root_cause_reason(cwe: str | None) -> str:
     """CWE(취약점 클래스)별 근본 원인 서술.
 
@@ -81,8 +93,7 @@ def _root_cause_reason(cwe: str | None) -> str:
     IDOR=소유권 가드 / XSS=출력 인코딩 / SQLi=쿼리 파라미터화. IDOR 전용 문구를 3군 전체에
     쓰면 XSS/SQLi에서 모델이 소유권 가드를 만들어 attack 게이트가 계속 reject한다.
     """
-    num = re.search(r"\d+", cwe or "")
-    code = num.group() if num else ""
+    code = _cwe_num(cwe)
     if code == "79":  # XSS
         return "사용자 입력이 출력 시 이스케이프/인코딩 없이 렌더돼 스크립트로 실행되는 것"
     if code == "89":  # SQL Injection
@@ -101,6 +112,15 @@ def _files_agree(route_file: str, sast_files: set[str]) -> bool:
     return any(
         route_file == f or route_file.endswith(f) or f.endswith(route_file) for f in sast_files
     )
+
+
+def _sast_sink_locations(finding: Finding, *, limit: int = 3) -> list[str]:
+    """Finding.source_symbols에서 SAST가 짚은 'file:line' 위치를 순서·중복제거로 뽑는다(sink 후보)."""
+    seen: list[str] = []
+    for s in finding.source_symbols:
+        if ":" in s and s not in seen:
+            seen.append(s)
+    return seen[:limit]
 
 
 # 프론트엔드/빌드 산출물 시그니처 — code_index 폴백이 이런 파일을 근본 원인으로 짚지 않게 한다.
@@ -166,11 +186,21 @@ def localize(finding: Finding, *, source_root: str | Path) -> RootCause:
         symbol = route.handler
         layer = _classify_layer(symbol, file)
         agree = _files_agree(file, sast)
+        # sink형(XSS/SQLi)은 고칠 곳이 진입 handler가 아니라 sink다. SAST가 sink 위치를 짚었으면
+        # rationale에 실어 LLM/사람이 그쪽을 향하게 한다(앵커 file/symbol은 도달 증명된 handler로 유지).
+        sink_note = ""
+        if _cwe_num(finding.cwe) in _SINK_TYPE_CWES:
+            sinks = _sast_sink_locations(finding)
+            if sinks:
+                sink_note = (
+                    f" 단, 실제 취약 지점(sink)은 SAST 기준 {', '.join(sinks)}일 수 있다 — "
+                    f"이 handler와 다른 파일/메서드면 거기를 우선 수정하라."
+                )
         rationale = (
             f"검증된 endpoint {endpoint!r}를 처리하는 handler가 여기다({route.source}). "
             f"공격이 실제로 이 경로로 도달했다"
             f"{' — SAST 지목 위치와도 일치' if agree else ''}. "
-            f"{finding.cwe or 'IDOR'}의 원인은 {_root_cause_reason(finding.cwe)}. "
+            f"{finding.cwe or 'IDOR'}의 원인은 {_root_cause_reason(finding.cwe)}.{sink_note} "
             f"권장 수정 계층: {layer}."
         )
         return RootCause(file=file, symbol=symbol, rationale=rationale)

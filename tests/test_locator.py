@@ -240,6 +240,34 @@ class LocalizeVulnClassReasonTests(unittest.TestCase):
         self.assertIn("이스케이프/인코딩", rc.rationale)
         self.assertIn("SAST가 지목한 위치", rc.rationale)  # 기존 마커 보존
 
+    def test_xss_route_match_surfaces_sast_sink(self) -> None:
+        # route는 handler를 앵커로 주되, sink형(XSS)은 SAST가 짚은 sink 위치를 rationale에 실어야 한다.
+        finding = self._finding_cwe("CWE-79", "POST /comments", ["templates/comment_view.py:88"])
+        routes = [_route("POST", "/comments", "CommentController.add", "src/CommentController.java:8")]
+        with patch("repair.locator.extract_routes", return_value=routes):
+            rc = localize(finding, source_root="/nonexistent")
+        self.assertEqual(rc.symbol, "CommentController.add")  # 앵커는 도달 증명된 handler 유지
+        self.assertIn("sink", rc.rationale)
+        self.assertIn("templates/comment_view.py:88", rc.rationale)  # sink 위치 노출
+
+    def test_idor_route_match_has_no_sink_note(self) -> None:
+        # IDOR은 고칠 곳이 handler(접근제어)라 sink 노트를 붙이지 않는다.
+        finding = self._finding_cwe("CWE-639", "GET /orders/{id}", ["src/OrderController.java:5"])
+        routes = [_route("GET", "/orders/{id}", "OrderController.get", "src/OrderController.java:5")]
+        with patch("repair.locator.extract_routes", return_value=routes):
+            rc = localize(finding, source_root="/nonexistent")
+        self.assertNotIn("실제 취약 지점(sink)", rc.rationale)
+        self.assertIn("SAST 지목 위치와도 일치", rc.rationale)  # 기존 동작(파일 일치) 유지
+
+    def test_sqli_route_match_without_sast_is_unchanged(self) -> None:
+        # SAST sink가 없으면 노트도 없다(무회귀) — 기존 클래스 서술만.
+        finding = self._finding_cwe("CWE-89", "GET /search")
+        routes = [_route("GET", "/search", "SearchController.q", "src/SearchController.java:3")]
+        with patch("repair.locator.extract_routes", return_value=routes):
+            rc = localize(finding, source_root="/nonexistent")
+        self.assertNotIn("실제 취약 지점(sink)", rc.rationale)
+        self.assertIn("파라미터", rc.rationale)
+
 
 class LocalizeCodeIndexFallbackTests(unittest.TestCase):
     """route/SAST 모두 실패 → P4 code_index 폴백. 프론트엔드 후보는 건너뛰고 백엔드만 채택."""
