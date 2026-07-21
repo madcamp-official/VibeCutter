@@ -1,0 +1,41 @@
+manifest_version: 1
+id: juice-shop
+display_name: OWASP Juice Shop SQLi training target
+adapter: generic-docker
+source_dir: .vibecutter/targets/sources/juice-shop
+base_url: http://127.0.0.1:14020
+commands:
+  build:
+    argv: [docker, compose, -f, targets/compose/juice-shop.yaml, build]
+    working_dir: .
+    timeout_seconds: 1800
+  start:
+    argv: [docker, compose, -f, targets/compose/juice-shop.yaml, up, -d]
+    working_dir: .
+    timeout_seconds: 300
+  stop:
+    argv: [docker, compose, -f, targets/compose/juice-shop.yaml, down, --remove-orphans]
+    working_dir: .
+    timeout_seconds: 180
+  reset:
+    argv: [docker, compose, -f, targets/compose/juice-shop.yaml, down, --volumes, --remove-orphans]
+    working_dir: .
+    timeout_seconds: 180
+  search_smoke:
+    argv: ["{vibecutter_python}", tools/juice_shop_smoke.py]
+    working_dir: .
+    timeout_seconds: 30
+healthcheck:
+  path: /rest/products/search?q=apple
+  expected_status: 200
+  timeout_seconds: 60
+reset:
+  command_id: reset
+  snapshot_name: juice-shop-pinned-v17.3.0
+test_suites:
+  - name: juice-shop-search-smoke
+    command_id: search_smoke
+docker_isolation:
+  compose_file: targets/compose/juice-shop.yaml
+  internal_network: vibecutter-internal
+  require_loopback_port_bindings: true

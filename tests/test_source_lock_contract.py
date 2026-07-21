@@ -20,7 +20,7 @@ class CheckedInSourceLockContractTests(unittest.TestCase):
             ROOT / "targets" / "source-lock.yaml",
             expected_target_ids=set(manifests),
         )
-        self.assertEqual(len(lock.target_ids), 22)
+        self.assertEqual(len(lock.target_ids), len(manifests))
         for target_id, manifest in manifests.items():
             expected_source_root = Path(".vibecutter/targets/sources") / target_id
             source_dir = Path(manifest.source_dir)

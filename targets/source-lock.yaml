@@ -2,7 +2,10 @@
 # .vibecutter/targets/sources; only canonical repository identities and exact
 # commits are checked in. Bootstrap callers accept target_id only.
 lock_version: 1
+external_allowlist:
+  - https://github.com/juice-shop/juice-shop.git
 targets:
+  juice-shop: {repository: https://github.com/juice-shop/juice-shop.git, revision: 1867b926c5f50e4e692dc9c8f61821413cebe0cd}
   26s-w1-c1-01: {repository: https://github.com/madcamp-official/26s-w1-c1-01.git, revision: ca63e4202f077e4fb479f274f2600aacf7314fe8}
   26s-w1-c1-02: {repository: https://github.com/madcamp-official/26s-w1-c1-02.git, revision: 4396df04cef1025afede5cf36721883833373d78}
   26s-w1-c1-03: {repository: https://github.com/madcamp-official/26s-w1-c1-03.git, revision: 09793959e654c4f9708188b6b33a18aefa61418c}

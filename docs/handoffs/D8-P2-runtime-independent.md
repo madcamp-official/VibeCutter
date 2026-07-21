@@ -14,6 +14,10 @@
   discovery 및 user source root 분기
 - `runtime/run_overlay.py`: patched Compose의 build context와 source Dockerfile을 모두
   run worktree로 재지정해 패치가 실제 이미지 빌드에 반영되도록 보강
+- `targets/source-lock.yaml`, `targets/manifests/juice-shop.yaml` 및
+  `targets/compose/juice-shop.yaml`: P3 SQLi 계약용 Juice Shop pinned source와
+  loopback/read-only smoke runtime 등록
+- `tools/juice_shop_smoke.py`: 고정 loopback search endpoint의 비파괴 regression smoke
 - `tests/test_catalog.py`: source-lock 없는 user target discovery/source repository 검증
 - `P2_new_plan.md`: R-1/R-6를 내부 구현 완료·통합 대기 상태로 갱신
 - `docs/CONTRACT_IMPLEMENTATION_TODO.md`: §3A 진행 상태 갱신
