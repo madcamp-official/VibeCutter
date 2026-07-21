@@ -36,14 +36,23 @@ logger = logging.getLogger(__name__)
 
 
 class WorkerResult(BaseModel):
-    """worker Run 하나(=candidate 하나)의 감사 결과 요약."""
+    """worker Run 하나(=candidate 하나)의 감사 결과 요약.
+
+    §3A-7/W-4(안전 불변식 4) 이후: verified worker는 `vc_generate_patch`(PATCH_PROPOSED)에서
+    멈춘다. apply/build/replay/validate/export/reset은 여기서 자동으로 일어나지 않는다 —
+    사용자가 diff를 보고 `vc_apply_patch(patch_id, confirmed=True)`로 승인해야 이어지고,
+    그 뒤는 `vc_resume_audit(run_id)`가 담당한다. 그래서 `verdict`/`overlay_reset`은 이
+    batch driver 경로에서는 항상 `None`이다 — driver가 그 값을 낼 방법이 없어서지 실패해서가
+    아니다.
+    """
 
     worker_run_id: str
     worker_candidate_id: str
     origin_candidate_id: str
     verified: bool
-    verdict: Optional[str] = None  # RunState.FIXED / RETRY / HUMAN_REVIEW 값 또는 None(미확정)
-    overlay_reset: Optional[bool] = None  # overlay를 만든 worker만: reset_run 결과, 아니면 None
+    patch_id: Optional[str] = None  # verified worker만: PATCH_PROPOSED 상태로 남은 patch id
+    verdict: Optional[str] = None  # 이 batch 경로에서는 채워지지 않는다 — vc_resume_audit 소관
+    overlay_reset: Optional[bool] = None  # 이 batch 경로에서는 채워지지 않는다 — vc_resume_audit 소관
     error: Optional[str] = None  # 이 worker 파이프라인이 실패한 사유(다음 후보는 계속 진행)
 
 
@@ -101,31 +110,30 @@ def _audit_one_candidate(
     scan_run: Run,
     scan_candidate: Candidate,
     *,
-    service,
     invoke: Callable[..., None],
 ) -> WorkerResult:
-    """scan candidate 하나를 worker Run으로 materialize해 verify→(verified면)repair 루프를 돈다.
+    """scan candidate 하나를 worker Run으로 materialize해 verify→(verified면)localize+patch까지 돈다.
 
-    overlay를 만든(=`vc_apply_patch`까지 성공한) worker Run만 종료 `finally`에서
-    `reset_run`으로 정리한다(D5-P2.md: `reset_run`은 run-scoped patched overlay 전용이라
-    scan/verify-only worker엔 호출하면 안 된다). reset 실패는 예외로 죽이지 않고 로깅만 한다
-    (P2가 artifact/worktree를 진단용으로 보존).
+    **§3A-7/W-4(안전 불변식 4)**: verified worker는 `vc_generate_patch` 직후, 즉
+    `PATCH_PROPOSED`에서 멈춘다. `vc_apply_patch`를 여기서 자동으로 호출하지 않는다 — 이전엔
+    driver가 `confirmed=True`를 자동으로 넘겨 사용자 승인 없이 patch를 worktree에 적용했다
+    (실제 결함). 이제 재개 주체는 항상 Host다: 사용자가 diff를 보고
+    `vc_apply_patch(patch_id, confirmed=True)` → `vc_resume_audit(run_id)`(build/replay/
+    validate/export/reset)로 명시적으로 이어간다. 그래서 이 함수는 overlay를 만들지 않고,
+    `reset_run`도 호출하지 않는다(만든 적 없는 걸 정리할 필요가 없다).
 
-    **worker 단위 예외 격리**: 파이프라인 어느 단계가 실패해도(예: verify HTTP 연결 실패,
-    build timeout) 그 사유를 `result.error`에 담아 반환하고 배치는 다음 후보로 계속한다 —
-    한 후보의 실패가 target 전체 audit(밤 배치)를 죽이면 안 되기 때문(1B-5 라이브 실측:
-    target 미기동 시 verify가 Connection refused로 전체 배치를 중단시켰다).
+    **worker 단위 예외 격리**: 파이프라인 어느 단계가 실패해도(예: verify HTTP 연결 실패)
+    그 사유를 `result.error`에 담아 반환하고 배치는 다음 후보로 계속한다 — 한 후보의 실패가
+    target 전체 audit(밤 배치)를 죽이면 안 되기 때문(1B-5 라이브 실측: target 미기동 시
+    verify가 Connection refused로 전체 배치를 중단시켰다).
     """
     worker_run, worker_candidate = materialize_worker_run(scan_run, scan_candidate)
-    # 결과 객체를 미리 만들어 두면 finally에서 overlay_reset을 그대로 채워 반환할 수 있다
-    # (finally 실행 후 return되며, 같은 객체 참조라 갱신이 반영된다).
     result = WorkerResult(
         worker_run_id=worker_run.id,
         worker_candidate_id=worker_candidate.id,
         origin_candidate_id=scan_candidate.id,
         verified=False,
     )
-    overlay_created = False
     try:
         invoke(
             _verify_tool_for(worker_candidate),
@@ -135,7 +143,7 @@ def _audit_one_candidate(
         )
         finding = _finding_for(worker_run.id, worker_candidate.id)
         if finding is None or finding.verification_state != FindingStatus.VERIFIED:
-            return result  # verified=False — repair 루프를 타지 않는다.
+            return result  # verified=False — patch 생성으로 넘어가지 않는다.
 
         result.verified = True
         invoke("vc_localize_root_cause", finding_id=finding.id)
@@ -143,16 +151,7 @@ def _audit_one_candidate(
         patch = _latest_patch_for(worker_run.id, finding.id)
         if patch is None:
             raise RuntimeError(f"vc_generate_patch 후 worker run {worker_run.id}에 patch가 없습니다")
-
-        invoke("vc_apply_patch", patch_id=patch.id, confirmed=True)
-        overlay_created = True  # apply가 예외 없이 끝나면 run-scoped overlay/worktree가 생겼다.
-
-        invoke("vc_build_and_test", patch_id=patch.id)
-        invoke("vc_replay_attack", patch_id=patch.id)
-        invoke("vc_validate_regression", patch_id=patch.id)
-
-        final_run = get(Run, worker_run.id)
-        result.verdict = final_run.status.value if final_run is not None else None
+        result.patch_id = patch.id  # Host가 diff를 보고 승인할 patch — PATCH_PROPOSED에서 정지.
         return result
     except Exception as exc:  # noqa: BLE001 — 한 후보 실패가 배치를 죽이면 안 된다
         result.error = f"{type(exc).__name__}: {exc}"
@@ -164,19 +163,6 @@ def _audit_one_candidate(
             exc_info=True,
         )
         return result
-    finally:
-        if overlay_created:
-            try:
-                result.overlay_reset = service.reset_run(target_id, worker_run.id, approved=True)
-            except Exception:  # noqa: BLE001 — 정리 실패가 배치를 죽이면 안 된다
-                logger.warning(
-                    "reset_run failed for worker run %s (target %s); "
-                    "P2 preserves the overlay/worktree for retry",
-                    worker_run.id,
-                    target_id,
-                    exc_info=True,
-                )
-                result.overlay_reset = False
 
 
 # 3개 취약점군을 모두 수집하는 scan tool 묶음(D5-P2 요청 "injection/xss를 단일 경로에"):
@@ -268,13 +254,21 @@ def run_target_audit(
          수집한다. 한 스캐너 실패는 로깅만 하고 나머지로 계속. scan Run은 `CANDIDATE_SCAN`에서
          종료하고 이후 전이시키지 않는다(계약 ①).
       5. 후보마다 **순차로**(고정 host port라 병렬 불가, 계약 ④) worker Run을 materialize해
-         verify(vuln_class로 tool 자동 선택)→(verified면)localize→patch→apply→build/replay/
-         validate를 돌린다(계약 ②③). worker 하나가 끝날 때마다 lease를 `renew()`한다 —
-         c1-05 실측 기준 후보 1개 136초라, 후보 10개면 기본 TTL(900초)을 넘긴다.
-      6. overlay를 만든 worker Run만 종료 시 `reset_run`으로 정리한다.
+         verify(vuln_class로 tool 자동 선택)→(verified면)localize→patch를 돌리고
+         **`PATCH_PROPOSED`에서 멈춘다**(계약 ②③, §3A-7/W-4 안전 불변식 4). apply/build/
+         replay/validate/export/reset은 여기서 자동으로 일어나지 않는다 — 이전엔 driver가
+         `confirmed=True`를 자동으로 넘겨 사용자 승인 없이 patch를 적용했다(실제 결함,
+         지금은 제거됨). 사용자가 diff를 승인하면 Host가 `vc_apply_patch(patch_id,
+         confirmed=True)` → `vc_resume_audit(run_id)`로 명시적으로 이어간다. worker 하나가
+         끝날 때마다 lease를 `renew()`한다 — c1-05 실측 기준 후보 1개 136초라, 후보 10개면
+         기본 TTL(900초)을 넘긴다.
+      6. 이 batch 경로는 patch를 적용하지 않으므로 정리할 overlay가 없다 — `reset_run`은
+         `vc_resume_audit`가 6게이트+export 이후에 호출한다.
       7. 배치 종료 시점에 `runtime.metadata.RuntimeMetadata` 1건을 남긴다(W-9, P2 긴급
-         요청 2번) — health/readiness/source_commit/base_url/reset_result/lease 정보.
-         `_record_runtime_metadata`가 실패해도 로깅만 하고 삼킨다(관측 부가 정보).
+         요청 2번) — health/readiness/source_commit/base_url/lease 정보. `reset_result`는
+         이 경로에서 overlay를 안 만드니 항상 `None`이다(§3A-6/7 이후, `vc_resume_audit`
+         쪽 reset은 별도 경로라 이 metadata에 잡히지 않는다). `_record_runtime_metadata`가
+         실패해도 로깅만 하고 삼킨다(관측 부가 정보).
       8. `finally`에서 lease를 `release()`한다 — 배치 성공/실패와 무관하게 다음 배치가
          이 target을 쓸 수 있게 한다.
 
@@ -315,9 +309,7 @@ def run_target_audit(
         worker_results: list[WorkerResult] = []
         for scan_candidate in scan_candidates:  # 순차 — 고정 포트 공유 target
             worker_results.append(
-                _audit_one_candidate(
-                    target_id, scan_run, scan_candidate, service=service, invoke=invoke
-                )
+                _audit_one_candidate(target_id, scan_run, scan_candidate, invoke=invoke)
             )
             lease = lease_manager.renew(target_id, scan_run_id)  # 살아있으면 TTL 연장, 죽었으면 만료.
 

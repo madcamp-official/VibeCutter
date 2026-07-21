@@ -25,7 +25,7 @@
 | ~~W-3~~ | `Validation.build_ok: bool \| None` coerce 금지 | P3 | ✅ **완료(P3가 이미 구현)** |
 | ~~W-8~~ | **lease 배선** (acquire/renew/release) | P2 | ✅ **완료** |
 | ~~W-9~~ | **runtime metadata JSONL 배선** | P2 | ✅ **완료** |
-| **W-4** | `vc_export_patch` + `vc_resume_audit` + driver 자동승인 제거 | P2 | 중 |
+| ~~W-4~~ | `vc_export_patch` + `vc_resume_audit` + driver 자동승인 제거 | P2 | ✅ **완료** |
 | ~~W-5~~ | R-3b `synthesize_fn` + `context_provider` 배선 | P3 | ✅ **완료** |
 | **W-10** | rerank를 `observed_chat_fn_from_env()`로 교체 (T-2) | — | ⏳ P4 main 반영 대기 |
 | **W-6** | `core/report.py` redaction (§3A-10) | — | 소 |
@@ -55,12 +55,15 @@
   - `compute_verdict()`가 `None` 하나면 verdict를 안 내므로 **FIXED가 구조적으로 불가**해진다 — 이게 §3A-5의 강제 수단이다(추가 방어 불필요). 일반 케이스는 `ComputeVerdictTests.test_none_while_any_gate_is_unset`가 이미 고정하고 있었음
   - **빠져 있던 것**: `check_build`가 running_local에서 실제로 `None`을 내고 build를 아예 시도하지 않는지 확인하는 전용 테스트가 없었다 → `tests/test_judge.py::CheckBuildTests::test_running_local_returns_none_without_attempting_build` 추가(`LifecycleManager`/`run_overlay_for` 미호출까지 확인). `test_judge.py` 31건 전체 통과, 전체 스위트 542 passed(juice-shop/inventory 1건 제외 — 무관·기존 블로커)
 
-- [ ] **W-4. 승인 흐름 정리** (§3A-6/3A-7, P2 회신 4·5번)
-  - [ ] `vc_audit_target(target_id, mode="propose")` 노출 — 기본은 `PATCH_PROPOSED` 정지
-  - [ ] `vc_export_patch(run_id)` 신규 — `.vibecutter/runs/<run_id>/security-fix.patch`. **reset보다 먼저, 실패 시 reset 금지**
-  - [ ] `vc_resume_audit(run_id)` 신규 — 전제 `PATCH_APPLIED`. 6게이트 → export → reset
-  - [ ] `driver.py:145`의 자동 `confirmed=True` **제거**
-  - [ ] driver 진입 직후 `acquire_target_lease`, `finally`에서 `release_target_lease` (P2 구현 대기)
+- [x] **W-4. 승인 흐름 정리** (§3A-6/3A-7, P2 회신 4·5번) — **완료(2026-07-21)**
+  - [x] `vc_export_patch(run_id)` 신규(`mcp_server/tools_repair.py`) — `.vibecutter/runs/<run_id>/security-fix.patch`. `_applied_patch_for_run()`이 `approval=APPROVED`인 가장 최근 patch를 찾는다(재시도로 여러 patch가 쌓여도 "지금 worktree에 있는 diff" 하나로 좁힌다)
+  - [x] `vc_resume_audit(run_id)` 신규 — 전제 `PATCH_APPLIED`(아니면 명확한 에러). `vc_build_and_test`→`vc_replay_attack`→`vc_validate_regression`을 **같은 closure 안에서 직접 호출**(mcp.call_tool 재귀 아님 — 아래 보류 항목 참고) 후 **export → reset**. export가 예외를 던지면(디스크 IO 등) 그대로 전파돼 reset을 아예 시도하지 않는다(§3A-6)
+  - [x] `driver.py`의 자동 `confirmed=True` **제거** — `_audit_one_candidate`가 `vc_generate_patch`(PATCH_PROPOSED) 직후 멈춘다. apply/build/replay/validate/reset은 이제 이 batch 경로에서 절대 자동으로 안 일어난다. `WorkerResult`에 `patch_id` 필드 추가(Host가 승인할 patch를 찾게)
+  - [x] lease는 W-8에서 이미 완료(중복 항목 정리)
+  - **파급 효과**: `_record_runtime_metadata`의 `reset_result`는 이 batch 경로에서 이제 **항상 `None`**이다(overlay를 절대 안 만드니까) — `vc_resume_audit`의 reset은 별도 경로라 이 metadata에 안 잡힌다. 기존 `test_driver.py` 3건이 이 동작 변화로 깨져서 다시 씀(`test_no_worker_gets_reset_run_since_apply_is_not_automatic`/`test_verified_worker_stops_at_generate_patch`/`test_rejected_worker_skips_repair`)
+  - **`mcp_server/prompts.py`**: `_STEPS`/`_REPAIR_VERIFIED_FINDING`/`_RETEST_PATCH`에 `vc_resume_audit`/`vc_export_patch` 안내 추가(reset 전 export 필수라는 점 포함)
+  - **보류 — `vc_audit_target(target_id, mode=...)` tool 노출은 안 했다.** `_default_invoke`가 `asyncio.run(mcp.call_tool(...))`을 쓰는데 이걸 `@mcp.tool()`로 감싸면 FastMCP가 이미 돌리는 이벤트 루프 **안에서** `asyncio.run()`을 또 불러 라이브 서버에서만(단위 테스트는 fake invoke라 못 잡음) `RuntimeError`가 난다. async 배선을 다시 설계해야 하는 별도 작업 — 지금은 driver를 CLI/배치 전용 Python 함수로 남겨둔다
+  - 테스트: `tests/test_export_patch.py` 5건, `tests/test_resume_audit.py` 5건, `tests/test_driver.py`/`tests/test_prompts.py` 갱신. 전체 스위트 556 passed(juice-shop/inventory 1건 제외 — 무관·기존 블로커)
 
 - [x] **W-8. lease 배선** (P2 긴급 요청 3번, §3A-8) — **완료(2026-07-21)**. `mcp_server/driver.py:run_target_audit`
   ```
