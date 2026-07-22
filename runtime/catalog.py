@@ -360,10 +360,18 @@ class TargetCatalog:
 
     def readiness_for(self, target_id: str) -> TargetReadiness:
         target = self.get(target_id)
-        runtime_root = self.source_root_for(target_id) if target.user_registered else self.repository_root
-        readiness = TargetRuntimeInspector(
-            target.manifest, runtime_root
-        ).check_readiness()
+        if target.user_registered:
+            # `source_root_for()`가 이미 `source_repo / manifest.source_dir`까지 적용해
+            # 반환하므로(catalog.py 위 `lifecycle_for()`와 같은 이유), manifest.source_dir을
+            # 그대로 넘기면 TargetRuntimeInspector가 이중 적용해 존재하지 않는 하위 경로
+            # (예: ".../backend/backend")를 찾는다 — 2026-07-23 실사용자 monorepo 등록에서
+            # 발견(readiness가 항상 "source directory does not exist"로 오탐).
+            runtime_root = self.source_root_for(target_id)
+            manifest = target.manifest.model_copy(update={"source_dir": "."})
+        else:
+            runtime_root = self.repository_root
+            manifest = target.manifest
+        readiness = TargetRuntimeInspector(manifest, runtime_root).check_readiness()
         if self._source_lock is None or target.user_registered:
             return readiness
         source = self.source_check_for(target_id)

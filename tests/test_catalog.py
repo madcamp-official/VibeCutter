@@ -87,6 +87,53 @@ class TargetCatalogTests(unittest.TestCase):
             self.assertEqual(catalog.source_repository_for("local-user-api"), source.resolve())
             self.assertEqual(user.contract_target.allowed_hosts, ["127.0.0.1"])
 
+    def test_readiness_for_user_target_does_not_double_apply_source_dir(self) -> None:
+        """모노레포처럼 사용자 target의 `source_dir`가 하위 폴더("backend")일 때,
+        `readiness_for()`가 `source_root_for()`(이미 backend까지 적용된 경로)에
+        `manifest.source_dir`를 또 적용해 ".../backend/backend"를 찾던 버그(2026-07-23
+        실사용자 리포트: 빌드는 성공하는데 readiness만 항상 "does not exist" 오탐)의 회귀 테스트.
+        `lifecycle_for()`엔 같은 문제가 이미 고쳐져 있었는데 `readiness_for()`엔 빠져 있었다.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest_root = root / "manifests"
+            manifest_root.mkdir()
+            (manifest_root / "builtin.yaml").write_text(
+                manifest_yaml("builtin-api"), encoding="utf-8"
+            )
+            source = root / "user-monorepo"
+            source.mkdir()
+            subprocess.run(["git", "-C", str(source), "init", "-q"], check=True)
+            subprocess.run(["git", "-C", str(source), "config", "user.email", "p2@example.test"], check=True)
+            subprocess.run(["git", "-C", str(source), "config", "user.name", "P2 Test"], check=True)
+            backend = source / "backend"
+            backend.mkdir()
+            (backend / "app.py").write_text("print('backend')\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(source), "add", "-A"], check=True)
+            subprocess.run(["git", "-C", str(source), "commit", "-qm", "initial"], check=True)
+
+            user_manifest_path = root / "user.yaml"
+            user_manifest_path.write_text(
+                manifest_yaml("local-user-api").replace("source_dir: .", "source_dir: backend"),
+                encoding="utf-8",
+            )
+            registry = LocalRegistry.load(root / "registry")
+            registry.approve(load_manifest(user_manifest_path), source_path=source)
+
+            catalog = TargetCatalog(
+                manifest_root=manifest_root,
+                repository_root=root,
+                source_lock_path=None,
+                registry=registry,
+            )
+            catalog.load()
+
+            readiness = catalog.readiness_for("local-user-api")
+            self.assertTrue(readiness.source_dir_exists)
+            self.assertEqual(Path(readiness.source_dir), backend.resolve())
+            self.assertNotIn("target source directory does not exist", readiness.issues)
+            self.assertTrue(readiness.ready)
+
     def test_catalog_discovers_p1_contracts_by_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

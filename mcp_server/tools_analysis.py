@@ -84,6 +84,11 @@ class ScanResult(BaseModel):
     run_id: str
     tool: str
     candidate_ids: list[str] = Field(default_factory=list)
+    # candidate_ids가 비어 있는 이유가 "검사해봤더니 안전함"이 아니라 "검증에 필요한
+    # provisioning(fixture/seed 계정 등)이 없어 아예 시도하지 못함"일 때 그 사유를 담는다.
+    # 이전에는 이 사유가 trajectory 로그에만 남고 tool 반환값엔 없어, 호출자가 0건을
+    # "안전"으로 오독할 위험이 있었다(2026-07-23 실사용자 리포트).
+    blocked: list[str] = Field(default_factory=list)
 
 
 class WorkerRunResult(BaseModel):
@@ -269,7 +274,7 @@ def _rag_enrich(run: Run, candidates: list[Candidate]) -> tuple[list[Candidate],
 
 
 def _store_scan_candidates(
-    run: Run, candidates: list[Candidate], *, tool: str
+    run: Run, candidates: list[Candidate], *, tool: str, blocked: list[str] = ()
 ) -> ScanResult:
     """공통 후처리: RAG 보강 → FP reject+우선순위(`scanners.aggregate.aggregate`) → kept만 저장 → trajectory 기록.
 
@@ -302,7 +307,9 @@ def _store_scan_candidates(
         result={**result.summary, **llm_outcome().as_metadata()},
         next_state=run.status,
     )
-    return ScanResult(run_id=run.id, tool=tool, candidate_ids=[c.id for c in result.kept])
+    return ScanResult(
+        run_id=run.id, tool=tool, candidate_ids=[c.id for c in result.kept], blocked=list(blocked)
+    )
 
 
 def register(mcp: FastMCP) -> None:
@@ -372,7 +379,11 @@ def register(mcp: FastMCP) -> None:
 
         provisioning 전략(fixture_file/self_signup)이 아직 준비되지 않은 target은 P3
         계약대로 candidate를 만들지 않고 `blocked`로 남는다("endpoint만 보고 공격하지
-        않는다") — 여기서 우회하지 않고, blocked 사유를 trajectory에 그대로 남긴다.
+        않는다") — 여기서 우회하지 않고, blocked 사유를 trajectory와 `ScanResult.blocked`
+        양쪽에 남긴다. **`candidate_ids`가 비어 있어도 `blocked`가 채워져 있다면 "이 앱은
+        안전하다"가 아니라 "검증 준비가 안 돼 아예 시도하지 못했다"는 뜻이다** — 이전에는
+        이 구분이 trajectory에만 남고 tool 반환값엔 없어 호출자가 혼동할 수 있었다
+        (2026-07-23 실사용자 리포트).
         """
         run = _prepare_scan(run_id, tool_name="vc_scan_access_control")
         service = _service()
@@ -383,6 +394,9 @@ def register(mcp: FastMCP) -> None:
             run.id, provisioning, source_root, xss_fixture_hints=xss_fixture_hints
         )
 
+        blocked_reasons = [
+            f"{b.target_id}: {b.reason} (필요: {b.needed})" for b in bridge_result.blocked
+        ]
         if bridge_result.blocked:
             record_trajectory_step(
                 run.id,
@@ -392,7 +406,7 @@ def register(mcp: FastMCP) -> None:
                 next_state=run.status,
             )
         return _store_scan_candidates(
-            run, bridge_result.candidates, tool="vc_scan_access_control"
+            run, bridge_result.candidates, tool="vc_scan_access_control", blocked=blocked_reasons
         )
 
     @mcp.tool()

@@ -78,3 +78,33 @@ class TargetReadinessTests(unittest.TestCase):
             report = TargetRuntimeInspector(manifest, Path(temp_dir)).check_readiness()
         self.assertTrue(report.ready)
         self.assertEqual(report.unavailable_executables, [])
+
+    def test_relative_wrapper_script_checked_against_source_dir_not_path(self) -> None:
+        """`./gradlew`처럼 프로젝트 루트의 래퍼 스크립트는 PATH가 아니라 source_dir 기준으로
+        존재 여부를 확인해야 한다 — 실제 실행(LifecycleManager._run)이 cwd=source_dir로
+        돌기 때문(2026-07-23 실사용자 monorepo 리포트: 항상 "unavailable executables: ./gradlew"
+        오탐)."""
+        manifest = readiness_manifest().model_copy(deep=True)
+        manifest.commands["build"].argv[0] = "./gradlew"
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"VIBECUTTER_ROLE_A_TOKEN": "configured"}, clear=True
+        ):
+            wrapper = Path(temp_dir) / "gradlew"
+            wrapper.write_text("#!/bin/sh\necho ok\n", encoding="utf-8")
+            wrapper.chmod(0o755)
+            log_path = Path(temp_dir) / "logs" / "app.log"
+            log_path.parent.mkdir()
+            log_path.write_text("safe", encoding="utf-8")
+            report = TargetRuntimeInspector(manifest, Path(temp_dir)).check_readiness()
+        self.assertTrue(report.ready)
+        self.assertEqual(report.unavailable_executables, [])
+
+    def test_relative_wrapper_script_missing_is_still_reported_unavailable(self) -> None:
+        manifest = readiness_manifest().model_copy(deep=True)
+        manifest.commands["build"].argv[0] = "./gradlew"
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"VIBECUTTER_ROLE_A_TOKEN": "configured"}, clear=True
+        ):
+            report = TargetRuntimeInspector(manifest, Path(temp_dir)).check_readiness()
+        self.assertFalse(report.ready)
+        self.assertEqual(report.unavailable_executables, ["./gradlew"])

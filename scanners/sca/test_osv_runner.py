@@ -92,6 +92,47 @@ def test_run_osv_missing_target() -> None:
     raise AssertionError("존재하지 않는 target 은 FileNotFoundError")
 
 
+def test_run_osv_no_package_sources_is_empty_not_a_crash() -> None:
+    """osv-scanner 2.4.0 실측(2026-07-23): 인식 가능한 lockfile이 없으면(예: gradle.lockfile
+    없는 순수 build.gradle) exit 128 + stderr "No package sources found"로 끝난다 — 이건
+    오류가 아니라 "스캔할 게 없다"는 정상 결과라 빈 후보 목록으로 취급해야 한다."""
+    from unittest.mock import patch
+
+    import scanners.sca.osv_runner as osv_runner
+
+    class _FakeCompletedProcess:
+        returncode = 128
+        stdout = ""
+        stderr = "Scanning dir .\nNo package sources found, --help for usage information.\n"
+
+    with patch.object(osv_runner.shutil, "which", return_value="/usr/bin/osv-scanner"), patch.object(
+        osv_runner.subprocess, "run", return_value=_FakeCompletedProcess()
+    ):
+        assert run_osv(".", run_id="r1") == []
+
+
+def test_run_osv_other_nonzero_exit_still_raises() -> None:
+    """"No package sources found" 신호가 없는 다른 비정상 종료는 여전히 크래시로 처리한다 —
+    exit 128을 통째로 무시하지 않는다(진짜 스캐너 오류를 조용히 숨기면 안 됨)."""
+    from unittest.mock import patch
+
+    import scanners.sca.osv_runner as osv_runner
+
+    class _FakeCompletedProcess:
+        returncode = 2
+        stdout = ""
+        stderr = "unexpected internal error"
+
+    with patch.object(osv_runner.shutil, "which", return_value="/usr/bin/osv-scanner"), patch.object(
+        osv_runner.subprocess, "run", return_value=_FakeCompletedProcess()
+    ):
+        try:
+            run_osv(".", run_id="r1")
+        except osv_runner.subprocess.CalledProcessError:
+            return
+    raise AssertionError("알 수 없는 비정상 종료는 여전히 CalledProcessError여야 함")
+
+
 def _run() -> None:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

@@ -82,6 +82,11 @@ class VcScanAccessControlTests(unittest.TestCase):
             _, structured = self._call({"run_id": run.id})
 
         self.assertEqual(structured["candidate_ids"], [])
+        # candidate_ids가 비어 있는 게 "안전해서"가 아니라 "검증 준비가 안 돼 시도 못 함"임을
+        # 호출자가 trajectory를 따로 뒤지지 않아도 반환값만으로 알 수 있어야 한다(2026-07-23 수정).
+        self.assertEqual(len(structured["blocked"]), 1)
+        self.assertIn("인증/seed 방식 미확정", structured["blocked"][0])
+        self.assertIn("P3가 role/resource/endpoint schema 제공", structured["blocked"][0])
         traj_path = TRAJECTORY_DIR / f"{run.id}.jsonl"
         text = traj_path.read_text(encoding="utf-8")
         self.assertIn("blocked", text)

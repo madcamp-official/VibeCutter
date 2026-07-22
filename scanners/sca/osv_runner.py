@@ -128,6 +128,10 @@ def run_osv(
 
     - 바이너리 없으면 OSVUnavailableError.
     - osv-scanner 는 취약점 발견 시 exit code 1 을 낸다(0/1 정상, 그 외 오류).
+    - **exit 128 + "No package sources found"**(osv-scanner 2.x 실측, 2026-07-23)도 오류가
+      아니라 빈 결과다 — Gradle의 `build.gradle`처럼 osv-scanner가 인식하는 lockfile이
+      하나도 없는 프로젝트에서 항상 이렇게 종료한다. 이 신호를 오류로 처리하면 "스캔할
+      의존성 파일이 없다"는 정상 케이스가 크래시로 보고된다(실사용자 리포트로 확인).
     """
     root = Path(target_root)
     if not root.exists():
@@ -139,6 +143,8 @@ def run_osv(
     cmd = [osv_bin, "--format", "json", "-r", str(root)]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if proc.returncode not in (0, 1):
+        if proc.returncode == 128 and "No package sources found" in (proc.stderr or ""):
+            return []
         raise subprocess.CalledProcessError(
             proc.returncode, cmd, output=proc.stdout, stderr=proc.stderr
         )

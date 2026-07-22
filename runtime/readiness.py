@@ -63,7 +63,7 @@ class TargetRuntimeInspector:
             {
                 spec.argv[0]
                 for spec in self.manifest.commands.values()
-                if not _is_executable_available(spec.argv[0])
+                if not _is_executable_available(spec.argv[0], source_dir=self.source_dir)
             }
         )
         fixtures = [
@@ -126,10 +126,16 @@ class TargetRuntimeInspector:
         return locations
 
 
-def _is_executable_available(executable: str) -> bool:
+def _is_executable_available(executable: str, *, source_dir: Path) -> bool:
     if executable == VIBECUTTER_PYTHON:
         return True
     path = Path(executable)
     if path.is_absolute():
         return path.is_file()
+    if path.name != executable:
+        # 경로 구분자가 있는 상대경로(예: "./gradlew", "bin/mvnw")는 PATH에서 찾는 명령이
+        # 아니라 프로젝트 안의 래퍼 스크립트다. 실제 실행 시 `LifecycleManager._run()`이
+        # `cwd=source_dir`로 돌리므로(runtime/lifecycle.py), 그 규칙과 똑같이 source_dir
+        # 기준으로 존재 여부를 확인한다 — PATH로 찾으면 항상 "unavailable" 오탐이 난다.
+        return (source_dir / path).is_file()
     return shutil.which(executable) is not None
