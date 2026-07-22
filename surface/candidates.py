@@ -354,8 +354,18 @@ _WRITE_SINK = re.compile(r"\binsert\s+into\b|\bupdate\b[\s\S]{0,120}?\bset\b|\bd
 # 잡던 것을 확장. 리터럴만 든 호출은 `\{...\}`(보간) 요구로 자연히 제외(precision).
 _SERVER_XSS = re.compile(
     r'(?:HTMLResponse|mark_safe|render_template_string|Markup)\s*\(\s*f["\'][^"\']*\{([^}]+)\}', re.I)
+# Express 서버측 반사 XSS: res.send/write/end에 요청 입력을 escape 없이 실어 보냄(HTML 반사).
+# 살균(escape/encode/sanitize/DOMPurify)을 거친 값은 제외(precision). res.json은 JSON이라 대상 아님.
+_EXPRESS_XSS = re.compile(
+    r"res(?:ponse)?\.(?:send|write|end)\s*\(\s*"
+    r"(?![^)]*(?:escape|encode|sanitiz|dompurify|striptags|xss[_-]?clean))"
+    r"([^)]*(?:`[^`]*\$\{[^}]+\}[^`]*`|req(?:uest)?\.\w+\.\w+"
+    r"|['\"][^'\"]*['\"]\s*\+\s*\w+|\w+\s*\+\s*['\"])[^)]*)\)", re.I)
 # HTTP 요청 파라미터 접근(Express/Node): `req.query.q`, `request.body.email`, `req.params.id`.
-_REQ_SOURCE = re.compile(r"req(?:uest)?\.(?:query|params|body)\.(\w+)")
+# 그룹1=출처(query/params/body), 그룹2=파라미터명.
+_REQ_SOURCE = re.compile(r"req(?:uest)?\.(query|params|body)\.(\w+)")
+# 요청 출처 → verifier inject_location. params(경로 파라미터)는 path 주입.
+_LOC_FOR_SOURCE = {"query": "query", "body": "json", "params": "path"}
 
 
 def _sql_sink_in_body(body: str) -> tuple[str, bool] | None:
@@ -396,26 +406,28 @@ def _sql_sink_in_body(body: str) -> tuple[str, bool] | None:
     return None
 
 
-def _http_param_for(sink_line: str, body: str) -> str:
-    """SQL에 결합된 변수를 HTTP 요청 파라미터명으로 역추적(Node/Express). 못 찾으면 "".
+def _http_param_for(sink_line: str, body: str) -> tuple[str, str]:
+    """SQL에 결합된 변수를 (HTTP 파라미터명, 출처 query|params|body)로 역추적(Node/Express).
+    못 찾으면 ("", "").
 
     Juice Shop처럼 SQL 인터폴레이션 변수(`criteria`)가 HTTP 파라미터(`q`)와 다르면, 그대로 쓰면
-    verify probe가 엉뚱한 `?criteria=`를 때려 차등이 안 난다. `req.query.q` 접근을 역추적해 verify가
-    실제 파라미터를 주입하게 한다. 파이썬 등 요청 접근이 없는 스택이면 ""로 호출부가 `_interp_var` 폴백.
+    verify probe가 엉뚱한 `?criteria=`를 때려 차등이 안 난다. `req.query.q`/`req.params.id`/`req.body.x`
+    접근을 역추적해 verify가 실제 파라미터를 **올바른 위치**(query/path/json)에 주입하게 한다. 파이썬 등
+    요청 접근이 없는 스택이면 ("", "")로 호출부가 `_interp_var`·라우트 method 기반 폴백을 쓴다.
     """
-    # 1) sink 라인에 요청 접근이 직접 있으면(예: `${req.body.email}`) 그 파라미터를 쓴다.
+    # 1) sink 라인에 요청 접근이 직접 있으면(예: `${req.body.email}`) 그 파라미터·출처를 쓴다.
     m = _REQ_SOURCE.search(sink_line)
     if m:
-        return m.group(1)
+        return m.group(2), m.group(1)
     # 2) 인터폴레이션 변수를 본문의 `<var> = ... req.query.X` 대입에서 역추적(같은 라인 한정).
     var = _interp_var(sink_line)
     if var:
-        am = re.search(rf"\b{re.escape(var)}\b\s*[:=][^\n;]*?req(?:uest)?\.(?:query|params|body)\.(\w+)", body)
+        am = re.search(rf"\b{re.escape(var)}\b\s*[:=][^\n;]*?req(?:uest)?\.(query|params|body)\.(\w+)", body)
         if am:
-            return am.group(1)
+            return am.group(2), am.group(1)
     # 3) 최후: 본문의 첫 요청 파라미터 접근.
     bm = _REQ_SOURCE.search(body)
-    return bm.group(1) if bm else ""
+    return (bm.group(2), bm.group(1)) if bm else ("", "")
 
 
 def _node_source_files(root: Path) -> dict[str, str]:
@@ -509,11 +521,14 @@ def injection_xss_candidates(
                     seen.add(("injection", path))
                     method = _method_for(text, path)
                     # SQL 결합 변수가 아니라 실제 HTTP 요청 파라미터를 verify에 넘긴다(Node ↔ SQL 변수 불일치 방어).
-                    param = _http_param_for(line, body) or _interp_var(line) or "q"
+                    param, source = _http_param_for(line, body)
+                    param = param or _interp_var(line) or "q"
+                    # 출처로 주입 위치 결정: req.params→path, req.body→json, req.query→query. 못 찾으면 method 기반.
+                    location = _LOC_FOR_SOURCE.get(source) or ("query" if method == "GET" else "json")
                     ap = {"base_url": base, "inject_path": path, "inject_param": param,
-                          "inject_method": method, "inject_location": "query" if method == "GET" else "json"}
+                          "inject_method": method, "inject_location": location}
                     if method != "GET":
-                        ap["read_query"] = "true"  # SELECT 싱크라 불리언 테스트 안전
+                        ap["read_query"] = "true"  # SELECT 싱크라 불리언 테스트 안전(위치 무관)
                     if _stack == "node" and node_files is None:
                         node_files = _node_source_files(root)
                     # 패치 대상은 route 등록 파일이 아니라 sink이 있는 handler 파일(Node 다중파일 방어).
@@ -522,17 +537,25 @@ def injection_xss_candidates(
                         id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-89", vuln_class="injection",
                         endpoint=path, source_symbols=[sink_symbol], attack_params=ap,
                     ))
-            # ── XSS: 서버측 반사 sink(HTMLResponse·mark_safe·render_template_string·Markup) ──
-            hm = _SERVER_XSS.search(body)
+            # ── XSS: 서버측 반사 sink(Python HTMLResponse/mark_safe/... 또는 Express res.send/write/end) ──
+            py_hm = _SERVER_XSS.search(body)
+            hm = py_hm or _EXPRESS_XSS.search(body)
             if hm and ("xss", path) not in seen:
-                seen.add(("xss", path))
-                param = re.match(r"[A-Za-z_]\w*", hm.group(1).strip())
-                cands.append(Candidate(
-                    id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-79", vuln_class="xss",
-                    endpoint=path, source_symbols=[f"{rel}"],
-                    attack_params={"base_url": base, "context": "reflected", "inject_path": path,
-                                   "inject_param": param.group(0) if param else "q", "inject_method": "GET"},
-                ))
+                # 실제 HTTP 요청 파라미터를 역추적(Node req.query.q 등).
+                xparam, _src = _http_param_for(hm.group(0), body)
+                # Python 서버 sink은 함수 파라미터가 곧 요청값이라 보간 변수로 폴백. Express concat은
+                # 요청 역추적이 돼야 사용자 입력임이 확실 → 못 찾으면 후보를 만들지 않는다(precision).
+                if not xparam and py_hm is not None:
+                    m = re.match(r"[A-Za-z_]\w*", hm.group(1).strip())
+                    xparam = m.group(0) if m else "q"
+                if xparam:
+                    seen.add(("xss", path))
+                    cands.append(Candidate(
+                        id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-79", vuln_class="xss",
+                        endpoint=path, source_symbols=[f"{rel}"],
+                        attack_params={"base_url": base, "context": "reflected", "inject_path": path,
+                                       "inject_param": xparam, "inject_method": "GET"},
+                    ))
 
     # ── 프론트 XSS 싱크: 라우트를 못 붙임 → blocked(fixture/라우트 계약 필요) ──
     for s in find_xss_suspects(root):

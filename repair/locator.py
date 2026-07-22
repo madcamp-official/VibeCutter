@@ -102,6 +102,30 @@ def _root_cause_reason(cwe: str | None) -> str:
     return "이 handler가 요청자 소유권/권한 검사를 하지 않는 것"
 
 
+def _xss_fix_hint(cwe: str | None, file: str) -> str:
+    """CWE-79 XSS의 **프레임워크별 올바른 수정 방향**(출력 인코딩/정화). rationale에 실어 235B가
+    접근제어 가드 같은 엉뚱한 패치가 아니라 컨텍스트에 맞는 이스케이프/정화를 하게 한다. 비-XSS면 "".
+    파일 확장자로 프레임워크를 추정한다(프로젝트 내 프레임워크는 대체로 일관)."""
+    if _cwe_num(cwe) != "79":
+        return ""
+    low = (file or "").lower()
+    if low.endswith((".tsx", ".jsx")):
+        return (" 수정 방향(React): dangerouslySetInnerHTML를 없애고 값을 JSX로 그대로 렌더(자동 "
+                "이스케이프)하거나, HTML이 꼭 필요하면 DOMPurify.sanitize()로 정화하라.")
+    if low.endswith(".vue"):
+        return " 수정 방향(Vue): v-html 대신 텍스트 보간({{ }})을 쓰거나 필요 시 DOMPurify로 정화하라."
+    if low.endswith(".py"):
+        return (" 수정 방향(Python/템플릿): mark_safe·render_template_string으로 원시 HTML을 반환하지 말고, "
+                "템플릿 autoescape를 켜거나 markupsafe.escape()로 값을 이스케이프하라.")
+    if low.endswith((".ts", ".js")):
+        return (" 수정 방향(JS/Express): element.innerHTML 대신 textContent를 쓰거나(HTML 불필요), res.send로 "
+                "반사하는 값은 escape-html/sanitize-html로 인코딩하라.")
+    if low.endswith((".html", ".ejs", ".hbs")):
+        return (" 수정 방향(템플릿): |safe·th:utext·<%- %>·{{{ }}} 같은 비이스케이프 출력을 기본 이스케이프 "
+                "출력으로 바꿔라.")
+    return " 수정 방향: 출력 컨텍스트에 맞는 이스케이프/인코딩을 적용하고, HTML이 불필요하면 텍스트로 렌더하라."
+
+
 def _sast_files(finding: Finding) -> set[str]:
     """Finding.source_symbols("파일:줄")에서 파일 경로만 뽑는다(SAST 교차검증용)."""
     return {s.split(":")[0] for s in finding.source_symbols if ":" in s}
@@ -189,9 +213,11 @@ def localize(finding: Finding, *, source_root: str | Path) -> RootCause:
         # sink형(XSS/SQLi)은 고칠 곳이 진입 handler가 아니라 sink다. SAST가 sink 위치를 짚었으면
         # rationale에 실어 LLM/사람이 그쪽을 향하게 한다(앵커 file/symbol은 도달 증명된 handler로 유지).
         sink_note = ""
+        hint_file = file  # XSS 수정 힌트는 sink 파일 기준(프레임워크 추정). sink 미상이면 handler 파일.
         if _cwe_num(finding.cwe) in _SINK_TYPE_CWES:
             sinks = _sast_sink_locations(finding)
             if sinks:
+                hint_file = sinks[0].split(":")[0]
                 sink_note = (
                     f" 단, 실제 취약 지점(sink)은 SAST 기준 {', '.join(sinks)}일 수 있다 — "
                     f"이 handler와 다른 파일/메서드면 거기를 우선 수정하라."
@@ -201,7 +227,7 @@ def localize(finding: Finding, *, source_root: str | Path) -> RootCause:
             f"공격이 실제로 이 경로로 도달했다"
             f"{' — SAST 지목 위치와도 일치' if agree else ''}. "
             f"{finding.cwe or 'IDOR'}의 원인은 {_root_cause_reason(finding.cwe)}.{sink_note} "
-            f"권장 수정 계층: {layer}."
+            f"권장 수정 계층: {layer}.{_xss_fix_hint(finding.cwe, hint_file)}"
         )
         return RootCause(file=file, symbol=symbol, rationale=rationale)
 
@@ -215,7 +241,7 @@ def localize(finding: Finding, *, source_root: str | Path) -> RootCause:
                 f"소스 route 매핑에서 endpoint {endpoint!r}를 못 찾아(비-Spring이거나 파서 한계), "
                 f"SAST가 지목한 위치를 근본 원인 후보로 채택했다. "
                 f"{finding.cwe or '취약점'}의 원인은 {_root_cause_reason(finding.cwe)}. "
-                f"수정 계층은 파일 확인 후 결정 권장."
+                f"수정 계층은 파일 확인 후 결정 권장.{_xss_fix_hint(finding.cwe, file)}"
             ),
         )
 

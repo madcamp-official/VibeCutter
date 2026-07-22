@@ -66,7 +66,7 @@ class InjectionProbe(BaseModel):
     inject_path: str                    # 주입 지점 경로 (예: /api/search, /api/auth/login)
     inject_param: str                   # 주입할 파라미터/필드 이름
     inject_method: str = "GET"          # 기본 GET(읽기). 비-GET은 read_query=true 필요
-    inject_location: str = "query"      # "query" | "form" | "json"
+    inject_location: str = "query"      # "query" | "form" | "json" | "path"(경로 파라미터)
     baseline_value: str = "1"           # 정상 동작 확인용 benign 값
     read_query: bool = False            # 비-GET 재현 허용 게이트(SELECT 기반 보증)
     extra_params: dict[str, str] = {}   # 함께 보내야 하는 다른 필수 필드
@@ -159,11 +159,31 @@ class _Attempt(BaseModel):
     reason: str
 
 
+def _inject_into_path(inject_path: str, param: str, value: str) -> str:
+    """경로 파라미터 자리(`:param`/`{param}`/`<param>`)에 payload를 URL 인코딩해 치환한다.
+
+    토큰이 없으면(정규화 경로) payload를 마지막 세그먼트로 덧붙인다(best-effort). 경로 주입은
+    SELECT 읽기 sink에만 오므로(write는 candidate 단계에서 blocked) 불리언 payload가 파괴적이지 않다.
+    """
+    from urllib.parse import quote
+
+    enc = quote(value, safe="")
+    for token in (f":{param}", f"{{{param}}}", f"<{param}>"):
+        if token in inject_path:
+            return inject_path.replace(token, enc)
+    return f"{inject_path.rstrip('/')}/{enc}"
+
+
 def _send(client: httpx.Client, probe: InjectionProbe, value: str) -> tuple[int, str]:
     """주입 값 하나로 요청을 보내 (status, body)를 돌려준다. location에 맞게 주입 위치를 고른다."""
+    method = probe.inject_method.upper()
+    # 경로 파라미터 주입(`req.params.id`): payload를 경로 토큰에 치환. query/body와 배타적.
+    if probe.inject_location == "path":
+        url = f"{probe.base_url.rstrip('/')}{_inject_into_path(probe.inject_path, probe.inject_param, value)}"
+        r = client.request(method, url, params=(probe.extra_params or None))
+        return r.status_code, r.text
     url = f"{probe.base_url.rstrip('/')}{probe.inject_path}"
     payload = {**probe.extra_params, probe.inject_param: value}
-    method = probe.inject_method.upper()
     if method == "GET":
         r = client.get(url, params=payload)
     elif probe.inject_location == "json":

@@ -233,6 +233,25 @@ class LocalizeVulnClassReasonTests(unittest.TestCase):
         self.assertIn("파라미터", rc.rationale)
         self.assertNotIn("소유권/권한", rc.rationale)
 
+    def test_xss_fix_hint_is_framework_specific(self) -> None:
+        # X6: XSS rationale에 sink 파일 프레임워크별 올바른 수정 방향을 실어 235B가 접근제어 가드가
+        # 아니라 이스케이프/정화 패치를 하게 한다.
+        for sast_loc, expect in (("web/Comp.tsx:5", "DOMPurify"), ("app/views.py:5", "autoescape"),
+                                 ("src/render.ts:5", "textContent")):
+            finding = self._finding_cwe("CWE-79", "GET /c", [sast_loc])
+            routes = [_route("GET", "/c", "H.get", "server.ts:1")]
+            with patch("repair.locator.extract_routes", return_value=routes):
+                rc = localize(finding, source_root="/nonexistent")
+            self.assertIn(expect, rc.rationale, sast_loc)
+            self.assertNotIn("소유권/권한", rc.rationale, sast_loc)
+
+    def test_sqli_has_no_xss_fix_hint(self) -> None:
+        finding = self._finding_cwe("CWE-89", "GET /s", ["dao.py:5"])
+        routes = [_route("GET", "/s", "S.q", "dao.py:3")]
+        with patch("repair.locator.extract_routes", return_value=routes):
+            rc = localize(finding, source_root="/nonexistent")
+        self.assertNotIn("수정 방향", rc.rationale)
+
     def test_sast_fallback_carries_class_reason(self) -> None:
         finding = self._finding_cwe("CWE-79", "POST /no/match", ["app/render.py:42"])
         with patch("repair.locator.extract_routes", return_value=[]):
