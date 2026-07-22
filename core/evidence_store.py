@@ -14,6 +14,9 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Sequence
 from datetime import datetime
+from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 from uuid import uuid4
 
 from sqlmodel import JSON, Column, Field, Session, SQLModel, select
@@ -257,6 +260,21 @@ def find_or_create_validation(run_id: str, patch_id: str) -> Validation:
     validation = Validation(id=f"validation-{uuid4().hex[:12]}", run_id=run_id, patch_id=patch_id)
     save(validation)
     return validation
+
+
+def file_uri_to_path(uri: str) -> Path:
+    """`Path.as_uri()`가 만든 `file://` URI를 다시 로컬 `Path`로 되돌린다.
+
+    naive한 prefix 제거(`uri.removeprefix("file://")`)는 POSIX에서만 우연히 맞는다 — Windows
+    에서 `Path.as_uri()`는 `file:///C:/Users/...`를 내는데, `file://`만 지우면 드라이브 문자
+    앞에 슬래시가 남은 `/C:/Users/...`가 되어 `open()`이 열 수 있는 경로가 아니다(P2 리포트,
+    Windows `test_evidence_store.py` 3건 실패 원인). `urllib.request.url2pathname`은 이걸
+    플랫폼별로(Windows에서는 `nturl2path`가 드라이브 문자 앞 슬래시를 제거) 올바르게
+    되돌린다 — POSIX/Windows 양쪽에서 `Path.as_uri()`의 정확한 역함수다. `Observation.
+    artifact_uri`뿐 아니라 같은 `Path.as_uri()` 계약을 쓰는 `ReportResult.artifact_uri`
+    (`mcp_server/tools_repair.py`/`resources.py`)를 되돌릴 때도 그대로 쓸 수 있다.
+    """
+    return Path(url2pathname(urlparse(uri).path))
 
 
 def write_artifact(

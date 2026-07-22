@@ -6,6 +6,7 @@ from uuid import uuid4
 from contracts.schemas import Candidate, Finding, FindingStatus
 from core.evidence_store import (
     InvalidEvidenceError,
+    file_uri_to_path,
     find_or_create_finding,
     get,
     save,
@@ -74,7 +75,7 @@ class WriteArtifactRedactionTests(unittest.TestCase):
         obs = write_artifact(
             run_id, observation_type="http_exchange", producer="test", data=secret_body
         )
-        stored = obs.artifact_uri.removeprefix("file://")
+        stored = file_uri_to_path(obs.artifact_uri)
         with open(stored, "rb") as f:
             on_disk = f.read()
         self.assertNotIn(b"super-secret-token-123", on_disk)
@@ -90,7 +91,7 @@ class WriteArtifactRedactionTests(unittest.TestCase):
             producer="test",
             data=b'{"password": "hunter2"}',
         )
-        stored = obs.artifact_uri.removeprefix("file://")
+        stored = file_uri_to_path(obs.artifact_uri)
         with open(stored, "rb") as f:
             on_disk = f.read()
         self.assertEqual(obs.hash, sha256_of(on_disk))
@@ -101,10 +102,29 @@ class WriteArtifactRedactionTests(unittest.TestCase):
         obs = write_artifact(
             run_id, observation_type="browser_trace", producer="test", data=binary
         )
-        stored = obs.artifact_uri.removeprefix("file://")
+        stored = file_uri_to_path(obs.artifact_uri)
         with open(stored, "rb") as f:
             on_disk = f.read()
         self.assertEqual(on_disk, binary)
+
+
+class FileUriToPathTests(unittest.TestCase):
+    """P2 리포트 회귀 방지: `Path.as_uri()`/`file_uri_to_path()`가 정확한 역함수 쌍인지 확인."""
+
+    def test_round_trips_with_path_as_uri(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            original = Path(tmp) / "sub dir" / "artifact.bin"  # 공백 포함 — quoting 확인
+            self.assertEqual(file_uri_to_path(original.as_uri()), original)
+
+    def test_rejects_naive_prefix_removal_shape_is_not_assumed(self) -> None:
+        """POSIX URI는 `file://` 제거만으로도 우연히 맞는다 — 그 우연에 기대지 않는지 확인."""
+        from pathlib import Path
+
+        p = Path("/tmp/x/y.bin")
+        self.assertEqual(file_uri_to_path(p.as_uri()), p)
 
 
 class FindOrCreateFindingVocabTests(unittest.TestCase):
