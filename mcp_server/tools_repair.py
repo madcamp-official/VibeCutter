@@ -725,7 +725,7 @@ def register(mcp: FastMCP) -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         report_path = out_dir / "report.html"
         report_path.write_text(document, encoding="utf-8")
-        return ReportResult(run_id=run_id, artifact_uri=f"file://{report_path}", format="html")
+        return ReportResult(run_id=run_id, artifact_uri=report_path.as_uri(), format="html")
 
     @mcp.tool()
     @audited
@@ -744,4 +744,4 @@ def register(mcp: FastMCP) -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         report_path = out_dir / "report.sarif"
         report_path.write_text(document, encoding="utf-8")
-        return ReportResult(run_id=run_id, artifact_uri=f"file://{report_path}", format="sarif")
+        return ReportResult(run_id=run_id, artifact_uri=report_path.as_uri(), format="sarif")

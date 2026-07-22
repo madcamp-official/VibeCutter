@@ -286,7 +286,7 @@ def write_artifact(
         id=obs_id,
         run_id=run_id,
         type=observation_type,
-        artifact_uri=f"file://{artifact_path}",
+        artifact_uri=artifact_path.as_uri(),
         hash=digest,
         producer=producer,
     )
