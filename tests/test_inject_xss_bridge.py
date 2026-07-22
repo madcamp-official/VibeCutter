@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from runtime.provisioning import ProvisioningStrategy, VerifierProvisioning
-from surface.candidates import injection_xss_candidates
+from surface.candidates import candidates_for_target, injection_xss_candidates
 from verifiers import injection, xss
 
 
@@ -63,6 +63,28 @@ _CROSS_LINE_PY = '@app.get("/cl")\ndef c(q: str):\n    sql = f"SELECT * FROM t W
 _COMMENT_PY = '@app.get("/cm")\ndef c(q: str):\n    # return db.execute(f"SELECT * FROM t WHERE x = \'{q}\'")\n    return safe(q)\n'
 # 인라인 arrow 핸들러(심볼 없이 라우트에 직접) 안의 SQLi — _node_handlers 인라인 추출 필요.
 _INLINE_ARROW = "router.get('/inline', (req, res) => {\n  const sql = `SELECT * FROM t WHERE n = '${req.query.q}'`\n  return db.query(sql)\n})\n"
+
+
+class EntryPointWiringTests(unittest.TestCase):
+    """candidates_for_target(MCP scan tool 단일 진입점)이 IDOR뿐 아니라 injection/XSS도 내는지.
+
+    이전엔 IDOR만 냈고 injection_xss_candidates는 어디서도 안 불려 실제 audit에 안 닿았다(배선 gap).
+    """
+
+    def _prov_ir(self):
+        return VerifierProvisioning(target_id="t", base_url="http://127.0.0.1:9",
+                                    strategy=ProvisioningStrategy.CONTRACT_REQUIRED,
+                                    auth_mode="none", notes="test")
+
+    def test_entry_point_yields_injection_and_xss_candidates(self):
+        files = {
+            "s.ts": "router.get('/s', (req,res)=>{\n  const sql = `SELECT * FROM p WHERE n = '${req.query.q}'`\n  return db.query(sql)\n})\n",
+            "v.py": '@app.get("/v")\ndef v(name: str):\n    return mark_safe(f"<h1>{name}</h1>")\n',
+        }
+        with _tree(files) as d:
+            classes = {c.vuln_class for c in candidates_for_target("r", self._prov_ir(), d).candidates}
+        self.assertIn("injection", classes)
+        self.assertIn("xss", classes)
 
 
 class InjectionXssBridgeTests(unittest.TestCase):

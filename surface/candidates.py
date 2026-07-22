@@ -250,13 +250,24 @@ def candidates_for_target(
     *,
     self_signup_hints: dict | None = None,
 ) -> BridgeResult:
-    """target 하나 → IDOR candidates(또는 blocked). MCP map/scan tool·배치가 부를 단일 진입점.
+    """target 하나 → 검증가능 Candidate(**IDOR + injection + XSS**) 또는 blocked. MCP scan tool·배치 단일 진입점.
 
-    `find_idor_suspects(source_root)` + `build_candidates(...)`를 한 번에 묶는다. P1 tool 배선은
-    `catalog.source_root_for(target_id)`와 `vc_get_verifier_provisioning(target_id)`만 넘기면 된다.
+    IDOR(`find_idor_suspects`+`build_candidates`)와 injection/XSS(`injection_xss_candidates`)를 **한
+    진입점에서 모두** 만든다. 이전엔 IDOR만 냈고 `injection_xss_candidates`는 어디서도 안 불려, 3군
+    엔진·오라클이 다 있어도 injection/XSS 후보가 실제 audit에 닿지 않았다(예: J-3 Juice Shop SQLi가
+    스캔에서 후보 0). vuln_class로 이미 구분되므로 dispatch가 각 verifier로 라우팅한다.
+    P1 tool 배선은 `source_root`·`provisioning`만 넘기면 되고 그대로 세 종을 다 받는다.
     """
     suspects = find_idor_suspects(source_root)
-    return build_candidates(run_id, provisioning, suspects, self_signup_hints=self_signup_hints)
+    result = build_candidates(run_id, provisioning, suspects, self_signup_hints=self_signup_hints)
+    try:
+        inj_xss = injection_xss_candidates(run_id, provisioning, source_root)
+    except Exception:  # noqa: BLE001 — injection/XSS 스캔 실패가 IDOR 후보 생성을 막지 않게(비파괴)
+        inj_xss = BridgeResult()
+    return BridgeResult(
+        candidates=[*result.candidates, *inj_xss.candidates],
+        blocked=[*result.blocked, *inj_xss.blocked],
+    )
 
 
 def build_candidates(
