@@ -43,6 +43,10 @@
 - **noise-floor 하드닝**: baseline(benign)을 2회 재서 엔드포인트 자연 변동을 측정, `_MIN_DELTA + 2×변동`을
   임계로 삼아 타임스탬프/nonce/페이지네이션에 의한 오탐을 억제. baseline 상태코드가 불안정하면 상태 갈림
   신호를 신뢰하지 않는다.
+- **콘텐츠 발산 신호(I4)**: 참(모든 행)과 거짓(빈 결과)의 응답 **길이가 우연히 비슷해** length-delta가
+  놓치는 경우도, 두 본문의 **구조 유사도**가 낮으면 결과셋 열/닫힘으로 판정한다(길이 신호 보완, recall↑).
+  precision 불변식 유지 — 한 글자 payload 에코·살균 앱(두 무효값이 같은 '없음' 페이지)·노이즈 엔드포인트·
+  짧은 본문은 발화하지 않는다(benign 2-sample 유사도를 바닥으로 깔아 억제). recall만 넓히고 오탐은 안 늘린다.
 - **비-GET 가드**: `read_query` 보증 없는 비-GET은 재현 거부(`NotImplementedError`) — 파괴적 쿼리에 불리언
   payload가 안 들어가게. endpoint만 보고 공격하지 않는다.
 
@@ -50,6 +54,9 @@
 - 판정 근거는 "payload가 HTML에 반사됐나"가 **아니라** 브라우저에서 **benign 마커가 실제로 실행됐나**
   (`window.<flag>` set). 서버가 `&lt;script&gt;`로 escape하면 반사돼도 실행 안 됨 → 취약 아님.
 - payload는 `window.<flag>=1` 하나만 세팅 — 네트워크 호출·쿠키 접근 없음(유출 불가, 컨테이너 안전).
+- **격리 브라우저 부재 시 degrade(X5)**: Playwright/chromium이 없으면 verify가 크래시하거나 통과로
+  위조하지 않고 **`verified=False` + 명확한 사유**로 내려간다(evidence 미기록). 즉 "브라우저 없이는 XSS를
+  verified로 만들지 않는다"가 판정 경계 — 실행 관찰이 불가능하면 미확인으로 남긴다(F-negative는 안전 방향).
 
 ---
 
