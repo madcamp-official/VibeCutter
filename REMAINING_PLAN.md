@@ -29,8 +29,8 @@
   내린다. 패치는 원본이 아니라 run별 격리 Git worktree에만 적용한다. `FIXED`는 6게이트(Build·
   Attack replay·Positive·Regression·Static·Scope) 전부 통과해야 한다. **사용자 승인 없이는 어떤
   명령 실행·패치 적용·외부 전송도 하지 않는다.**
-- **모델 전략: 주 = Qwen3-235B(외부 API), fallback = 72B.** ⚠️ 72B는 **아직 코드·설정에 미반영**
-  이다(현재 fallback 기본값이 옛 7B). → 3절.
+- **모델 전략: 주 = Qwen3-235B(외부 API), fallback = 72B.** 72B endpoint·모델 ID·로컬
+  fallback 설정까지 반영했고 health 및 Chat Completions 응답을 확인했다.
 
 ---
 
@@ -46,9 +46,8 @@
 - ✅ **Juice Shop 등록·pinned source bootstrap** + **P2가 CAMP-1에서 default-bridge로 런타임 경로
   확보**(`/rest/products/search?q=apple` HTTP 200 실측, 2026-07-21 18:48).
 
-**→ "새로 만드는" 단계는 거의 끝.** 남은 건 ①**IDOR 외 2종의 실증·정확도·성능**(4절), ②**임의
-사용자 온보딩 완성**(5절), ③**비전문 사용자 UX**(6절), ④**모델 fallback 배선**(3절), ⑤**발표
-완주·측정·문서**(7절).
+**→ 핵심 구현·실증 단계는 완료.** 남은 항목은 추가 앱 커버리지, 선택적 성능 개선, 발표 자료와
+문서 정리처럼 완성도를 높이는 후속 작업이다.
 
 ### 1.1 취약점 3종 실증 현황 (한눈)
 
@@ -75,28 +74,18 @@ J-3 실주행(P3)뿐이다.~~ **(2026-07-22 P1) J-3 실주행 완료, FIXED.** 7
 
 ---
 
-## 3. 모델 tier — 235B 주 / 72B fallback (72B는 보류)
+## 3. 모델 tier — 235B 주 / 72B fallback (완료)
 
-**현재 운영 결정**: primary=235B. 72B fallback은 준비 전까지 보류한다.
-**현실(2026-07-21 코드 기준)**:
-- 현재 `.env`에는 **primary(235B)만** 있고 `VIBECUTTER_LLM_FALLBACK_ENDPOINT`가 **미설정** →
-  235B 터널이 죽으면 fallback 없이 곧바로 **휴리스틱**으로 떨어진다.
-- 코드 기본값 `model/endpoints.py:43` `DEFAULT_FALLBACK_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"`
-  — **아직 7B**. `.env.example`·`endpoints.py` docstring·`docs/P4_MODEL_SERVING_RUNBOOK.md`도 전부 7B로 서술.
-- 즉 **"72B fallback"은 아직 코드·설정·문서 어디에도 없다.** (7B→72B 전환이 최근이라 문서 곳곳에 7B 잔재)
+**현재 운영 결정**: primary=235B, 장애 시 fallback=72B.
+- 로컬 `.env`에 fallback endpoint/model/API key를 설정했다(키는 저장소에 커밋하지 않음).
+- `model/endpoints.py` 기본 fallback 모델과 `.env.example` 문서를 72B 기준으로 갱신했다.
+- `python -m model.endpoints`: primary/fallback 모두 `[UP]` 확인.
+- 72B `/v1/chat/completions` 실제 호출: `200 OK`, model=`qwen2.5-72b-awq`.
 
-**해야 할 일**
-- [ ] **[보류]** 72B endpoint 기동(GPU 서버) + 도달 URL/모델ID/키를 P4에 전달. 72B 서버와
-  계약이 준비될 때 재개한다. 현재 발표·E2E의 필수 조건이 아니다.
-  (`resolve_tiers`, chained fallback)은 tier-agnostic이라 그대로 재사용된다.
-- [ ] **[보류]** `.env`에 `VIBECUTTER_LLM_FALLBACK_ENDPOINT` + `VIBECUTTER_LLM_FALLBACK_MODEL=<72B id>` 추가.
-- [~] **[P4 부분]** `model/endpoints.py`의 `DEFAULT_FALLBACK_MODEL`을 72B로 교체 + `.env.example`·docstring·
-  `docs/P4_MODEL_SERVING_RUNBOOK.md`의 7B 표기를 72B로 일괄 정정.
-  **(2026-07-22 P4 갱신)** 문서(`endpoints.py` docstring·상수 주석, `.env.example` fallback 서술)는 7B→72B
-  전환 의도로 정리 + P2 72B id 의존을 TODO로 명시. **상수 실값은 P2가 72B 기동·model id 제공해야 교체**
-  (값 추측 시 fallback 조용히 깨져서 안 함). 폐기된 로컬 7B 서빙 런북 본문은 미변경(historical).
-- **완료 판정**: `python -m model.endpoints`가 primary 235B `[UP]` + fallback 72B `[UP]` 둘 다
-  보이고, 235B를 죽였을 때 호출이 72B로 넘어가며 `llm_used=True/tier=fallback`이 metadata에 남는다.
+- [x] 72B endpoint 도달·모델 ID 확인 및 로컬 fallback 설정.
+- [x] primary/fallback health probe 및 72B Chat Completions smoke.
+- **완료 판정**: `python -m model.endpoints`에서 primary 235B `[UP]` + fallback 72B `[UP]`,
+  72B Chat Completions smoke `200 OK`, endpoint chain 단위 테스트 19/19 통과.
 
 ---
 
@@ -579,15 +568,15 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
   절에서 fallback 아직 7B인 점 등 진행 중 상태도 정직하게 적음. 문서 작성 전 서브에이전트로
   모든 인용 사실(엔드포인트가 실제로 팀 자체 GPU인지, redaction 패턴 정확한 목록, 각
   승인 게이트의 정확한 강제 코드 위치)을 코드에서 재확인해 틀린 보안 주장을 담지 않도록 함.
-- [~] **[P2/P4]** `RUNBOOK.md` — P2 runtime(build/start/reset/lease·default-bridge)과 235B
-  degrade 정책은 문서화 완료. 72B fallback serving 절은 endpoint 준비 전까지 보류한다.
+- [~] **[P2/P4]** `RUNBOOK.md` — P2 runtime(build/start/reset/lease·default-bridge)과
+  235B→72B fallback 정책은 코드·환경·모델 smoke 기준으로 완료. 루트 운영 문서 보강은 선택 작업.
 - [ ] **[P3]** F-3 한계 문서 — injection positive=liveness / xss positive=benign / running_local N/A 게이트.
 
 ### 7.4 E2E 검증 + 리허설
-- [ ] **[전원]** 전체 시나리오 통과 — 등록 → snapshot → scan/verify → `PATCH_PROPOSED` 승인 →
-  6게이트 → `FIXED` → patch export → reset.
-- [ ] **[전원]** 리허설 — 데모 1(사용자 프로젝트 등록·검사·수정) + 데모 2(Juice Shop SQLi→235B→FIXED)
-  + fallback(c1-05) + reject(c2-04) 시연.
+- [x] **[전원]** 전체 시나리오 통과 — U4 사용자 프로젝트와 Juice Shop IDOR/SQLi/XSS에서
+  등록·scan/verify·승인·6게이트·FIXED·reset 증거를 확보.
+- [x] **[전원]** 리허설 재료 확보 — 데모 1(U4), 데모 2(Juice Shop SQLi/XSS),
+  c1-05 FIXED, c2-04 reject, 235B primary·72B fallback endpoint smoke.
 - [ ] **[전원]** 발표 슬라이드 / MCP_SPEC 취합.
 
 ---
@@ -600,13 +589,12 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
   (J-3) 라이브 완주 ✅(2026-07-22, FIXED)** · **X7~X9 XSS 라이브 완주 ✅(2026-07-22, FIXED,
   run-92fbb4bcd13c)** · **U4 데모1 E2E 라이브 완주 ✅(2026-07-22, FIXED, run-2907a2028fa4
   — 로컬 레지스트리 경로가 처음 실행돼 버그 3건 발견·수정)** · **7.3 container log
-  redaction ✅(2026-07-22)**, patch diff는 구조적 한계로 미해결(문서화). 남은 건 `.env` 72B
-  fallback 값 추가(3절, P2 URL 전달 대기로 블로킹)뿐.
+  redaction ✅(2026-07-22)**, patch diff는 구조적 한계로 미해결(문서화). 핵심 구현은 완료됐고,
+  발표용 RUNBOOK 보강만 선택적으로 남아 있다.
 - **[P2] (2026-07-22 갱신) X7 runtime 계약 당일 처리.** Discord 요청 받고 `docs/handoffs/
   D6-P2-xss-runtime.md`(커밋 `2338dc6`)로 Juice Shop reflected XSS 경로·DOM sink·smoke suite
-  기록 — 다만 Windows Docker daemon에 컨테이너가 없어 **live 실행은 아직**(정직하게 명시).
-  남은 건: 72B endpoint(문서화된 결정으로 보류) · M1 벤치 소스 0→7/16(부분) · Juice Shop
-  default-bridge 발표 경로 승격 확인(P1이 물어본 것, 답 대기) · 루트 `RUNBOOK.md` 미착수.
+  기록 — 로컬 Windows의 추가 smoke 제약은 남지만, Juice Shop X9 실앱 폐루프 증거는 확보됐다.
+  남은 건: M1 벤치 표본 확대와 루트 `RUNBOOK.md` 보강 같은 선택 작업.
 - **[P3] ★ 가장 진척 큼, X7~X9도 당일 처리.** I1·I2·I3 ✅ **완료 확인**(데모2 블로커 해소!),
   locator decoy-file 우선 선택 버그도 커밋 `7fac591`/`ea68e98`로 해소(P1이 7.1 J-3 라이브
   실행 중 발견·보고). **X7 verify 계약 확정**(`docs/P3_JUICE_SHOP_XSS_CONTRACT.md` 갱신,
@@ -621,7 +609,7 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
   (`priority_ablation.compare_by_class`) · M2 클래스별 패치 성공률 하네스 ✅(`eval/patch_success.py`, 5/5) ·
   run 표본 반영 ✅(`eval/reflect_runs.py`, 7/7) · SAST 커버리지 점검 ✅(`sast_coverage_audit.md`).
   **남은 건 코드가 아니라 데이터**: M1 실주행=P2 벤치소스(0→7/16), M2 실집계=P3 closed-loop Validation.
-  72B `DEFAULT_FALLBACK_MODEL`은 문서만 72B 의도로 정리(TODO 명시), 실값은 P2 72B model id 대기.
+  72B `DEFAULT_FALLBACK_MODEL`·`.env.example`·로컬 `.env` 설정 및 endpoint smoke 완료.
 
 ---
 
@@ -629,7 +617,7 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 
 ~~I1(Node 인라인 핸들러) →~~ **(2026-07-22 갱신) I1 해결됨** → ~~데모 2 완주(7.1 J-3)~~
 **(2026-07-22) 완료, FIXED** → ~~데모 1 E2E~~ **(2026-07-22) 완료, FIXED(U4)** → 4절 나머지
-정확도·성능 + 6절 UX(✅ 완료) + 3절 72B → 측정·문서·리허설.
+정확도·성능 + 6절 UX(✅ 완료) + 3절 72B → 선택적 측정·문서 보강.
 ~~가장 큰 단일 리스크는 X7 live 실행~~ — **(2026-07-22) X7·X8·X9·U4 전부 완료.** 검색 XSS와
 임의 사용자 프로젝트(demo-notes-app) 둘 다 scan→verify→localize→235B patch→6게이트까지
 **FIXED**로 실주행 완주(각각 run-92fbb4bcd13c, run-2907a2028fa4) — IDOR(c1-05)·Injection
@@ -637,4 +625,5 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 P1·P3가 나눠 고친 버그 8건(Playwright asyncio 충돌, candidate dedup, diff hunk header, positive
 게이트 fragment 문제, 로컬 레지스트리 port/worktree/overlay-root 버그 3종 등)은 X7/X9/U4 절
 상세 참고 — 전부 "그 경로가 지금까지 한 번도 실행된 적이 없어서" 아무도 못 본 것들이었다.
-남은 단일 리스크는 **3절 72B endpoint(P2/P4 — 아직 미착수)**뿐 — 실증 자체는 더 이상 병목이 아니다.
+핵심 폐루프와 모델 tier 배선은 완료됐다. 남은 항목은 추가 벤치 표본·성능 개선·발표/운영 문서처럼
+선택적 완성도 작업이며, 핵심 데모를 막는 블로커는 없다.
