@@ -12,6 +12,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from datasets.inventory import Inventory
@@ -77,7 +78,7 @@ def _focus_counts(cands) -> dict[str, int]:
     return out
 
 
-def main(app_ids: list[str]) -> None:
+def main(app_ids: list[str], out_dir: Path = Path("runs/m1")) -> None:
     bench = Inventory.load(BENCHMARK)
     truth = ground_truth_from_inventory(bench)              # {app: focus set}
     focus_of_bench = {a.id: set(a.focus) for a in bench.apps}
@@ -86,6 +87,7 @@ def main(app_ids: list[str]) -> None:
     ragllm: dict[str, list] = {}
     predictions: dict[str, set] = {}
     per_app_meta: dict[str, dict] = {}
+    all_cands: dict[str, list] = {}
 
     for app_id in app_ids:
         root = SOURCES / app_id
@@ -96,6 +98,7 @@ def main(app_ids: list[str]) -> None:
         h, r, outcome, cands = run_app(app_id, root)
         heuristic[app_id] = h
         ragllm[app_id] = r
+        all_cands[app_id] = cands
         predictions[app_id] = focus_set_from_candidates(h)
         per_app_meta[app_id] = {
             "candidates": len(cands), "kept": len(h),
@@ -130,11 +133,41 @@ def main(app_ids: list[str]) -> None:
     print("=" * 78)
     print(f"{'app':<16}{'cands':>6}{'kept':>6}{'idor':>6}{'inj':>6}{'xss':>6}{'235B':>16}")
     print("-" * 78)
+
     for a, m in per_app_meta.items():
         fc = m['focus_counts']
         tag = f"{m['tier']}/{m['endpoint_health']}"
         print(f"{a:<16}{m['candidates']:>6}{m['kept']:>6}{fc['idor']:>6}{fc['injection']:>6}{fc['xss']:>6}{tag:>16}")
     print("-" * 78)
+
+    out_dir = Path(out_dir)
+    (out_dir / "candidates").mkdir(parents=True, exist_ok=True)
+    for app_id, cands in all_cands.items():
+        (out_dir / "candidates" / f"{app_id}.candidates.jsonl").write_text(
+            "".join(json.dumps(c.model_dump(mode="json"), ensure_ascii=False) + "\n" for c in cands),
+            encoding="utf-8",
+        )
+    summary = {
+        "apps": per_app_meta,
+        "rag_llm_sample": llm_apps,
+        "excluded": excluded,
+        "detection": {
+            c: {"precision": report.per_group[c].precision,
+                "recall": report.per_group[c].recall,
+                "candidates": total_focus[c]}
+            for c in FOCUS_CLASSES
+        },
+        "mrr": {
+            c: {"heuristic": by_class[c].heuristic_mrr,
+                "ragllm": by_class[c].ragllm_mrr,
+                "delta": by_class[c].mrr_delta}
+            for c in by_class
+        },
+    }
+    (out_dir / "summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"\n[export] {out_dir}/summary.json + candidates/*.candidates.jsonl")
 
     print(f"\nrag-llm 표본(235B 실제 응답): {llm_apps or '없음'}")
     print(f"제외(235B 미응답 → 표본 제외): {excluded or '없음'}")
@@ -159,7 +192,9 @@ def main(app_ids: list[str]) -> None:
 def _main() -> None:
     ap = argparse.ArgumentParser(description="M1 실주행 — 클래스별 ablation (P4)")
     ap.add_argument("--app", action="append", required=True, help="benchmark app id (여러 번)")
-    main(ap.parse_args().app)
+    ap.add_argument("--out", default="runs/m1", help="산출물 저장 디렉터리")
+    args = ap.parse_args()
+    main(args.app, Path(args.out))
 
 
 if __name__ == "__main__":
