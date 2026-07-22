@@ -114,7 +114,7 @@ class JuiceShopXssContractTests(unittest.TestCase):
         # 후보 3(stored feedback): 계약-seed로 context=stored candidate가 render_path까지 정상 probe로.
         # 소스 자동생성(write→render 상관)은 follow-up; P2는 이 attack_params로 seed하면 된다.
         c = Candidate(id="c", run_id="r", cwe="CWE-79", vuln_class="xss", attack_params={
-            "base_url": "http://127.0.0.1:3000", "context": "stored",
+            "base_url": "http://127.0.0.1:14020", "context": "stored",
             "inject_path": "/api/Feedbacks", "inject_param": "comment", "inject_method": "POST",
             "render_path": "/#/about",
         })
@@ -128,7 +128,7 @@ class JuiceShopXssContractTests(unittest.TestCase):
 
     def test_juice_shop_reflected_xss_contract(self):
         c = Candidate(id="c", run_id="r", cwe="CWE-79", vuln_class="xss", attack_params={
-            "base_url": "http://127.0.0.1:3000", "context": "reflected",
+            "base_url": "http://127.0.0.1:14020", "context": "reflected",
             "inject_path": "/#/search", "inject_param": "q", "inject_method": "GET",
         })
         p = xss.xss_probe_from_candidate(c)
