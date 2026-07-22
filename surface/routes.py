@@ -29,9 +29,12 @@ from pydantic import BaseModel
 
 # 스캔 제외: 의존성·빌드 산출물·VCS. 프론트엔드 소스 자체(.tsx 등)는 파서가 자연히 안 잡지만,
 # code_index 폴백 오탐은 locator의 프론트엔드 가드가 별도로 막는다.
+# `codefixes`: 비실행 '코드 고치기 챌린지' 스니펫(Juice Shop data/static/codefixes/*.ts처럼 서버가
+# 실행하지 않고 텍스트로만 읽는 취약 SQL 사본). route로 파싱되면 locator가 실제 라이브 핸들러 대신
+# decoy를 짚는다(J-3 라이브 발견) — 라우트 추출에서만 제외한다(후보 스캔은 graph._SKIP_DIRS 별도).
 _SKIP_DIRS = frozenset({
     "node_modules", "dist", "build", ".next", ".git", "__pycache__", ".venv", "venv",
-    "coverage", ".turbo", "out", ".cache", ".pytest_cache", "migrations",
+    "coverage", ".turbo", "out", ".cache", ".pytest_cache", "migrations", "codefixes",
 })
 
 

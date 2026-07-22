@@ -231,6 +231,37 @@ class LocalizeSastFallbackTests(unittest.TestCase):
         self.assertEqual(rc.file, "a/Early.java")  # sorted(sast)[0], 순서 아님
         self.assertNotIn("sink 후보(실행부 우선)", rc.rationale)
 
+    def test_route_matched_to_decoy_is_overridden_to_live_sink(self) -> None:
+        # J-3 재재실행 발견(P1): extract_routes가 endpoint를 비실행 decoy(codefixes 사본)의 handler로
+        # 매칭해도, 실행 우선순위 높은 SAST sink(routes/search.ts)가 있으면 root cause 앵커를 그쪽으로 옮긴다.
+        finding = Finding(
+            id="f", run_id="r", title="sqli", cwe="CWE-89",
+            affected_endpoint="GET /rest/products/search",
+            source_symbols=["data/static/codefixes/dbSchemaChallenge_1.ts:12", "routes/search.ts:40"],
+        )
+        # route가 decoy 파일을 handler로 잡은 상황을 재현.
+        routes = [_route("GET", "/rest/products/search", "dbSchemaChallenge_1.handler",
+                         "data/static/codefixes/dbSchemaChallenge_1.ts:12")]
+        with patch("repair.locator.extract_routes", return_value=routes):
+            rc = localize(finding, source_root="/nonexistent")
+        self.assertEqual(rc.file, "routes/search.ts")   # 앵커가 실행 파일로 override됨
+        self.assertIsNone(rc.symbol)                     # route 심볼은 더 이상 유효하지 않음
+        self.assertIn("decoy", rc.rationale)
+        self.assertIn("파라미터", rc.rationale)           # SQLi 힌트는 override된 실행 파일 기준
+
+    def test_route_matched_to_real_handler_not_overridden(self) -> None:
+        # 무회귀: route.source가 이미 실행 핸들러면(decoy 아님) override하지 않고 route 앵커/심볼 유지.
+        finding = Finding(
+            id="f", run_id="r", title="sqli", cwe="CWE-89", affected_endpoint="GET /search",
+            source_symbols=["routes/search.ts:40"],
+        )
+        routes = [_route("GET", "/search", "SearchRoute.handler", "routes/search.ts:40")]
+        with patch("repair.locator.extract_routes", return_value=routes):
+            rc = localize(finding, source_root="/nonexistent")
+        self.assertEqual(rc.file, "routes/search.ts")
+        self.assertEqual(rc.symbol, "SearchRoute.handler")   # 그대로 유지
+        self.assertNotIn("decoy", rc.rationale)
+
     def test_sink_cwe_prefers_live_handler_over_decoy_reference_copy(self) -> None:
         # J-3 라이브 발견: 같은 취약 SQL이 실행 핸들러(routes/search.ts)와 비실행 참고 사본
         # (data/static/codefixes/…)에 모두 있고, SAST가 decoy를 먼저 보고해도 locator는 실행 핸들러를 짚어야 한다.

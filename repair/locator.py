@@ -256,29 +256,44 @@ def localize(finding: Finding, *, source_root: str | Path) -> RootCause:
     routes = extract_routes(source_root)
     route = _match_route(routes, method, path)
     if route is not None:
-        file = route.source.split(":")[0]
-        symbol = route.handler
-        layer = _classify_layer(symbol, file)
-        agree = _files_agree(file, sast)
+        route_file = route.source.split(":")[0]
+        file, symbol = route_file, route.handler
         # sink형(XSS/SQLi)은 고칠 곳이 진입 handler가 아니라 sink다. SAST가 sink 위치를 짚었으면
         # rationale에 실어 LLM/사람이 그쪽을 향하게 한다(앵커 file/symbol은 도달 증명된 handler로 유지).
         sink_note = ""
         hint_file = file  # XSS 수정 힌트는 sink 파일 기준(프레임워크 추정). sink 미상이면 handler 파일.
+        overrode_decoy = False
         if _cwe_num(finding.cwe) in _SINK_TYPE_CWES:
             sinks = _rank_sinks(_sast_sink_locations(finding))  # 실행 핸들러 우선, decoy/참고 사본 후순위
             if sinks:
                 hint_file = sinks[0].split(":")[0]
+                # extract_routes가 endpoint를 **비실행 decoy/참고 사본**의 handler로 매칭한 경우(Juice Shop이
+                # 같은 취약 SQL을 codefixes 챌린지용으로 복제 → 사본이 route로 잡힘, J-3 라이브 발견),
+                # 실행 우선순위가 더 높은 SAST sink가 있으면 root cause 앵커 자체를 실제 실행 파일로 옮긴다.
+                # (route.source가 이미 실행 핸들러면 override 안 함 → 무회귀. 앵커가 바뀌면 route 심볼은 무효.)
+                if _sink_file_priority(hint_file) < _sink_file_priority(route_file):
+                    file, symbol, overrode_decoy = hint_file, None, True
                 sink_note = (
                     f" 단, 실제 취약 지점(sink)은 SAST 기준 {', '.join(sinks)}일 수 있다 — "
                     f"이 handler와 다른 파일/메서드면 거기를 우선 수정하라."
                 )
-        rationale = (
-            f"검증된 endpoint {endpoint!r}를 처리하는 handler가 여기다({route.source}). "
-            f"공격이 실제로 이 경로로 도달했다"
-            f"{' — SAST 지목 위치와도 일치' if agree else ''}. "
-            f"{finding.cwe or 'IDOR'}의 원인은 {_root_cause_reason(finding.cwe)}.{sink_note} "
-            f"권장 수정 계층: {layer}.{_xss_fix_hint(finding.cwe, hint_file)}{_sqli_fix_hint(finding.cwe, hint_file)}"
-        )
+        layer = _classify_layer(symbol or file, file)
+        agree = _files_agree(file, sast)
+        if overrode_decoy:
+            rationale = (
+                f"검증된 endpoint {endpoint!r}의 route는 비실행 참고/decoy 파일({route_file})을 가리켰으나, "
+                f"실행 우선순위가 높은 SAST sink({file})를 실제 근본 원인으로 채택했다(같은 취약 패턴의 "
+                f"라이브 사본).{sink_note} {finding.cwe or 'IDOR'}의 원인은 {_root_cause_reason(finding.cwe)}. "
+                f"권장 수정 계층: {layer}.{_xss_fix_hint(finding.cwe, file)}{_sqli_fix_hint(finding.cwe, file)}"
+            )
+        else:
+            rationale = (
+                f"검증된 endpoint {endpoint!r}를 처리하는 handler가 여기다({route.source}). "
+                f"공격이 실제로 이 경로로 도달했다"
+                f"{' — SAST 지목 위치와도 일치' if agree else ''}. "
+                f"{finding.cwe or 'IDOR'}의 원인은 {_root_cause_reason(finding.cwe)}.{sink_note} "
+                f"권장 수정 계층: {layer}.{_xss_fix_hint(finding.cwe, hint_file)}{_sqli_fix_hint(finding.cwe, hint_file)}"
+            )
         return RootCause(file=file, symbol=symbol, rationale=rationale)
 
     # 2) SAST 폴백: route 매칭 실패 시 SAST가 지목한 파일을 채택.
