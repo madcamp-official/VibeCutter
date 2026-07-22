@@ -52,6 +52,13 @@ _JAVA_MARK = re.compile(r"@(?:Get|Post|Put|Patch|Delete|Request)Mapping\s*\((?:[
 _PY_MARK = re.compile(r"@\w+\.(?:get|post|put|patch|delete|route)\(\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
 _NODE_CALL = re.compile(r"\.\s*(?:get|post|put|patch|delete)\s*\(", re.IGNORECASE)
 _NODE_DECL = re.compile(r"(?:export\s+)?(?:const|let|var|function)\s+(\w+)")
+# 라우트에 **인라인**으로 박힌 핸들러: `(req,res)=>{`, `req=>{`, `function(req,res){`. 심볼 참조가
+# 아니라 본문이 라우트 콜 안에 직접 있어 심볼 인덱스로는 못 잡는다(Express에서 매우 흔함).
+_NODE_INLINE_FN = re.compile(
+    r"(?:async\s+)?(?:\([^)]*\)|\w+)\s*=>\s*\{"      # (req,res)=>{ / req=>{
+    r"|(?:async\s+)?function\s*\*?\s*\w*\s*\([^)]*\)\s*\{",  # function (req,res){
+    re.IGNORECASE,
+)
 
 KNOWN_LIMITATIONS = (
     "휴리스틱 프리필터다(정밀 인가분석 아님). 인증된 route에서 handler가 현재사용자를 '참조는 하되 "
@@ -190,6 +197,14 @@ def _node_handlers(text: str, index: dict[str, str]):
         if not pm:
             continue
         path, rest = pm.group(1), args[pm.end() :]
+        # 인라인 arrow/function 핸들러: 심볼 참조가 아니라 본문이 라우트에 직접 있음 → 본문을 바로 추출.
+        im = _NODE_INLINE_FN.search(rest)
+        if im:
+            brace = rest.find("{", im.end() - 1)
+            if brace != -1:
+                yield path, "", im.group(0), _brace_body(rest, brace)
+                continue
+        # 이름붙은 심볼 핸들러: 심볼 인덱스에서 본문을 찾는다(다른 파일 컨트롤러 포함).
         handler, body = "", ""
         for nm in reversed(re.findall(r"\b(\w+)\b", rest)):
             if nm in index:

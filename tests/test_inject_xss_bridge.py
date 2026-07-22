@@ -57,6 +57,12 @@ _JS_LOGIN = (
     "  }\n"
     "}\n"
 )
+# 줄 넘는 SQL sink(대입 후 실행) — candidate 빌더도 프리필터와 같은 규칙을 써야 한다(sync).
+_CROSS_LINE_PY = '@app.get("/cl")\ndef c(q: str):\n    sql = f"SELECT * FROM t WHERE x = \'{q}\'"\n    return db.execute(sql)\n'
+# 주석 처리된 SQL — candidate 안 만들어야(precision)
+_COMMENT_PY = '@app.get("/cm")\ndef c(q: str):\n    # return db.execute(f"SELECT * FROM t WHERE x = \'{q}\'")\n    return safe(q)\n'
+# 인라인 arrow 핸들러(심볼 없이 라우트에 직접) 안의 SQLi — _node_handlers 인라인 추출 필요.
+_INLINE_ARROW = "router.get('/inline', (req, res) => {\n  const sql = `SELECT * FROM t WHERE n = '${req.query.q}'`\n  return db.query(sql)\n})\n"
 
 
 class InjectionXssBridgeTests(unittest.TestCase):
@@ -71,6 +77,27 @@ class InjectionXssBridgeTests(unittest.TestCase):
             p = injection.injection_probe_from_candidate(inj[0])
             self.assertEqual(p.inject_param, "q")
             self.assertEqual(p.inject_method, "GET")
+
+    def test_cross_line_python_sqli_becomes_candidate(self):
+        # candidate 빌더가 프리필터와 sync — 줄 넘는 SQL(대입 후 실행)도 후보로 만든다.
+        with _tree({"app.py": _CROSS_LINE_PY}) as d:
+            inj = [c for c in injection_xss_candidates("r", _prov(), d).candidates if c.vuln_class == "injection"]
+            self.assertEqual(len(inj), 1)
+            self.assertEqual(inj[0].attack_params["inject_param"], "q")
+
+    def test_commented_sql_yields_no_candidate(self):
+        # 주석 처리된 SQL은 후보로 만들지 않는다(precision — 프리필터와 sync).
+        with _tree({"app.py": _COMMENT_PY}) as d:
+            res = injection_xss_candidates("r", _prov(), d)
+            self.assertEqual([c for c in res.candidates if c.vuln_class == "injection"], [])
+
+    def test_inline_arrow_node_sqli_becomes_candidate(self):
+        # 심볼 없이 라우트에 직접 박힌 인라인 arrow 핸들러 본문의 SQLi도 후보로(_node_handlers 인라인 추출).
+        with _tree({"routes.ts": _INLINE_ARROW}) as d:
+            inj = [c for c in injection_xss_candidates("r", _prov(), d).candidates if c.vuln_class == "injection"]
+            self.assertEqual(len(inj), 1)
+            self.assertEqual(inj[0].attack_params["inject_path"], "/inline")
+            self.assertEqual(inj[0].attack_params["inject_param"], "q")
 
     def test_node_sqli_traces_http_param_not_sql_variable(self):
         # 데모 2(J-3) 잠금: Juice Shop처럼 route와 handler가 다른 파일이고 SQL 변수(criteria)≠HTTP
