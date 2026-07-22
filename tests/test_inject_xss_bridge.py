@@ -207,6 +207,26 @@ class InjectionXssBridgeTests(unittest.TestCase):
             res = injection_xss_candidates("r", _prov(), d)
             self.assertEqual([c for c in res.candidates if c.vuln_class == "xss"], [])
 
+    def test_x1_express_res_send_reflected_xss_candidate(self):
+        # X1: Express res.send에 요청 입력을 escape 없이 실으면 반사 XSS 후보(템플릿 리터럴·중간변수 concat).
+        direct = "router.get('/a', (req,res)=>{ res.send(`<h1>${req.query.q}</h1>`) })\n"
+        traced = "router.get('/b', (req,res)=>{\n  const name = req.query.name\n  res.send('<h1>'+name+'</h1>')\n})\n"
+        for src, want_param in ((direct, "q"), (traced, "name")):
+            with _tree({"r.ts": src}) as d:
+                x = [c for c in injection_xss_candidates("r", _prov(), d).candidates if c.vuln_class == "xss"]
+                self.assertEqual(len(x), 1)
+                self.assertEqual(x[0].attack_params["inject_param"], want_param)
+                self.assertEqual(x[0].attack_params["context"], "reflected")
+
+    def test_x1_express_sanitized_and_json_no_candidate(self):
+        # 살균 통과(escapeHtml)·res.json(JSON)·정적 리터럴은 XSS 후보 아님(precision).
+        for src in ("router.get('/c', (req,res)=>{ res.send(escapeHtml(req.query.q)) })\n",
+                    "router.get('/d', (req,res)=>{ res.json(req.query.q) })\n",
+                    "router.get('/e', (req,res)=>{ res.send('<h1>hello</h1>') })\n"):
+            with _tree({"r.ts": src}) as d:
+                x = [c for c in injection_xss_candidates("r", _prov(), d).candidates if c.vuln_class == "xss"]
+                self.assertEqual(x, [])
+
     def test_write_sql_is_blocked_not_candidate(self):
         # 파괴적 write SQL은 불리언 payload가 위험 → candidate로 만들지 않고 blocked
         with _tree({"app.py": _WRITE_SQL}) as d:

@@ -354,6 +354,13 @@ _WRITE_SINK = re.compile(r"\binsert\s+into\b|\bupdate\b[\s\S]{0,120}?\bset\b|\bd
 # 잡던 것을 확장. 리터럴만 든 호출은 `\{...\}`(보간) 요구로 자연히 제외(precision).
 _SERVER_XSS = re.compile(
     r'(?:HTMLResponse|mark_safe|render_template_string|Markup)\s*\(\s*f["\'][^"\']*\{([^}]+)\}', re.I)
+# Express 서버측 반사 XSS: res.send/write/end에 요청 입력을 escape 없이 실어 보냄(HTML 반사).
+# 살균(escape/encode/sanitize/DOMPurify)을 거친 값은 제외(precision). res.json은 JSON이라 대상 아님.
+_EXPRESS_XSS = re.compile(
+    r"res(?:ponse)?\.(?:send|write|end)\s*\(\s*"
+    r"(?![^)]*(?:escape|encode|sanitiz|dompurify|striptags|xss[_-]?clean))"
+    r"([^)]*(?:`[^`]*\$\{[^}]+\}[^`]*`|req(?:uest)?\.\w+\.\w+"
+    r"|['\"][^'\"]*['\"]\s*\+\s*\w+|\w+\s*\+\s*['\"])[^)]*)\)", re.I)
 # HTTP 요청 파라미터 접근(Express/Node): `req.query.q`, `request.body.email`, `req.params.id`.
 # 그룹1=출처(query/params/body), 그룹2=파라미터명.
 _REQ_SOURCE = re.compile(r"req(?:uest)?\.(query|params|body)\.(\w+)")
@@ -530,17 +537,25 @@ def injection_xss_candidates(
                         id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-89", vuln_class="injection",
                         endpoint=path, source_symbols=[sink_symbol], attack_params=ap,
                     ))
-            # ── XSS: 서버측 반사 sink(HTMLResponse·mark_safe·render_template_string·Markup) ──
-            hm = _SERVER_XSS.search(body)
+            # ── XSS: 서버측 반사 sink(Python HTMLResponse/mark_safe/... 또는 Express res.send/write/end) ──
+            py_hm = _SERVER_XSS.search(body)
+            hm = py_hm or _EXPRESS_XSS.search(body)
             if hm and ("xss", path) not in seen:
-                seen.add(("xss", path))
-                param = re.match(r"[A-Za-z_]\w*", hm.group(1).strip())
-                cands.append(Candidate(
-                    id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-79", vuln_class="xss",
-                    endpoint=path, source_symbols=[f"{rel}"],
-                    attack_params={"base_url": base, "context": "reflected", "inject_path": path,
-                                   "inject_param": param.group(0) if param else "q", "inject_method": "GET"},
-                ))
+                # 실제 HTTP 요청 파라미터를 역추적(Node req.query.q 등).
+                xparam, _src = _http_param_for(hm.group(0), body)
+                # Python 서버 sink은 함수 파라미터가 곧 요청값이라 보간 변수로 폴백. Express concat은
+                # 요청 역추적이 돼야 사용자 입력임이 확실 → 못 찾으면 후보를 만들지 않는다(precision).
+                if not xparam and py_hm is not None:
+                    m = re.match(r"[A-Za-z_]\w*", hm.group(1).strip())
+                    xparam = m.group(0) if m else "q"
+                if xparam:
+                    seen.add(("xss", path))
+                    cands.append(Candidate(
+                        id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-79", vuln_class="xss",
+                        endpoint=path, source_symbols=[f"{rel}"],
+                        attack_params={"base_url": base, "context": "reflected", "inject_path": path,
+                                       "inject_param": xparam, "inject_method": "GET"},
+                    ))
 
     # ── 프론트 XSS 싱크: 라우트를 못 붙임 → blocked(fixture/라우트 계약 필요) ──
     for s in find_xss_suspects(root):
