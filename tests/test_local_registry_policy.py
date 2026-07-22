@@ -183,6 +183,48 @@ class TargetIdCollisionTests(unittest.TestCase):
         self.assertFalse(any("겹칩니다" in b for b in preview.blockers))
 
 
+class AdapterRejectionMessageTests(unittest.TestCase):
+    """U2: 지원 안 되는 스택명을 넣어도 raw pydantic enum 에러 대신 대안 안내가 나온다."""
+
+    def _manifest_with_adapter(self, adapter: str) -> dict:
+        return {
+            "id": "demo-api", "display_name": "Demo API", "adapter": adapter,
+            "base_url": "http://127.0.0.1:18080",
+            "commands": {
+                "build": {"argv": ["true"]}, "start": {"argv": ["true"]},
+                "stop": {"argv": ["true"]}, "reset": {"argv": ["true"]},
+            },
+            "reset": {"command_id": "reset"},
+        }
+
+    def test_unsupported_stack_name_suggests_generic_docker(self) -> None:
+        from mcp_server.tools_inventory import _validate_manifest
+
+        with self.assertRaises(ValueError) as ctx:
+            _validate_manifest(self._manifest_with_adapter("django"))
+        message = str(ctx.exception)
+        self.assertIn("generic-docker", message)
+        self.assertIn("django", message)
+        self.assertNotIn("pydantic", message.lower())
+
+    def test_supported_adapter_still_validates_normally(self) -> None:
+        from mcp_server.tools_inventory import _validate_manifest
+
+        validated = _validate_manifest(self._manifest_with_adapter("node"))
+        self.assertEqual(validated.adapter.value, "node")
+
+    def test_non_adapter_validation_errors_are_left_alone(self) -> None:
+        """adapter 외의 검증 실패는 손대지 않는다 — U2 범위는 adapter 필드뿐이다."""
+        from pydantic import ValidationError
+
+        from mcp_server.tools_inventory import _validate_manifest
+
+        data = self._manifest_with_adapter("node")
+        data["base_url"] = "https://example.com"  # loopback 아님 — 다른 필드 오류
+        with self.assertRaises(ValidationError):
+            _validate_manifest(data)
+
+
 class KindReachesJudgeTests(unittest.TestCase):
     """P3 요청(2026-07-21 05:07): judge가 `kind`를 읽을 수 있는 경로를 계약으로 고정한다.
 

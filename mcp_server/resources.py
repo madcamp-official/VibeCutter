@@ -20,8 +20,10 @@ from mcp.server.fastmcp import FastMCP
 
 from contracts.schemas import Finding, Observation, Run, Target
 from core.db import DATA_DIR
+from core.egress_consent import consent_record
 from core.evidence_store import get, list_by_run
 from core.policy_engine import load_scope
+from mcp_server.tools_control import EgressConsentStatus
 from mcp_server.tools_inventory import _service
 from mcp_server.tools_repair import ReportResult
 from runtime.manifest import TargetManifest
@@ -71,6 +73,16 @@ def register(mcp: FastMCP) -> None:
         고치고 다른 쪽(예: 파일 없을 때 에러 처리)을 놓치기 쉽다.
         """
         return {"targets": load_scope()}
+
+    @mcp.resource("vibecutter://consent/llm_egress")
+    def get_egress_consent_status() -> EgressConsentStatus:
+        """LLM egress 동의 현재 상태(U3). Host가 매번 다시 묻지 않고 이걸 먼저 확인할 수 있다."""
+        record = consent_record()
+        if record is None:
+            return EgressConsentStatus(granted=False)
+        return EgressConsentStatus(
+            granted=True, granted_at=record.get("granted_at"), actor=record.get("actor")
+        )
 
     @mcp.resource("vibecutter://reports/{run_id}")
     def get_report(run_id: str) -> ReportResult:

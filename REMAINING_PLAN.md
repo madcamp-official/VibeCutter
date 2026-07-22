@@ -252,7 +252,15 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 "임의 사용자가 자기 프로젝트를 검사·자동패치"는 데모 1이자 제품의 존재 이유다. 배관은 있으나
 **아직 실제 사용자 프로젝트로 끝까지 돌린 적이 없고**, 몇 조각이 비어 있다.
 
-- [ ] **U1. (가장 큰 빈 조각) manifest 자동 스캐폴딩 도구 신설** — 신규 `vc_scaffold_manifest`
+- [x] **U1. (가장 큰 빈 조각) manifest 자동 스캐폴딩 도구 신설** — 신규 `vc_scaffold_manifest`
+  **(완료 2026-07-22)** — `mcp_server/scaffold.py`(탐지 로직) + `mcp_server/tools_inventory.py`
+  (`vc_scaffold_manifest` 등록) + `tests/test_scaffold_manifest.py`(11 tests, 전체 스위트
+  579 그린). docker-compose 우선 경로(주 서비스 선택→포트/adapter/test 탐지)와 compose 없는
+  단일 서비스 fallback(node/fastapi/spring-boot, `kind=running_local`) 둘 다 구현. 확신 없는
+  값은 `evidence`/`warnings`로 근거를 남기고 조용히 틀리게 채우지 않음. 통합 테스트로 "draft가
+  `vc_register_local_target`의 `_build_preview`에 블로커 없이 도달"까지 확인해 완료 판정을
+  문자 그대로 검증함. **도구 자체는 파일만 읽고 아무것도 등록·실행하지 않으며, `confirmed=True`
+  승인 게이트는 그대로.**
   - **무엇**: 지금 `vc_register_local_target(manifest: dict, ...)`은 **manifest를 이미 만들어서**
     받는다. 즉 지금은 agent가 manifest(build/start/stop/reset argv·healthcheck·test_suites)를
     **손으로 조립**해야 하고, 비전문 사용자는 이 값을 모른다.
@@ -264,7 +272,13 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
   - **완료 판정**: docker-compose 프로젝트에 대해 도구가 유효한 manifest 초안 + 근거를 내고, 그
     초안이 `vc_register_local_target`의 미리보기로 그대로 넘어간다.
 
-- [ ] **U2. adapter 거부 메시지 개선(R1-X)** — `mcp_server/tools_inventory.py`, `runtime/manifest.py:23`
+- [x] **U2. adapter 거부 메시지 개선(R1-X)** — `mcp_server/tools_inventory.py`, `runtime/manifest.py:23`
+  **(완료 2026-07-22)** — `_friendly_adapter_error`/`_validate_manifest`(`mcp_server/tools_inventory.py`)
+  가 `vc_register_local_target`의 스키마 검증을 감싸, adapter 필드의 enum 거부만 골라
+  "generic-docker를 쓰세요 + 4종 모두 동일 동작" 안내로 바꾼다. adapter 외 다른 검증 실패는
+  손대지 않고 그대로 raw `ValidationError`를 낸다(범위를 U2가 지목한 케이스로만 한정).
+  `tests/test_local_registry_policy.py`의 `AdapterRejectionMessageTests`(3 tests)로 확인,
+  전체 스위트 582 그린.
   - **무엇**: `AdapterKind`는 4종(spring-boot/fastapi/node/generic-docker) enum이고, 실제로는 네
     종류가 **동일 동작**을 한다(`adapters/registry.py:16` — 전부 `ManifestCommandAdapter`). 즉
     **기능 제한이 아니라 라벨**이고, `generic-docker`가 사실상 만능 탈출구다. 그런데 사용자가 자기
@@ -272,7 +286,19 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
   - **해야 할 일**: 등록 거부 시 "매칭 안 되면 `generic-docker`를 쓰세요"라는 **쉬운 안내**를 준다.
   - **완료 판정**: 미지원 스택명으로 등록 시도 시 명확한 대안 안내가 나온다.
 
-- [ ] **U3. egress 동의(코드가 외부 LLM으로 나가는 것)** — `mcp_server/**`(P1)
+- [x] **U3. egress 동의(코드가 외부 LLM으로 나가는 것)** — `mcp_server/**`(P1)
+  **(완료 2026-07-22)** — `core/egress_consent.py`(kill switch와 같은 durable marker-file
+  패턴) + `vc_consent_llm_egress(granted: bool)` tool(`mcp_server/tools_control.py`) +
+  `vibecutter://consent/llm_egress` 조회 resource(`mcp_server/resources.py`, Host가 매번
+  다시 묻지 않게). 동의 범위는 TEAM_CONTRACT §3A-10대로 **패치 합성 + rerank 스니펫 둘 다**
+  — `mcp_server/tools_repair.py::_get_llm_client`와 `mcp_server/tools_analysis.py::
+  _rerank_hook_from_env` 두 호출 지점 모두에서 동의 없으면 endpoint를 아예 probe하지 않고
+  기존 "endpoint 없음" 폴백(template-only 패치 / 휴리스틱 정렬)으로 조용히 degrade한다 —
+  새 예외를 만들지 않고 안전 불변식 3(판정에 LLM 없음)과 같은 정신을 따름. `prompts.py`의
+  `audit_local_target`/`repair_verified_finding`에 동의 확인 안내 추가(강제는 아님 — 실제
+  게이트는 코드가 함). `tests/test_egress_consent.py`(11 tests, 신규) + 기존
+  `test_tools_repair_llm_wiring.py`/`test_scan_tool_wiring.py`에 동의 전제 추가. 전체
+  스위트 594 그린.
   - **무엇**: 첫 LLM 호출/등록 시 "코드 일부(secret 제거)가 AI 모델로 전송돼 수정안을 만든다"를
     **쉬운 예/아니오로 1회 동의**받고 기록한다(현재 미구현).
   - **완료 판정**: 동의 표시·기록이 남고, 동의 없이는 LLM 합성 경로로 넘어가지 않는다.

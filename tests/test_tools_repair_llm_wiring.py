@@ -15,6 +15,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from contracts.schemas import Finding, RootCause
+from core.egress_consent import grant_consent, revoke_consent
 from mcp_server import tools_repair
 
 
@@ -80,9 +81,14 @@ class CodeContextForTests(unittest.TestCase):
 
 
 class LlmClientCacheTests(unittest.TestCase):
+    """캐시 동작 자체를 검증한다 — U3 동의 게이트는 `tests/test_egress_consent.py`가 덮으므로
+    여기서는 그 전제(동의됨)를 깔고 build_patch_model_client 호출 횟수만 본다."""
+
     def setUp(self) -> None:
+        grant_consent()
         tools_repair._reset_llm_client_cache()
         self.addCleanup(tools_repair._reset_llm_client_cache)
+        self.addCleanup(revoke_consent)
 
     def test_build_patch_model_client_called_once(self) -> None:
         with patch.object(tools_repair, "build_patch_model_client", return_value="client") as m:

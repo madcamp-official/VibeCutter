@@ -201,9 +201,17 @@ def _rerank_hook_from_env(contexts=None):
     이지만 `outcome_fn()`은 여전히 `LlmCallOutcome.unavailable()`을 돌려줘 "이 run은 LLM 없이
     휴리스틱으로 돌았다"를 호출측이 trajectory에 명시적으로 남길 수 있게 한다(T-2/T-3 표본
     무결성 — endpoint가 죽어 조용히 degrade한 run이 rag-llm 팔에 섞이면 안 된다).
+
+    **U3 egress 동의**: `has_consented()`가 거짓이면 endpoint를 아예 probe하지 않고 endpoint가
+    없을 때와 똑같은 `(None, unavailable)`을 돌려준다 — rerank 스니펫(코드 본문)이 동의 없이
+    나가는 걸 막되, 스캔 자체는 휴리스틱 정렬로 계속 동작한다.
     """
+    from core.egress_consent import has_consented
     from model.endpoints import LlmCallOutcome, observed_chat_fn_from_env
     from model.serving import make_rerank_fn
+
+    if not has_consented():
+        return None, (lambda: LlmCallOutcome.unavailable())
 
     observed = observed_chat_fn_from_env()
     if observed is None:

@@ -179,12 +179,28 @@ class RerankHookTests(unittest.TestCase):
         self.assertFalse(outcome_fn().llm_used)
 
     def test_live_endpoint_yields_callable_rerank_fn_and_recorder(self) -> None:
+        """U3: rerank가 코드 스니펫을 실제로 내보내려면 egress 동의가 있어야 한다."""
+        from core.egress_consent import grant_consent, revoke_consent
         from mcp_server.tools_analysis import _rerank_hook_from_env
 
+        grant_consent()
+        self.addCleanup(revoke_consent)
         with patch("model.endpoints.liveness_check", return_value=True):
             rerank_fn, outcome_fn = _rerank_hook_from_env()
         self.assertTrue(callable(rerank_fn))
         self.assertTrue(callable(outcome_fn))
+
+    def test_no_consent_yields_none_rerank_even_with_live_endpoint(self) -> None:
+        """U3 완료 판정: 동의 없이는 LLM 합성/재랭킹 경로로 넘어가지 않는다."""
+        from core.egress_consent import has_consented
+        from mcp_server.tools_analysis import _rerank_hook_from_env
+
+        self.assertFalse(has_consented())  # 이 테스트 프로세스 기본 상태
+        with patch("model.endpoints.liveness_check", return_value=True) as mock_live:
+            rerank_fn, outcome_fn = _rerank_hook_from_env()
+        self.assertIsNone(rerank_fn)
+        self.assertFalse(outcome_fn().llm_used)
+        mock_live.assert_not_called()  # endpoint를 아예 probe하지 않았다
 
     def test_rag_enrich_is_nondestructive_when_index_fails(self) -> None:
         """RAG는 보정이지 필수 경로가 아니다 — 인덱싱이 깨져도 후보를 그대로 돌려준다."""

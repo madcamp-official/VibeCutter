@@ -272,10 +272,18 @@ def _get_llm_client():
     호출마다 다시 물게 된다 — RETRY로 같은 finding에 여러 번 patch를 시도하면 그때마다 3초씩
     쌓인다. `None`(endpoint 전부 DOWN)도 그대로 캐시한다 — 그 자체가 유효한 "지금은 template만"
     상태이고, 매번 재확인해도 어차피 같은 결과이기 때문이다.
+
+    **U3 egress 동의**: `has_consented()`가 거짓이면 endpoint를 아예 probe하지 않고 `None`을
+    캐시한다 — "동의 없음"을 "endpoint 없음"과 똑같이 취급해 `generate_patch()`가 이미 갖고
+    있던 template-only degrade 경로를 그대로 탄다(안전 불변식 3 그대로, 새 예외를 만들지
+    않는다). `vc_consent_llm_egress`가 동의/철회 시 `_reset_llm_client_cache()`를 호출해
+    이 캐시를 비우므로, 같은 프로세스 안에서 동의 상태가 바뀌면 다음 호출에 바로 반영된다.
     """
     global _llm_client_cache
     if _llm_client_cache is _UNSET:
-        _llm_client_cache = build_patch_model_client()
+        from core.egress_consent import has_consented
+
+        _llm_client_cache = build_patch_model_client() if has_consented() else None
     return _llm_client_cache
 
 
