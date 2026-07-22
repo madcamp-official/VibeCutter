@@ -1,6 +1,6 @@
 # 남은 일 통합 계획 (REMAINING_PLAN)
 
-> **갱신 2026-07-21.** 이 문서 **하나만 읽어도** "지금 어디까지 됐고 · 무엇이 왜 남았고 ·
+> **갱신 2026-07-22.** 이 문서 **하나만 읽어도** "지금 어디까지 됐고 · 무엇이 왜 남았고 ·
 > 어느 파일을 고치면 되는지 · 다 됐는지 어떻게 확인하는지"를 알 수 있게 쓴다. 처음 보는
 > 사람 기준으로 용어·이유·근거 파일을 모두 적었다.
 > 계약·인터페이스의 **최종 근거는 여전히 `TEAM_CONTRACT.md`**. 여기는 "무엇을·누가·어떤
@@ -73,9 +73,9 @@
 
 ---
 
-## 3. 모델 tier — 235B 주 / 72B fallback (⚠️ 코드 미반영 · 담당 P4+P2)
+## 3. 모델 tier — 235B 주 / 72B fallback (72B는 보류)
 
-**의도**: primary=235B(외부 API), fallback=72B.
+**현재 운영 결정**: primary=235B. 72B fallback은 준비 전까지 보류한다.
 **현실(2026-07-21 코드 기준)**:
 - 현재 `.env`에는 **primary(235B)만** 있고 `VIBECUTTER_LLM_FALLBACK_ENDPOINT`가 **미설정** →
   235B 터널이 죽으면 fallback 없이 곧바로 **휴리스틱**으로 떨어진다.
@@ -84,10 +84,11 @@
 - 즉 **"72B fallback"은 아직 코드·설정·문서 어디에도 없다.** (7B→72B 전환이 최근이라 문서 곳곳에 7B 잔재)
 
 **해야 할 일**
-- [ ] **[P2]** 72B endpoint 기동(GPU 서버) + 도달 URL/모델ID/키를 P4에 전달. 배관 로직
+- [ ] **[보류]** 72B endpoint 기동(GPU 서버) + 도달 URL/모델ID/키를 P4에 전달. 72B 서버와
+  계약이 준비될 때 재개한다. 현재 발표·E2E의 필수 조건이 아니다.
   (`resolve_tiers`, chained fallback)은 tier-agnostic이라 그대로 재사용된다.
-- [ ] **[P1/P2]** `.env`에 `VIBECUTTER_LLM_FALLBACK_ENDPOINT` + `VIBECUTTER_LLM_FALLBACK_MODEL=<72B id>` 추가.
-- [ ] **[P4]** `model/endpoints.py`의 `DEFAULT_FALLBACK_MODEL`을 72B로 교체 + `.env.example`·docstring·
+- [ ] **[보류]** `.env`에 `VIBECUTTER_LLM_FALLBACK_ENDPOINT` + `VIBECUTTER_LLM_FALLBACK_MODEL=<72B id>` 추가.
+- [ ] **[보류]** `model/endpoints.py`의 `DEFAULT_FALLBACK_MODEL`을 72B로 교체 + `.env.example`·docstring·
   `docs/P4_MODEL_SERVING_RUNBOOK.md`의 7B 표기를 72B로 일괄 정정.
 - **완료 판정**: `python -m model.endpoints`가 primary 235B `[UP]` + fallback 72B `[UP]` 둘 다
   보이고, 235B를 죽였을 때 호출이 72B로 넘어가며 `llm_used=True/tier=fallback`이 metadata에 남는다.
@@ -111,7 +112,7 @@
 
 **① 후보 생성 정확도·커버리지**
 
-- [ ] **I1. (최우선·데모2 유일 블로커) Node 인라인 핸들러 본문 추출** — `surface/graph.py:186 _node_handlers`
+- [x] **I1. Node 인라인/클로저 핸들러 본문 추출** — `surface/graph.py:_node_handlers` **(완료 2026-07-22, commit ac292a0/6faf556)**
   - **무엇**: 지금 `_node_handlers`는 라우트가 **이름 붙은 심볼**(예: `router.get('/x', searchProducts)`
     처럼 별도 선언된 컨트롤러 함수)을 참조할 때만 그 본문을 잡는다. **인라인 arrow function**
     (`app.get('/x', (req,res)=>{ ...SQL... })`)과 **클로저 반환 패턴**(Juice Shop의
@@ -126,7 +127,7 @@
     핸들러가 잡히고, `surface.candidates.injection_xss_candidates(...)`가 그 경로로 injection
     candidate를 1건 이상 낸다.
 
-- [ ] **I2. SQL sink 탐지 범위 확장(다중 라인·템플릿 리터럴·ORM raw)** — `surface/candidates.py:342 _sql_sink_in_body`
+- [x] **I2. SQL sink 탐지 범위 확장(다중 라인·템플릿 리터럴·ORM raw)** — `surface/candidates.py:_sql_sink_in_body` **(완료 2026-07-22, 관련 회귀 통과)**
   - **무엇**: 지금은 `_DYN`(동적 결합)과 `_EXEC`(실행)이 **한 줄에 같이** 있어야 sink로 본다.
     쿼리를 여러 줄에 걸쳐 만들거나(변수에 SQL을 조립한 뒤 다음 줄에서 실행), JS 백틱 템플릿
     리터럴(`` `...${q}...` ``), ORM raw 호출(`sequelize.query(...)`, `knex.raw(...)`,
@@ -138,7 +139,7 @@
   - **완료 판정**: 다중 라인 SELECT 조립 + 백틱 리터럴 + `sequelize.query` 각각에 대한 단위
     테스트(`tests/test_inject_xss_bridge.py`)가 injection candidate를 만들고, write SQL은 여전히 blocked.
 
-- [ ] **I3. 주입 파라미터 이름 추론 정확도** — `surface/candidates.py:405`
+- [x] **I3. 주입 파라미터 이름 추론 정확도** — `surface/candidates.py` **(완료 2026-07-22, query/body/path 회귀 통과)**
   - **무엇**: 지금 `param = _interp_var(line) or "q"` — 못 뽑으면 `"q"`로 가정한다. 파라미터를
     틀리게 잡으면 verifier가 **엉뚱한 필드를 찔러 false negative**가 난다.
   - **왜**: 오라클이 아무리 정확해도, 틀린 파라미터로 재현하면 취약점을 못 재현한다 → recall 손해.
@@ -396,9 +397,10 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 
 ## 7. 발표 필수 — 데모 완주 · 측정 · 문서 · 리허설
 
-### 7.1 데모 2 완주(Injection FIXED) — 발표 핵심 증거
-- [ ] **[P3]** 4.1 **I1 해결 후 J-3 1회 완주**: Juice Shop SQLi → verify(불리언 차등) → localize →
-  **235B 패치** → 6게이트 → **FIXED**. run_id 공유. (Docker/런타임 경로는 P2가 default-bridge로 확보 완료.)
+### 7.1 Injection 엔지니어링 검증 (발표 대상 아님)
+- [x] **[P3]** I1~I3 후보 생성·배선·플랫폼 경로 보정 완료. 관련 회귀 92건 통과.
+- [ ] **[P3]** J-3 1회 완주: Juice Shop SQLi → verify(불리언 차등) → localize →
+  **235B 패치** → 6게이트 → **FIXED**. Juice Shop은 사용자의 결정에 따라 발표 집계에는 넣지 않는다.
 - [ ] **[P1]** 이 완주가 승인 흐름(`PATCH_PROPOSED` 정지 → 승인 → `vc_resume_audit` → 6게이트)으로 도는지 확인.
 - [ ] **[P4]** 그 run metadata(llm_used/tier/health)를 ablation 표본에 반영.
 
@@ -421,8 +423,8 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
   절에서 fallback 아직 7B인 점 등 진행 중 상태도 정직하게 적음. 문서 작성 전 서브에이전트로
   모든 인용 사실(엔드포인트가 실제로 팀 자체 GPU인지, redaction 패턴 정확한 목록, 각
   승인 게이트의 정확한 강제 코드 위치)을 코드에서 재확인해 틀린 보안 주장을 담지 않도록 함.
-- [ ] **[P2/P4]** `RUNBOOK.md` — P2 runtime(build/start/reset/lease·default-bridge) + P4 serving
-  (235B/72B tier·degrade). **여기서 fallback 모델 표기를 72B로 확정**(3절과 연결).
+- [~] **[P2/P4]** `RUNBOOK.md` — P2 runtime(build/start/reset/lease·default-bridge)과 235B
+  degrade 정책은 문서화 완료. 72B fallback serving 절은 endpoint 준비 전까지 보류한다.
 - [ ] **[P3]** F-3 한계 문서 — injection positive=liveness / xss positive=benign / running_local N/A 게이트.
 
 ### 7.4 E2E 검증 + 리허설
@@ -438,8 +440,8 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 
 - **[P1]** 비전문 UX(6절 C1~C4) + egress 동의(U3) + manifest 스캐폴딩 tool 배선(U1) + adapter 안내
   (U2) + patch diff redaction + `SECURITY_POLICY` 취합 + 데모 2 승인흐름 확인.
-- **[P2]** 72B endpoint 기동(3절) + XSS 데모 타깃 확보(X7) + ablation용 벤치 소스 확보(M1) + Juice
-  Shop default-bridge 런타임 안정화 + `RUNBOOK` runtime 섹션.
+- **[P2]** runtime metadata/reset 지원 + 사용자 E2E runtime + Juice Shop 엔지니어링 runtime 유지.
+  72B endpoint·XSS target·전체 벤치 소스는 각각 보류/협업 대기.
 - **[P3]** ★ **Injection·XSS 정확도·성능(4절 전체)** — I1(데모2 블로커) 최우선, 이어서 I2·I3·X1~X6 +
   데모 2(J-3) 완주 + F-3 한계 문서.
 - **[P4]** 72B 코드/문서 반영(3절) + 클래스별 측정(M1/M2) + SARIF redaction + SAST 규칙 커버리지 점검(4.4).
@@ -448,7 +450,6 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 
 ## 9. 크리티컬 패스 (다시 · endpoint UP 이후)
 
-**I1(Node 인라인 핸들러) → 데모 2 완주 → 데모 1 E2E(+U1 스캐폴딩) → 4절 나머지 정확도·성능 +
-6절 UX + 3절 72B → 측정·문서·리허설.**
-가장 큰 단일 리스크는 여전히 **I1 하나**. 그 다음 큰 레버는 **U1(manifest 스캐폴딩)**과 **X7(XSS
-데모 타깃)** — 각각 "임의 사용자 경험"과 "XSS 실증"을 여는 열쇠다.
+**J-3 엔지니어링 완주 → 데모 1 사용자 E2E → metadata/metric 반영 → 최종 리허설.**
+I1~I3와 사용자 onboarding/egress/UX 기반은 완료됐다. 현재 가장 큰 리스크는 실제 fresh
+closed-loop run이 아직 없다는 점이며, XSS 실증과 72B fallback은 발표 필수 경로가 아니다.
