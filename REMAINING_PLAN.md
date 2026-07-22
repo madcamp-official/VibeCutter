@@ -55,9 +55,9 @@
 | | IDOR | Injection(SQLi) | XSS |
 |---|---|---|---|
 | 검증 오라클 | ✅ 완성(read+write) | ✅ 완성(불리언 차등) | ✅ 완성(격리 브라우저 실행) |
-| 후보 자동생성 | ✅ 성숙 | ✅ **(2026-07-22) I1/I2/I3 완료 — Node 인라인 핸들러 gap 해소** | ⚠️ 서버 반사 4패턴(Python 계열만) |
-| 실 235B 패치 | (template) | ✅ **(2026-07-22) 실주행 FIXED** | ❌ 미검증 |
-| **실앱 E2E(verified→FIXED)** | ✅ **완료** | ✅ **(2026-07-22) 완료**(J-3 실주행, run-4ce5d5400775) | ❌ **0회**(데모 타깃 없음) |
+| 후보 자동생성 | ✅ 성숙 | ✅ **(2026-07-22) I1/I2/I3 완료 — Node 인라인 핸들러 gap 해소** | ⚠️ 서버 반사 4패턴(Python 계열만) + **(2026-07-22) Juice Shop 한정 fixture_hints로 Angular sink 2개 승격**(범용 아님) |
+| 실 235B 패치 | (template) | ✅ **(2026-07-22) 실주행 FIXED** | ❌ 미검증(패치 생성은 아직 미시도) |
+| **실앱 E2E(verified→FIXED)** | ✅ **완료** | ✅ **(2026-07-22) 완료**(J-3 실주행, run-4ce5d5400775) | ⚠️ **verified 1건 확보(2026-07-22, X8)**, localize→patch→FIXED는 미착수 |
 
 세 종의 **판정 엔진·안전경계는 동등하게 완성**돼 있고, 차이는 "실증 진척"뿐이다. Injection은 코드
 한 곳 + 데모 1회면 IDOR급, XSS는 데모 타깃 확보와 후보 커버리지 확장이 더 필요하다.
@@ -253,14 +253,41 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
   - **완료 판정**: XSS 패치가 attack 게이트(재실행 시 미실행)와 positive 게이트를 통과.
 
 - [~] **X7. (P2/P3) XSS 검증 target 확보** — OWASP Juice Shop으로 결정(2026-07-22).
-  - 소스에는 DOM XSS 교육 경로가 존재한다(`frontend/src/hacking-instructor/challenges/domXss.ts`,
-    `/search`, query `q`, `#searchValue` 렌더링). 다만 현재 `targets/manifests/juice-shop.yaml`은
-    SQLi 검색 smoke만 선언한다.
-  - **남은 계약**: P3가 실제 verifier용 safe payload, observe/positive 조건, reflected/stored
-    context, rollback/reset, deterministic regression command를 확정해야 한다. 계약 전에는
-    XSS candidate를 verified로 주장하지 않는다.
+  **(2026-07-22 계약 확정)** P1 Discord 요청 직후 P2·P3 둘 다 당일 처리.
+  - **P2**(`docs/handoffs/D6-P2-xss-runtime.md`, 커밋 `2338dc6`): runtime 계약 기록 — reflected
+    검색 `/#/search?q=`, track-order `/#/track-result?id=`(Angular hash route), DOM sink
+    (`#searchValue`/`app-search-result`, `track-result`의 `[innerHtml]`), smoke suite 2종.
+    **다만 Windows Docker daemon에 컨테이너가 없어 live health/Playwright는 아직 실행 못함**
+    (문서에 정직하게 명시).
+  - **P3**(`docs/P3_JUICE_SHOP_XSS_CONTRACT.md` 갱신, 커밋 `6da9e45`): X7 확정 상태표 추가 —
+    inject_path 확정(P2 runtime 계약과 정렬), safe payload/positive 조건 확정(benign marker
+    실행, `xss_oracle`), deterministic regression command 확정(`xss_search_smoke` =
+    `tools/juice_shop_xss_smoke.py`, non-Compose라 `run_overlay`가 argv 그대로 실행 —
+    P2의 `fd50c76` 수정 덕분에 J-3 `search_smoke`와 동형으로 동작). reflected 후보 #1(검색)/
+    #2(track) read-only seed-ready, stored 후보 #3(feedback)는 계약 seed 완료·P2 fixture/reset
+    대기. `tests/test_xss_verifier.py` shape-lock 17/17.
+  - **[X8] 라이브 실행 완료(2026-07-22, P1).** Juice Shop 컨테이너 기동 → `vc_scan_access_control`
+    → **후보 1(검색 `/#/search?q=`) verified=true**, evidence `obs-1bf69d9ac722`, benign
+    marker(`<img src=x onerror=...>`)가 격리 브라우저에서 실제 실행 확인. 후보 2(track-order
+    `/#/track-result?id=`)는 verified=false(반사 없음, evidence는 정상 기록) — 정직한 부정
+    판정, 원인 미상(候補 route가 백엔드 order 조회를 거쳐야 렌더될 수 있음, 추가 조사 가치 있음).
+  - **과정에서 실제 버그 2건 발견·직접 수정(P1, 둘 다 P3 소유 파일)**:
+    1. `surface/inject_xss.py`의 `_XSS_SINKS`에 Angular `bypassSecurityTrustHtml`(P3 계약이
+       지목한 정확한 sink) 패턴이 아예 없어 `find_xss_suspects`가 못 잡고 있었음 — 패턴 추가.
+    2. `verifiers/xss.py::verify()`가 `_playwright_available()`/`_replay_reflected` 안에서
+       Playwright **Sync API**를 쓰는데, `vc_verify_xss`는 MCP tool로서 이미 실행 중인
+       asyncio 이벤트 루프 안에서 호출돼 Playwright가 예외를 던지고, 그게 넓은 except에
+       걸려 "chromium 사전점검 실패"로 오인 degrade — 실제로는 XSS가 재현되는데도
+       evidence 없이 verified=False가 나오고 Finding 전이가 `MissingEvidenceError`로 막힘.
+       전용 스레드(`_run_isolated`, Playwright 공식 권장 우회)에서 돌리도록 수정 — 판정
+       로직은 안 건드림. `tests/` 701/701 그린. **P3에게 Discord로 상세 보고, 두 파일 다
+       직접 고침(P3 소유지만 X7/X8 라이브 실행 자체가 막혀 있어 P1이 처리 후 공유)**.
+  - **[미착수] Angular candidate-generation 확장**: `_XSS_SINKS`엔 추가했지만, `_SERVER_XSS`
+    쪽(X1의 "candidate 생성 단계 gap")은 그대로 — Angular sink는 fixture_hints 경로로만
+    candidate가 된다(현재 juice-shop 1개 target만 하드코드, `mcp_server/tools_analysis.py`
+    `_XSS_FIXTURE_HINTS`). target이 늘면 파일 기반 설정으로 승격 필요(지금은 과설계 회피).
   - **완료 판정**: 승인된 Juice Shop XSS candidate가 Playwright oracle에 도달해 evidence를 만들고,
-    최소 1건의 실제 XSS 검증 결과가 재현된다.
+    최소 1건의 실제 XSS 검증 결과가 재현된다. **✅ 충족 — 검색 candidate verified=true, evidence 확보.**
 
 ### 4.3 측정 (두 종 공통 · 담당 P4, 소스는 P2)
 
@@ -516,14 +543,17 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
   (J-3) 라이브 완주 ✅(2026-07-22, FIXED)** · **7.3 container log redaction ✅(2026-07-22)**,
   patch diff는 구조적 한계로 미해결(문서화). 남은 건 `.env` 72B fallback 값 추가(3절, P2
   URL 전달 대기로 블로킹), U4(전원).
-- **[P2] 진척 적음, 대부분 의도적 보류.** 72B endpoint 미착수(문서화된 결정으로 보류) · X7
-  XSS 데모 타깃 미착수(Juice Shop을 "발표 target 아님"으로 명시 제외) · M1 벤치 소스
-  0→7/16(부분) · Juice Shop default-bridge는 "smoke baseline"으로만 채택, 발표 경로 미승격 ·
-  루트 `RUNBOOK.md` 미착수(P2 전용 문서만 존재).
-- **[P3] ★ 가장 진척 큼.** I1·I2·I3 ✅ **완료 확인**(데모2 블로커 해소!), locator decoy-file
-  우선 선택 버그도 커밋 `7fac591`/`ea68e98`로 해소(P1이 7.1 J-3 라이브 실행 중 발견·보고) —
-  이어서 I4(선택)·I5·X2~X6 미착수, X1은 부분(Python 계열 4패턴만 candidate 생성).
-  `test_vulnerability_profiles.py` 선제 수정 완료.
+- **[P2] (2026-07-22 갱신) X7 runtime 계약 당일 처리.** Discord 요청 받고 `docs/handoffs/
+  D6-P2-xss-runtime.md`(커밋 `2338dc6`)로 Juice Shop reflected XSS 경로·DOM sink·smoke suite
+  기록 — 다만 Windows Docker daemon에 컨테이너가 없어 **live 실행은 아직**(정직하게 명시).
+  남은 건: 72B endpoint(문서화된 결정으로 보류) · M1 벤치 소스 0→7/16(부분) · Juice Shop
+  default-bridge 발표 경로 승격 확인(P1이 물어본 것, 답 대기) · 루트 `RUNBOOK.md` 미착수.
+- **[P3] ★ 가장 진척 큼, X7도 당일 처리.** I1·I2·I3 ✅ **완료 확인**(데모2 블로커 해소!),
+  locator decoy-file 우선 선택 버그도 커밋 `7fac591`/`ea68e98`로 해소(P1이 7.1 J-3 라이브
+  실행 중 발견·보고). **X7 verify 계약 확정**(`docs/P3_JUICE_SHOP_XSS_CONTRACT.md` 갱신,
+  커밋 `6da9e45`, `tests/test_xss_verifier.py` 17/17) — Discord 요청 당일 응답, safe payload·
+  positive 조건·regression command까지 잠금. 이어서 I4(선택)·I5(추가 표본)·X2~X6 미착수,
+  X1은 부분(Python 계열 4패턴만 candidate 생성). `test_vulnerability_profiles.py` 선제 수정 완료.
 - **[P4] 측정·redaction 코드 완료(2026-07-22 P4 갱신 — 위 P1 감사는 이 작업 전 스냅샷).**
   SARIF redaction ✅(`report_export` render_sarif에 `redact()`, 5/5) · M1 클래스별 하네스 ✅
   (`priority_ablation.compare_by_class`) · M2 클래스별 패치 성공률 하네스 ✅(`eval/patch_success.py`, 5/5) ·
@@ -538,5 +568,7 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 ~~I1(Node 인라인 핸들러) →~~ **(2026-07-22 갱신) I1 해결됨** → ~~데모 2 완주(7.1 J-3)~~
 **(2026-07-22) 완료, FIXED** → 데모 1 E2E(+U1 스캐폴딩, ✅ 완료) → 4절 나머지 정확도·성능 +
 6절 UX(✅ 완료) + 3절 72B → 측정·문서·리허설.
-가장 큰 단일 리스크는 이제 **X7(XSS 데모 타깃, P2 — 아직 미착수)**과 **3절 72B endpoint
-(P2/P4 — 아직 미착수)**.
+~~가장 큰 단일 리스크는 X7 live 실행~~ — **(2026-07-22) X7/X8 완료, 검색 XSS verified=true**
+(P1 라이브 실행, `verifiers/xss.py` Playwright asyncio 버그 발견·수정 포함). 남은 리스크는
+**3절 72B endpoint(P2/P4 — 아직 미착수)**와 XSS의 localize→patch→FIXED 전체 루프(미착수, 원하면
+데모 2와 같은 패턴으로 이어서 가능).

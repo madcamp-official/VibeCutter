@@ -281,6 +281,25 @@ def _playwright_available() -> tuple[bool, str]:
 # --- ③ verify() 조립 + evidence 저장 --------------------------------------------------
 
 
+def _run_isolated(fn, *args):
+    """Playwright Sync API 호출을 전용 스레드에서 돌린다.
+
+    `vc_verify_xss`는 MCP tool로서 이미 실행 중인 asyncio 이벤트 루프 안에서 sync 함수로
+    호출된다(`mcp.call_tool` → FastMCP tool dispatch). Playwright Sync API는 그 안에서
+    바로 부르면 "It looks like you are using Playwright Sync API inside the asyncio loop"
+    로 예외를 던진다 — `_playwright_available()`이 그 예외를 넓은 except로 잡아 "chromium
+    사전점검 실패"로 오인 degrade시키고, `_replay_reflected`/`_replay_stored`는 아예 호출
+    전에 막혀 evidence 없이 verified=False가 나온다(2026-07-22, X7 Juice Shop 라이브 검증
+    중 발견 — 실제로는 XSS가 재현되는데도 evidence_ids=[]라 Finding 전이 자체가
+    MissingEvidenceError로 막힘). Playwright 공식 권장 우회대로 이벤트 루프가 없는 전용
+    스레드에서 실행해 우회한다 — 판정 로직(오라클/재현)은 전혀 건드리지 않는다.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(fn, *args).result()
+
+
 def verify(
     run_id: str,
     candidate: Candidate,
@@ -299,7 +318,7 @@ def verify(
         raise ValueError(f"지원하지 않는 XSS context {probe.context!r} (지원: {sorted(_REPLAY)})")
 
     # X5: 격리 브라우저 사전점검. 없으면 크래시·억지 verified 대신 명확한 사유로 degrade한다.
-    ok, why = _playwright_available()
+    ok, why = _run_isolated(_playwright_available)
     if not ok:
         return VerifierOutput(
             verified=False, evidence_ids=[],
@@ -308,7 +327,7 @@ def verify(
         )
 
     flag = f"__vc_xss_{uuid4().hex[:8]}"  # 재현마다 fresh — 이전 실행이 남긴 플래그 오판 방지
-    attempts = strategy(probe, flag, max_requests)
+    attempts = _run_isolated(strategy, probe, flag, max_requests)
 
     executed = any(a.executed for a in attempts)
     raw_reflected = any(a.raw_reflected for a in attempts)
