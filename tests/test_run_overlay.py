@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 
 from runtime.manifest import TargetManifest
-from runtime.run_overlay import RunComposeOverlay
+from runtime.run_overlay import RunComposeOverlay, _replace_compose_file_arg
 from runtime.worktree import WorktreeManager
 
 
@@ -41,6 +41,13 @@ def _manifest() -> TargetManifest:
 
 
 class RunComposeOverlayTests(unittest.TestCase):
+    def test_non_compose_command_is_left_unchanged(self) -> None:
+        argv = ["python", "tools/juice_shop_smoke.py"]
+        self.assertEqual(
+            _replace_compose_file_arg(argv, "targets/compose/demo-api.yaml", Path("overlay.yaml")),
+            argv,
+        )
+
     def test_user_project_compose_resolves_from_approved_source_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

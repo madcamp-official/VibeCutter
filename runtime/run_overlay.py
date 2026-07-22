@@ -135,7 +135,14 @@ class RunComposeOverlay:
             command = self.manifest.commands[command_id]
         except KeyError as exc:
             raise KeyError(f"command_id is not registered for {self.manifest.id}: {command_id}") from exc
-        argv = _replace_compose_file_arg(command.argv, self.manifest.docker_isolation.compose_file, self.output_path)
+        # Regression/test commands may be ordinary executables (for example a
+        # Python smoke script), not Compose commands.  Only rewrite commands
+        # that actually carry a Compose file flag; preserve non-Compose argv.
+        argv = list(command.argv)
+        if any(value in {"-f", "--file"} for value in argv):
+            argv = _replace_compose_file_arg(
+                argv, self.manifest.docker_isolation.compose_file, self.output_path
+            )
         commands = self.manifest.commands.copy()
         commands[command_id] = command.model_copy(update={"argv": argv, "working_dir": "."})
         projected = self.manifest.model_copy(update={"commands": commands})
@@ -247,6 +254,8 @@ def _rewrite_env_file_paths(service: dict, compose_directory: Path, repository_r
 
 def _replace_compose_file_arg(argv: list[str], configured_path: str, generated_path: Path) -> list[str]:
     rewritten = list(argv)
+    if not any(value in {"-f", "--file"} for value in rewritten):
+        return rewritten
     for index, value in enumerate(rewritten[:-1]):
         if value in {"-f", "--file"} and rewritten[index + 1] == configured_path:
             rewritten[index + 1] = str(generated_path)

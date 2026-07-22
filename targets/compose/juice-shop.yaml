@@ -10,4 +10,11 @@ services:
 
 networks:
   vibecutter-internal:
-    internal: true
+    # internal: true는 egress를 막지만 Docker Desktop에서 호스트→published port ingress도
+    # 함께 막아 vc_build_and_test의 patched overlay가 base_url(127.0.0.1:14020)로 도달 못
+    # 하는 문제가 있었다(J-3 라이브 실행 중 P1 발견). runtime/compose_isolation.py의
+    # _blocks_egress()가 이미 동등 안전으로 인정하는 대안(bridge + NAT masquerade 비활성)으로
+    # 교체 — egress는 여전히 막히고 ingress만 살아난다. ComposeIsolationInspector 재검증 통과.
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"

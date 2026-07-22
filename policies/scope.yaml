@@ -19,7 +19,15 @@
 #
 # 26s-w1-c3-09는 D1-P2.md 12:14 갱신본에서 새로 통과 확인되어 추가함
 # (targets/manifests/26s-w1-c3-09.yaml base_url과 포트 일치 확인).
+#
+# juice-shop은 발표(presentation) target이 아니라 Injection candidate/verifier/235B patch
+# 경로를 검증하는 엔지니어링 target이다(docs/P2_TARGET_RUNTIME_RUNBOOK.md, 4.1 I1~I3의 데모2
+# 근거). manifest(targets/manifests/juice-shop.yaml)는 이미 체크인돼 있었으나 allowlist
+# 등록이 누락돼 있었다 — J-3 실주행을 위해 2026-07-22 추가(P1, base_url 포트와 일치 확인).
 targets:
+  juice-shop:
+    allowed_hosts: [127.0.0.1]
+    port: 14020
   26s-w1-c1-02:
     allowed_hosts: [127.0.0.1]
     port: 14003
