@@ -249,6 +249,7 @@ def candidates_for_target(
     source_root: str | Path,
     *,
     self_signup_hints: dict | None = None,
+    xss_fixture_hints: dict | None = None,
 ) -> BridgeResult:
     """target 하나 → 검증가능 Candidate(**IDOR + injection + XSS**) 또는 blocked. MCP scan tool·배치 단일 진입점.
 
@@ -261,7 +262,7 @@ def candidates_for_target(
     suspects = find_idor_suspects(source_root)
     result = build_candidates(run_id, provisioning, suspects, self_signup_hints=self_signup_hints)
     try:
-        inj_xss = injection_xss_candidates(run_id, provisioning, source_root)
+        inj_xss = injection_xss_candidates(run_id, provisioning, source_root, xss_fixture_hints=xss_fixture_hints)
     except Exception:  # noqa: BLE001 — injection/XSS 스캔 실패가 IDOR 후보 생성을 막지 않게(비파괴)
         inj_xss = BridgeResult()
     return BridgeResult(
@@ -485,10 +486,43 @@ def _handlers_for(text: str, suffix: str, root: Path):
     return (("node", h) for h in _node_handlers(text, _node_symbol_index(root)))
 
 
+def _match_xss_hint(hints: dict, suspect) -> dict | None:
+    """프론트 XSS suspect에 맞는 fixture 계약을 찾는다. key는 상대 파일 경로(접미/부분 일치 허용).
+
+    계약은 정적으로 못 얻는 라우트 매핑(inject_path·inject_param·render_path)을 사람이 준 것이다(X2 (a)).
+    """
+    f = (suspect.file or "").replace("\\", "/")
+    for key, hint in hints.items():
+        k = str(key).replace("\\", "/")
+        if f == k or f.endswith(k) or k in f:
+            if hint.get("inject_path") and hint.get("inject_param"):
+                return hint
+    return None
+
+
+def _xss_candidate_from_hint(run_id: str, base_url: str, suspect, hint: dict) -> Candidate:
+    ap = {
+        "base_url": base_url, "context": hint.get("context", "reflected"),
+        "inject_path": hint["inject_path"], "inject_param": hint["inject_param"],
+        "inject_method": hint.get("inject_method", "GET"),
+    }
+    if hint.get("render_path"):
+        ap["render_path"] = hint["render_path"]
+    return Candidate(
+        id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-79", vuln_class="xss",
+        endpoint=hint["inject_path"], source_symbols=[f"{suspect.file}:{suspect.line}"], attack_params=ap,
+    )
+
+
 def injection_xss_candidates(
-    run_id: str, provisioning: VerifierProvisioning, source_root: str | Path
+    run_id: str, provisioning: VerifierProvisioning, source_root: str | Path,
+    *, xss_fixture_hints: dict | None = None,
 ) -> BridgeResult:
     """source_root → verify 가능한 XSS/Injection Candidate(또는 blocked).
+
+    `xss_fixture_hints`(X2 (a)): 프론트/템플릿 XSS sink는 라우트·파라미터를 정적으로 못 붙여 기본은
+    `blocked`다. `{상대파일경로: {inject_path, inject_param, context?, render_path?}}` 계약을 주면
+    그 sink를 verify 가능한 candidate로 승격한다. 계약 없는 sink는 여전히 blocked(needed 명시).
 
     핸들러 본문 inline SELECT SQLi → injection candidate; 서버 HTMLResponse 반사 → xss candidate.
     파괴적 write SQL·서비스 계층·프론트 싱크는 blocked(라우트/안전 계약 필요). base_url은 provisioning에서.
@@ -557,14 +591,20 @@ def injection_xss_candidates(
                                        "inject_param": xparam, "inject_method": "GET"},
                     ))
 
-    # ── 프론트 XSS 싱크: 라우트를 못 붙임 → blocked(fixture/라우트 계약 필요) ──
+    # ── 프론트 XSS 싱크: fixture 계약이 있으면 verify 가능한 candidate로, 없으면 blocked ──
+    hints = xss_fixture_hints or {}
     for s in find_xss_suspects(root):
         if s.file.endswith(".py"):  # 서버측은 위에서 처리
+            continue
+        hint = _match_xss_hint(hints, s)
+        if hint is not None and ("xss", hint["inject_path"]) not in seen:
+            seen.add(("xss", hint["inject_path"]))
+            cands.append(_xss_candidate_from_hint(run_id, base, s, hint))  # X2(a): blocked → candidate
             continue
         blocked.append(BlockedTarget(
             target_id=tid, strategy="prefilter",
             reason=f"프론트 XSS 싱크 {s.sink} @ {s.file}:{s.line} — 라우트/파라미터 정적 매핑 불가",
-            needed="XSS fixture(inject_path·inject_param) 또는 렌더 라우트 계약",
+            needed="XSS fixture(inject_path·inject_param) 또는 렌더 라우트 계약(xss_fixture_hints)",
         ))
 
     return BridgeResult(candidates=cands, blocked=blocked)

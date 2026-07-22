@@ -42,9 +42,24 @@
 | regression/smoke | benign id로 track-result가 200/렌더되는지 |
 
 ## 후보 3 (후속) — stored XSS · feedback
-- context=`stored`. `_replay_stored`는 이미 지원(inject → render_path 분리). 단 **DB 변경**이라 승인된
-  target reset + fixture 계약 필요 → P2 fixture/reset 준비 후 진행. inject: `POST /api/Feedbacks` `comment`,
-  render_path: `/#/about`(feedback gallery). positive는 동일(marker 실행).
+- context=`stored`. `_replay_stored`가 inject→render_path 분리를 이미 지원한다. **계약-seed로 바로
+  검증 가능**(아래 attack_params). 단 **DB 변경**이라 승인된 target reset + fixture 계약이 전제 →
+  P2 fixture/reset 준비 후 진행. positive는 동일(격리 브라우저 marker 실행).
+
+  P2가 seed할 candidate.attack_params:
+  ```
+  base_url:      http://127.0.0.1:3000
+  context:       stored
+  inject_method: POST
+  inject_path:   /api/Feedbacks
+  inject_param:  comment
+  render_path:   /#/about        # feedback gallery (또는 관리자 feedback 표)
+  ```
+  rollback: **DB 변경 → 승인된 target reset 필수**(읽기 전용인 #1/#2와 다름).
+  shape 잠금: `tests/test_xss_verifier.py::test_juice_shop_stored_xss_contract_seed`.
+
+> **참고(X3 범위)**: 후보 빌더의 **소스 기반 stored 자동생성**(write 핸들러 → 저장 → 다른 경로 render
+> 상관분석)은 정밀도가 낮아 follow-up으로 둔다. 데모/일반 사용자 stored는 위처럼 **계약-seed**로 만든다.
 
 ## 후보 4 (후순위)
 - header(`true-client-ip`) + auth + shared DB mutation → 인증·rollback 계약 확정 후. 지금은 보류.
