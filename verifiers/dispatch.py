@@ -73,8 +73,9 @@ def verify_candidate(
     """candidate.vuln_class로 알맞은 verifier를 골라 호출한다.
 
     실패/예외:
-      - 미구현 군(xss/injection) → `NotImplementedError`
       - 판별 불가(vuln_class·cwe 둘 다 매칭 안 됨) → `ValueError` (추측으로 아무 verifier나 부르지 않는다)
+      - (확장점) 미래에 스캐폴딩만 된 군을 `_NOT_READY`에 넣으면 그 군은 `NotImplementedError`.
+        현재 idor/xss/injection 세 군은 전부 구현돼 `_NOT_READY`가 비어 있어 이 경로는 나지 않는다.
     """
     vuln = class_of(candidate)
     verifier = _VERIFIERS.get(vuln)
