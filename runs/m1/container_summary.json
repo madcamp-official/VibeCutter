@@ -1,0 +1,114 @@
+{
+  "n_apps": 16,
+  "n_scanned": 0,
+  "n_candidates": 0,
+  "by_status": {
+    "scanned": 0,
+    "clone_failed": 0,
+    "scan_unavailable": 6,
+    "source_missing": 10,
+    "error": 0
+  },
+  "items": [
+    {
+      "app_id": "juice-shop",
+      "status": "scan_unavailable",
+      "n_candidates": 0,
+      "detail": ""
+    },
+    {
+      "app_id": "nodegoat",
+      "status": "source_missing",
+      "n_candidates": 0,
+      "detail": ".vibecutter\\targets\\sources\\nodegoat"
+    },
+    {
+      "app_id": "dvna",
+      "status": "source_missing",
+      "n_candidates": 0,
+      "detail": ".vibecutter\\targets\\sources\\dvna"
+    },
+    {
+      "app_id": "vulnerable-node",
+      "status": "source_missing",
+      "n_candidates": 0,
+      "detail": ".vibecutter\\targets\\sources\\vulnerable-node"
+    },
+    {
+      "app_id": "dvga",
+      "status": "scan_unavailable",
+      "n_candidates": 0,
+      "detail": ""
+    },
+    {
+      "app_id": "vampi",
+      "status": "scanned_container_semgrep",
+      "n_candidates": 8,
+      "detail": ""
+    },
+    {
+      "app_id": "tiredful-api",
+      "status": "source_missing",
+      "n_candidates": 0,
+      "detail": ".vibecutter\\targets\\sources\\tiredful-api"
+    },
+    {
+      "app_id": "dvpwa",
+      "status": "source_missing",
+      "n_candidates": 0,
+      "detail": ".vibecutter\\targets\\sources\\dvpwa"
+    },
+    {
+      "app_id": "dsvw",
+      "status": "scanned_container_semgrep",
+      "n_candidates": 10,
+      "detail": ""
+    },
+    {
+      "app_id": "webgoat",
+      "status": "source_missing",
+      "n_candidates": 0,
+      "detail": ".vibecutter\\targets\\sources\\webgoat"
+    },
+    {
+      "app_id": "java-sec-code",
+      "status": "source_missing",
+      "n_candidates": 0,
+      "detail": ".vibecutter\\targets\\sources\\java-sec-code"
+    },
+    {
+      "app_id": "crapi",
+      "status": "source_missing",
+      "n_candidates": 0,
+      "detail": ".vibecutter\\targets\\sources\\crapi"
+    },
+    {
+      "app_id": "dvwa",
+      "status": "scan_unavailable",
+      "n_candidates": 0,
+      "detail": ""
+    },
+    {
+      "app_id": "bwapp",
+      "status": "source_missing",
+      "n_candidates": 0,
+      "detail": ".vibecutter\\targets\\sources\\bwapp"
+    },
+    {
+      "app_id": "mutillidae",
+      "status": "source_missing",
+      "n_candidates": 0,
+      "detail": ".vibecutter\\targets\\sources\\mutillidae"
+    },
+    {
+      "app_id": "26s-w1-c2-05",
+      "status": "scan_unavailable",
+      "n_candidates": 0,
+      "detail": ""
+    }
+  ],
+  "n_scanned_container_semgrep": 2,
+  "n_candidates_container_semgrep": 18,
+  "semgrep_runtime": "docker:semgrep/semgrep:latest (1.169.0)",
+  "llm_endpoint": "down"
+}
