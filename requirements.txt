@@ -6,3 +6,5 @@ sqlmodel==0.0.39
 semgrep==1.90.0
 setuptools<81  # semgrep(opentelemetry-instrumentation)이 pkg_resources를 쓴다; 81+는 이걸 뺐다
 python-dotenv>=1.0,<2
+httpx==0.28.1  # verifiers/*.py, repair/validators.py가 직접 사용 (mcp의 전이 의존성이라 지금까지 우연히 딸려왔음)
+playwright==1.61.0  # verifiers/xss.py의 XSS oracle. 설치 후 `playwright install chromium` 별도 실행 필요

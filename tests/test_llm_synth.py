@@ -90,7 +90,7 @@ class LlmSynthTest(unittest.TestCase):
             client = _FakeClient(_GOOD_DIFF)
             make_llm_synthesizer(client)(_finding(), _rc(), root)
             assert client.seen_prompt is not None
-            self.assertIn("신뢰할 수 없는", client.seen_prompt)  # injection guard 프리앰블
+            self.assertIn("untrusted", client.seen_prompt)  # injection guard 프리앰블
             self.assertNotIn("Bearer abc.def.ghi", client.seen_prompt)  # secret redaction
             self.assertIn("<redacted>", client.seen_prompt)
 
