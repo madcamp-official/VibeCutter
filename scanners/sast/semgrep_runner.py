@@ -40,7 +40,14 @@ from contracts.schemas import Candidate
 FOCUS_RULESETS: dict[str, tuple[str, ...]] = {
     "injection": ("p/sql-injection", "p/command-injection"),
     "xss": ("p/xss",),
-    "idor": ("p/insecure-access-control",),
+    # idor: 공개 semgrep registry 에 targeted access-control 룰셋이 없다
+    # (p/insecure-access-control·p/broken-access-control 둘 다 HTTP 404 — 예전 값이 그거라
+    # 매 스캔이 실패했다). IDOR 는 데이터플로우 sink 로 안 잡히는 구조적(권한) 취약점이라 SAST
+    # 로는 미탐이 정상 → SAST 는 idor 룰셋을 돌리지 않는다(빈 튜플). IDOR 후보는
+    # `scanners.surface_idor`(구조적 프리필터) + 동적 verify 가 낸다(aggregate 에서 병합).
+    # "idor" 는 유효 focus 키로 유지 — broad 스캔의 access-control finding 을
+    # `_CWE_TO_FOCUS`(CWE-639/862/863/284/285/566)로 idor 로 분류하고, ruleset_focus 태깅·테스트에도 쓴다.
+    "idor": (),
 }
 
 # semgrep severity → confidence 기본값. metadata.confidence(HIGH/MEDIUM/LOW)가

@@ -10,7 +10,14 @@ surface(정적 프리필터)와 SAST는 **다른 경로로 후보를 내고 `agg
 |---|---|---|
 | injection | `p/sql-injection`, `p/command-injection` | CWE-89(SQL), 78/77(command), **90(LDAP)**, **943(NoSQL)** |
 | xss | `p/xss` | CWE-79, 80, 83 |
-| idor | `p/insecure-access-control` | CWE-639, 862, 863, 284, 285, 566 |
+| idor | **`()` — SAST 룰셋 없음** (구조적, 아래 갭②) | CWE-639, 862, 863, 284, 285, 566 (broad 스캔 분류용 매핑은 유지) |
+
+**(2026-07-22 수정)** idor 룰셋이 예전엔 `p/insecure-access-control` 였으나 **semgrep registry 에서 HTTP 404**
+(존재하지 않는 이름 — `p/broken-access-control` 도 404)라 매 스캔이 실패했다. 공개 registry 에 targeted
+access-control 룰셋이 없고 IDOR 는 dataflow sink 로 안 잡히는 구조적 취약점이라, `FOCUS_RULESETS["idor"]`
+를 **빈 튜플**로 바꿔 SAST 는 idor 룰셋을 돌리지 않는다. IDOR 후보는 `scanners.surface_idor`(구조적
+프리필터)가 낸다(`eval/run_m1.py` 에 배선). `_CWE_TO_FOCUS` 의 idor 매핑은 유지 — broad 스캔의
+access-control finding 을 idor 로 분류하기 위함.
 
 ## 판정
 
