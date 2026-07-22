@@ -123,7 +123,9 @@ class FileUriToPathTests(unittest.TestCase):
         """POSIX URI는 `file://` 제거만으로도 우연히 맞는다 — 그 우연에 기대지 않는지 확인."""
         from pathlib import Path
 
-        p = Path("/tmp/x/y.bin")
+        # On Windows ``Path('/tmp/...')`` is drive-relative and therefore not
+        # absolute; use a platform-neutral absolute path for the round-trip.
+        p = Path.cwd() / "tmp" / "x" / "y.bin"
         self.assertEqual(file_uri_to_path(p.as_uri()), p)
 
 
