@@ -80,6 +80,29 @@ class XssPayloadSafetyTests(unittest.TestCase):
         self.assertIn("ScRiPt", joined, "대소문자 혼합 우회 payload 없음")
 
 
+class JuiceShopXssContractTests(unittest.TestCase):
+    """P2 Juice Shop XSS 후보 1(reflected 검색)의 verify 계약 shape 잠금(docs/P3_JUICE_SHOP_XSS_CONTRACT.md).
+
+    P2가 이 attack_params로 candidate를 seed하면 reflected oracle이 그대로 소비한다. 실제 verified는
+    승인 runtime의 격리 Playwright로만 — 여기선 계약 shape·payload 안전성만 회귀 고정.
+    """
+
+    def test_juice_shop_reflected_xss_contract(self):
+        c = Candidate(id="c", run_id="r", cwe="CWE-79", vuln_class="xss", attack_params={
+            "base_url": "http://127.0.0.1:3000", "context": "reflected",
+            "inject_path": "/#/search", "inject_param": "q", "inject_method": "GET",
+        })
+        p = xss.xss_probe_from_candidate(c)
+        self.assertEqual(p.context, "reflected")
+        self.assertEqual(p.inject_param, "q")
+        self.assertIn(p.context, xss._REPLAY)  # reflected 재현기 등록됨
+        # bypassSecurityTrustHtml(innerHTML) 렌더에서 실행되는 payload가 세트에 있어야 트리거 가능.
+        payloads = _benign_payloads("F")
+        self.assertTrue(any("onerror" in pl or "onload" in pl for pl in payloads))
+        # 반사만으로 verified 아님(실행돼야) — 계약 핵심.
+        self.assertFalse(xss_oracle(executed=False, raw_reflected=True, escaped_reflected=False)[0])
+
+
 class XssReflectionKindTests(unittest.TestCase):
     def test_raw_reflection_detected(self) -> None:
         raw, esc = _reflection_kind("<div><script>window['f']=1</script></div>", "<script>window['f']=1</script>")
