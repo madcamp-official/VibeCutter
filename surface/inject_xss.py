@@ -54,15 +54,30 @@ _SQL_ASSIGN = re.compile(r"^\s*(?:[\w.<>\[\]]+\s+)*?(\w+)\s*\+?=(?!=)")
 _EXEC_WINDOW = 6  # 동적 SQL 문자열 대입 후 이 줄 수 안에서 실행되면 같은 sink으로 본다
 
 # ── XSS 신호: 위험 sink + 동적 값 ─────────────────────────────────────────────────────
+# 클라이언트 DOM sink + 서버 템플릿(escape를 명시적으로 끄는 지점). jQuery `.append/.prepend`류는
+# 파이썬 list.append 등과 구분이 안 돼 오탐이 커서 제외한다(`.html(`만 유지).
 _XSS_SINKS: list[tuple[str, re.Pattern]] = [
     ("dangerouslySetInnerHTML", re.compile(r"dangerouslySetInnerHTML\s*=\s*\{\{[^}]*__html\s*:\s*([^}]+)\}")),
     ("v-html", re.compile(r'v-html\s*=\s*["\']([^"\']+)["\']')),
     ("innerHTML", re.compile(r"\.innerHTML\s*=(?!=)\s*(.+)")),
     ("outerHTML", re.compile(r"\.outerHTML\s*=(?!=)\s*(.+)")),
+    ("insertAdjacentHTML", re.compile(r"insertAdjacentHTML\s*\(\s*[^,]+,\s*([^)]+)")),  # 2번째 인자=HTML
     ("document.write", re.compile(r"document\.write(?:ln)?\s*\(\s*([^)]+)")),
     ("jquery.html", re.compile(r"\.html\s*\(\s*([^)]+)\)")),
     ("HTMLResponse", re.compile(r'HTMLResponse\s*\(\s*(f["\'][^"\']*\{[^}]+\}[^"\']*["\']|[^)]*\+[^)]*)')),
+    # ── 서버 템플릿: 출력 인코딩을 명시적으로 끄는 지점(입력이 동적이면 XSS) ──
+    ("django.mark_safe", re.compile(r"\bmark_safe\s*\(\s*([^)]+)")),
+    ("flask.render_template_string", re.compile(r"\brender_template_string\s*\(\s*([^),]+)")),
+    ("markupsafe.Markup", re.compile(r"\bMarkup\s*\(\s*([^)]+)")),
+    ("jinja.safe", re.compile(r"\{\{\s*([^}|]+?)\s*\|\s*safe\b")),          # {{ x|safe }}
+    ("thymeleaf.utext", re.compile(r'th:utext\s*=\s*["\']([^"\']+)["\']')),  # th:utext="${x}"
 ]
+# 프레임워크가 escape를 명시적으로 끄는 sink → 높음(0.9~1.0). 나머지 DOM sink는 0.7.
+_STRONG_SINKS = frozenset({
+    "dangerouslySetInnerHTML", "v-html", "HTMLResponse",
+    "django.mark_safe", "flask.render_template_string", "markupsafe.Markup",
+    "jinja.safe", "thymeleaf.utext",
+})
 _LITERAL = re.compile(r"""^\s*(["'])(?:\\.|(?!\1).)*\1\s*$""")  # 순수 문자열 리터럴(무해)
 # 인코딩/살균을 거친 값은 안전 → 제외.
 _SANITIZED = re.compile(r"encode|escape|sanitiz|dompurify|purif|striptags|\.textContent|xss[_-]?clean", re.I)
@@ -207,8 +222,8 @@ def find_xss_suspects(source_root: str | Path) -> list[XssSuspect]:
                 if key in seen:
                     continue
                 seen.add(key)
-                # v-html/dangerouslySetInnerHTML/HTMLResponse는 프레임워크가 명시적으로 살균을 끄는 지점 → 높음
-                strong = sink_name in ("dangerouslySetInnerHTML", "v-html", "HTMLResponse")
+                # 프레임워크가 명시적으로 살균을 끄는 지점(서버 템플릿 포함) → 높음
+                strong = sink_name in _STRONG_SINKS
                 out.append(XssSuspect(
                     file=rel, line=i, sink=sink_name, snippet=line.strip()[:160],
                     score=1.0 if strong else 0.7,

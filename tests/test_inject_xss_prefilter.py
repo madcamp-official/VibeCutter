@@ -109,6 +109,41 @@ class XssPrefilterTests(unittest.TestCase):
             self.assertEqual(len(sus), 1)
             self.assertEqual(sus[0].sink, "v-html")
 
+    def test_detects_django_mark_safe_dynamic(self):
+        with _tree({"views.py": 'def v(name):\n    return mark_safe(f"<h1>{name}</h1>")\n'}) as d:
+            sus = find_xss_suspects(d)
+            self.assertEqual(len(sus), 1)
+            self.assertEqual(sus[0].sink, "django.mark_safe")
+            self.assertEqual(sus[0].score, 1.0)  # escape를 끄는 지점 → strong
+
+    def test_detects_flask_render_template_string(self):
+        with _tree({"views.py": 'def v(name):\n    return render_template_string("<h1>" + name + "</h1>")\n'}) as d:
+            sus = find_xss_suspects(d)
+            self.assertEqual(len(sus), 1)
+            self.assertEqual(sus[0].sink, "flask.render_template_string")
+
+    def test_detects_insert_adjacent_html_dynamic(self):
+        with _tree({"dom.js": 'function r(html){ el.insertAdjacentHTML("beforeend", html); }\n'}) as d:
+            sus = find_xss_suspects(d)
+            self.assertEqual(len(sus), 1)
+            self.assertEqual(sus[0].sink, "insertAdjacentHTML")
+
+    def test_detects_jinja_safe_filter(self):
+        with _tree({"page.html": "<div>{{ user_bio | safe }}</div>\n"}) as d:
+            sus = find_xss_suspects(d)
+            self.assertEqual(len(sus), 1)
+            self.assertEqual(sus[0].sink, "jinja.safe")
+
+    def test_rejects_mark_safe_literal(self):
+        # 정적 리터럴을 mark_safe 하는 건 안전 → 제외(precision)
+        with _tree({"views.py": 'def v():\n    return mark_safe("<b>static</b>")\n'}) as d:
+            self.assertEqual(find_xss_suspects(d), [])
+
+    def test_rejects_python_list_append_not_xss(self):
+        # jQuery `.append`류를 sink에 안 넣었으므로 파이썬 list.append는 오탐 안 함
+        with _tree({"svc.py": "def add(items, x):\n    items.append(x)\n    return items\n"}) as d:
+            self.assertEqual(find_xss_suspects(d), [])
+
 
 if __name__ == "__main__":
     unittest.main()
