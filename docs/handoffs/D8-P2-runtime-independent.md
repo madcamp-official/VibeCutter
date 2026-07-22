@@ -105,3 +105,11 @@
   `source_path`를 비교하도록 최소 보정했다. 상위 저장소 하위 경로는 명확한 blocker로 거부하고,
   독립 프로젝트에는 `git init` 안내를 유지한다.
 - registry policy 및 P2 runtime 회귀: **68 passed, 5 subtests passed** (기존 deprecation warning만 남음).
+
+## D10 독립 검증 (2026-07-22)
+
+- 사용자 프로젝트 onboarding 회귀: manifest scaffold, egress consent, Git root/dirty preflight,
+  scan/repair wiring, registry, metadata, lease, catalog, overlay를 묶어 **93 passed**.
+- egress consent는 grant/revoke 및 resource 상태 반영까지 확인했다. 동의 전 LLM 경로 차단
+  계약은 테스트로 고정되어 있다.
+- 새 코드 변경 없이 검증만 수행했으며, deprecation warning 201건은 기존 `utcnow()` 사용이다.
