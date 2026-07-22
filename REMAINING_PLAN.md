@@ -339,7 +339,23 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
   - 채팅 보고 = ①발견한 위험 ②수정 계획 ③(승인 시)수정한 내용, 전부 앱·데이터 언어의 쉬운 말.
   - **기본적으로 숨길 것**: candidate/worker-run 내부 기계, 재시도 예산, SAST/SCA 내부, evidence
     ID, 게이트별 개별 판정, CWE/OWASP 코드. (원하면 "자세히 보기"로만.)
-- [ ] **C2. `mcp_server/prompts.py`에 "번역-not-dump 승인" 지침** — `mcp_server/prompts.py`
+- [x] **C2. `mcp_server/prompts.py`에 "번역-not-dump 승인" 지침** — `mcp_server/prompts.py`
+  **(완료 2026-07-22)** — 등록 argv 승인이 실제로는 **어느 프롬프트에도 안내가 없던 빈
+  구멍**이었음을 발견(기존 5종 프롬프트 중 신규 로컬 프로젝트 등록을 다루는 게 하나도 없었음
+  — `audit_local_target`은 이미 등록된 target_id를 전제로 함). 그래서 신규
+  `register_local_project(source_path)` 프롬프트를 추가해 U1 `vc_scaffold_manifest` →
+  쉬운 말 승인(raw argv는 "자세히 보기" 요청 시에만) → `vc_register_local_target
+  (confirmed=True)` 흐름을 안내. 기존 두 패치-diff 승인 지점(`_STEPS` 7번,
+  `_REPAIR_VERIFIED_FINDING` 3~4번)도 "diff를 그대로 보여주고"에서 "위 계획대로 고쳐도
+  될까요? [네/아니오] (바뀌는 코드 보기)"식 번역 패턴으로 재작성. 모듈 docstring에
+  "번역-not-dump" 원칙 절 추가(raw 값을 안 보여줘도 `@audited`가 감사기록은 항상 남긴다는
+  점 명시). `tests/test_prompts.py`에 신규 프롬프트 테스트 3개 + 패치 승인 번역 패턴
+  테스트 2개 추가, 두 tool-참조 일관성 테스트에도 신규 프롬프트 반영. 전체 스위트는
+  623 테스트 중 623(제 변경분 기준)이지만, **제 변경과 무관하게 이미 커밋된 상태
+  (`fb2dae3`)에서부터 `tests/test_vulnerability_profiles.py` 2건이 실패 중**이었음을
+  확인(git stash로 격리 검증) — XSS/injection payload가 verifier 소스와 안 맞음, P3 소유
+  `verifiers/xss.py`/`verifiers/injection.py` 쪽 최근 변경(`security/agent` 브랜치 merge
+  추정) 때문으로 보이며 C2 범위 밖이라 손대지 않음. P3에게 별도 보고 필요.
   - **딜레마**: 안전상 승인 2번(등록 argv·패치 diff)이 필요한데, 비전문가는 raw argv/diff를 의미
     있게 승인 못 한다. 숨기면 blind 승인(가짜 동의), raw로 보이면 이해 못 함.
   - **해법**: 승인 대상을 산출물이 아니라 **쉬운 말 설명**으로. 예: 등록="앱을 검사하려면 앱을

@@ -27,6 +27,29 @@ def _text(result) -> str:
 _UNIMPLEMENTED_TOOLS = ("vc_map_routes", "vc_map_roles", "vc_index_code", "vc_browser_crawl")
 
 
+class RegisterLocalProjectPromptTests(unittest.TestCase):
+    """U1 스캐폴딩 → C2 "번역-not-dump" 승인 → 등록까지 안내하는 신규 프롬프트."""
+
+    def _get(self, source_path: str):
+        return _get_prompt("register_local_project", {"source_path": source_path})
+
+    def test_reflects_source_path_and_lists_key_tools(self) -> None:
+        text = _text(self._get("/home/user/my-app"))
+        self.assertIn("/home/user/my-app", text)
+        for tool_name in ("vc_scaffold_manifest", "vc_register_local_target"):
+            self.assertIn(tool_name, text)
+
+    def test_translates_approval_instead_of_dumping_raw_argv(self) -> None:
+        text = _text(self._get("/home/user/my-app"))
+        # raw argv를 그대로 보여주라는 지시가 아니라 쉬운 말로 승인을 구하라는 지시여야 한다.
+        self.assertIn("쉬운 말", text)
+        self.assertIn("자세히 보기", text)
+
+    def test_points_to_audit_local_target_after_registration(self) -> None:
+        text = _text(self._get("/home/user/my-app"))
+        self.assertIn("audit_local_target", text)
+
+
 class AuditLocalTargetPromptTests(unittest.TestCase):
     def _get(self, target_id: str):
         return _get_prompt("audit_local_target", {"target_id": target_id})
@@ -88,6 +111,17 @@ class StagePromptTests(unittest.TestCase):
         self.assertIn("승인", text)  # diff 승인 게이트
         self.assertIn("3", text)  # 재시도 상한
 
+    def test_repair_verified_finding_translates_patch_approval_not_dumps_diff(self) -> None:
+        """C2: raw diff를 그대로 보여주라는 지시가 아니라 쉬운 말 요약으로 승인을 구하라는 지시."""
+        text = _text(_get_prompt("repair_verified_finding", {"finding_id": "find-7"}))
+        self.assertIn("쉬운 말", text)
+        self.assertIn("코드 보기", text)
+
+    def test_audit_local_target_translates_patch_approval_not_dumps_diff(self) -> None:
+        text = _text(_get_prompt("audit_local_target", {"target_id": "t"}))
+        self.assertIn("쉬운 말", text)
+        self.assertIn("코드 보기", text)
+
     def test_retest_patch_lists_all_three_validation_tools(self) -> None:
         text = _text(_get_prompt("retest_patch", {"patch_id": "patch-2"}))
         self.assertIn("patch-2", text)
@@ -104,6 +138,7 @@ class StagePromptTests(unittest.TestCase):
     def test_no_prompt_references_unimplemented_tools(self) -> None:
         # "존재하지 않는 tool 안내 금지" 규칙 — 모든 프롬프트 텍스트에서 미구현 tool 미참조.
         prompts = {
+            "register_local_project": {"source_path": "/tmp/x"},
             "audit_local_target": {"target_id": "t"},
             "verify_candidate": {"scan_run_id": "s", "candidate_id": "c"},
             "repair_verified_finding": {"finding_id": "f"},
@@ -124,6 +159,7 @@ class StagePromptTests(unittest.TestCase):
 
         registered = {t.name for t in asyncio.run(mcp.list_tools())}
         prompts = {
+            "register_local_project": {"source_path": "/tmp/x"},
             "verify_candidate": {"scan_run_id": "s", "candidate_id": "c"},
             "repair_verified_finding": {"finding_id": "f"},
             "retest_patch": {"patch_id": "p"},
