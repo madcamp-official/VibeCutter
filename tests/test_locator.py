@@ -192,9 +192,44 @@ class LocalizeSastFallbackTests(unittest.TestCase):
         finding = _finding("GET /no/match/{id}", ["b/Foo.py:10", "a/Bar.py:20"])
         with patch("repair.locator.extract_routes", return_value=[]):
             rc = localize(finding, source_root="/nonexistent")
-        self.assertEqual(rc.file, "a/Bar.py")  # sorted(sast)[0]
+        self.assertEqual(rc.file, "a/Bar.py")  # sorted(sast)[0] — IDOR은 알파벳(handler 아무거나로 충분)
         self.assertIsNone(rc.symbol)
         self.assertIn("SAST가 지목한 위치", rc.rationale)
+
+    def test_sink_cwe_fallback_uses_source_order_not_alphabetical(self) -> None:
+        # I5(cross-file): route 매핑 실패 + sink형(SQLi)에서 SAST가 여러 파일을 짚으면, 알파벳 첫
+        # 파일(z...가 뒤)이 아니라 SAST 보고 순서의 첫 sink(쿼리 실행부)를 채택해야 한다.
+        finding = Finding(
+            id="f", run_id="r", title="sqli", cwe="CWE-89", affected_endpoint="GET /no/match",
+            source_symbols=["z/query_exec.ts:9", "a/route_builder.ts:3"],  # 실행부가 보고 순 첫째
+        )
+        with patch("repair.locator.extract_routes", return_value=[]):
+            rc = localize(finding, source_root="/nonexistent")
+        self.assertEqual(rc.file, "z/query_exec.ts")  # source_symbols[0], NOT sorted()[0]="a/..."
+        self.assertIn("z/query_exec.ts:9", rc.rationale)
+        self.assertIn("a/route_builder.ts:3", rc.rationale)  # 다른 sink 후보도 노출
+        self.assertIn("실행부", rc.rationale)  # cross-file 안내
+        self.assertIn("파라미터", rc.rationale)  # SQLi 수정 힌트는 채택 파일(.ts) 기준
+
+    def test_sink_cwe_single_sast_file_unchanged(self) -> None:
+        # sink 파일이 하나면 기존과 동일(알파벳=순서=동일) — 무회귀, cross-file 노트도 없다.
+        finding = Finding(
+            id="f", run_id="r", title="xss", cwe="CWE-79", affected_endpoint="POST /no/match",
+            source_symbols=["app/render.py:42"],
+        )
+        with patch("repair.locator.extract_routes", return_value=[]):
+            rc = localize(finding, source_root="/nonexistent")
+        self.assertEqual(rc.file, "app/render.py")
+        self.assertNotIn("sink 후보(보고 순)", rc.rationale)
+        self.assertIn("이스케이프/인코딩", rc.rationale)
+
+    def test_idor_fallback_stays_alphabetical_with_multiple_files(self) -> None:
+        # 비-sink형(IDOR)은 여러 파일이라도 기존 알파벳 선택 유지 — sink 개념이 없으므로.
+        finding = _finding("GET /no/match", ["z/Late.java:9", "a/Early.java:3"])
+        with patch("repair.locator.extract_routes", return_value=[]):
+            rc = localize(finding, source_root="/nonexistent")
+        self.assertEqual(rc.file, "a/Early.java")  # sorted(sast)[0], 순서 아님
+        self.assertNotIn("sink 후보(보고 순)", rc.rationale)
 
 
 class LocalizeVulnClassReasonTests(unittest.TestCase):

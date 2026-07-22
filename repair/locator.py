@@ -255,7 +255,20 @@ def localize(finding: Finding, *, source_root: str | Path) -> RootCause:
 
     # 2) SAST 폴백: route 매칭 실패 시 SAST가 지목한 파일을 채택.
     if sast:
-        file = sorted(sast)[0]
+        file = sorted(sast)[0]  # 기본: 결정적(알파벳) — IDOR 등은 handler 파일 아무거나로 충분
+        sink_note = ""
+        if _cwe_num(finding.cwe) in _SINK_TYPE_CWES:
+            # sink형(XSS/SQLi)은 알파벳 첫 파일이 진짜 sink(쿼리 실행/출력 렌더)가 아닐 수 있다 —
+            # 쿼리 조립과 실행이 **다른 파일**에 있는 cross-file 케이스. SAST 보고 순서의 첫 sink를
+            # 채택해 route 경로의 sink-우선(sinks[0])과 일치시키고, 다른 후보도 rationale에 남긴다.
+            sinks = _sast_sink_locations(finding)
+            if sinks:
+                file = sinks[0].split(":")[0]
+                if len(sinks) > 1:
+                    sink_note = (
+                        f" SAST가 짚은 sink 후보(보고 순): {', '.join(sinks)} — 쿼리 조립과 실행이 "
+                        f"다른 파일이면 실행부(쿼리를 넘겨받아 실행/렌더하는 곳)를 우선 수정하라."
+                    )
         return RootCause(
             file=file,
             symbol=None,
@@ -263,7 +276,8 @@ def localize(finding: Finding, *, source_root: str | Path) -> RootCause:
                 f"소스 route 매핑에서 endpoint {endpoint!r}를 못 찾아(비-Spring이거나 파서 한계), "
                 f"SAST가 지목한 위치를 근본 원인 후보로 채택했다. "
                 f"{finding.cwe or '취약점'}의 원인은 {_root_cause_reason(finding.cwe)}. "
-                f"수정 계층은 파일 확인 후 결정 권장.{_xss_fix_hint(finding.cwe, file)}{_sqli_fix_hint(finding.cwe, file)}"
+                f"수정 계층은 파일 확인 후 결정 권장.{sink_note}"
+                f"{_xss_fix_hint(finding.cwe, file)}{_sqli_fix_hint(finding.cwe, file)}"
             ),
         )
 
