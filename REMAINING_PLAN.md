@@ -55,9 +55,9 @@
 | | IDOR | Injection(SQLi) | XSS |
 |---|---|---|---|
 | 검증 오라클 | ✅ 완성(read+write) | ✅ 완성(불리언 차등) | ✅ 완성(격리 브라우저 실행) |
-| 후보 자동생성 | ✅ 성숙 | ⚠️ Node 인라인 핸들러 gap | ⚠️ 서버 반사 1패턴만 |
+| 후보 자동생성 | ✅ 성숙 | ✅ **(2026-07-22) I1/I2/I3 완료 — Node 인라인 핸들러 gap 해소** | ⚠️ 서버 반사 4패턴(Python 계열만) |
 | 실 235B 패치 | (template) | ✅ 스모크 성공 | ❌ 미검증 |
-| **실앱 E2E(verified→FIXED)** | ✅ **완료** | ❌ **0회**(완주 직전) | ❌ **0회**(데모 타깃 없음) |
+| **실앱 E2E(verified→FIXED)** | ✅ **완료** | ❌ **0회**(J-3 실주행만 남음, 착수 가능) | ❌ **0회**(데모 타깃 없음) |
 
 세 종의 **판정 엔진·안전경계는 동등하게 완성**돼 있고, 차이는 "실증 진척"뿐이다. Injection은 코드
 한 곳 + 데모 1회면 IDOR급, XSS는 데모 타깃 확보와 후보 커버리지 확장이 더 필요하다.
@@ -68,8 +68,9 @@
 
 **단계 0(병렬: Node 후보 gap·ablation·SARIF·72B) → 데모 2 완주(Injection FIXED) → 데모 1 완주(임의
 사용자 E2E) + 측정 → 비전문 UX·안전·문서 → E2E·리허설.**
-가장 큰 단일 리스크는 **데모 2의 Injection 후보 gap 하나**(4.1 I1). 이것만 풀리면 실 235B FIXED
-증거가 나오고 나머지는 병렬로 수렴한다.
+~~가장 큰 단일 리스크는 데모 2의 Injection 후보 gap 하나(4.1 I1).~~ **(2026-07-22 갱신, P1
+감사) I1은 이미 해결됐다**(커밋 `ac292a0`, 4.1 I1 참고) — 이제 남은 유일한 병목은 **7.1의
+J-3 실주행(P3)**뿐이다. 그것만 끝나면 실 235B FIXED 증거가 나오고 나머지는 병렬로 수렴한다.
 
 ---
 
@@ -111,7 +112,15 @@
 
 **① 후보 생성 정확도·커버리지**
 
-- [ ] **I1. (최우선·데모2 유일 블로커) Node 인라인 핸들러 본문 추출** — `surface/graph.py:186 _node_handlers`
+- [x] **I1. (최우선·데모2 유일 블로커) Node 인라인 핸들러 본문 추출** — `surface/graph.py:186 _node_handlers`
+  **(완료 확인 2026-07-22, P1 감사)** — 커밋 `ac292a0`(fix(sqli): injection 후보 생성 경로를
+  프리필터와 sync — 줄 넘는 sink + 인라인 핸들러 + 주석 제외)에서 완료. `surface/graph.py`에
+  `_NODE_INLINE_FN`이 추가돼 인라인 arrow function 본문을 잡고, `_node_symbol_index`의
+  텍스트 기반 `_brace_body` 캡처가 클로저 반환 패턴도 자연스럽게 포함한다.
+  `tests/test_inject_xss_bridge.py::test_node_sqli_traces_http_param_not_sql_variable`가
+  Juice Shop의 정확한 클로저 팩토리 패턴(라우트는 한 파일, `search()` 팩토리는 다른 파일)을
+  재현해 `inject_path=/rest/products/search`, `inject_param=q`를 검증하고 통과함. **데모2
+  블로커 해소 — 7.1의 J-3 완주를 지금 시작할 수 있다.**
   - **무엇**: 지금 `_node_handlers`는 라우트가 **이름 붙은 심볼**(예: `router.get('/x', searchProducts)`
     처럼 별도 선언된 컨트롤러 함수)을 참조할 때만 그 본문을 잡는다. **인라인 arrow function**
     (`app.get('/x', (req,res)=>{ ...SQL... })`)과 **클로저 반환 패턴**(Juice Shop의
@@ -126,7 +135,13 @@
     핸들러가 잡히고, `surface.candidates.injection_xss_candidates(...)`가 그 경로로 injection
     candidate를 1건 이상 낸다.
 
-- [ ] **I2. SQL sink 탐지 범위 확장(다중 라인·템플릿 리터럴·ORM raw)** — `surface/candidates.py:342 _sql_sink_in_body`
+- [x] **I2. SQL sink 탐지 범위 확장(다중 라인·템플릿 리터럴·ORM raw)** — `surface/candidates.py:342 _sql_sink_in_body`
+  **(완료 확인 2026-07-22, P1 감사)** — 커밋 `c3b6b26`(줄 넘는 SQL sink 탐지 — 동적 SQL
+  대입 후 실행)에서 완료. `_sql_sink_in_body`가 `pending` dict로 동적 SQL 대입을 추적해
+  `_EXEC_WINDOW` 줄 안의 실행 호출과 매칭한다. `test_cross_line_python_sqli_becomes_candidate`
+  통과, write SQL은 여전히 `blocked`(`test_write_sql_is_blocked_not_candidate` 통과)로
+  안전 원칙 유지 확인. ORM raw 호출(`sequelize.query`/`knex.raw`)은 `_EXEC` 정규식에
+  포함돼 있으나 전용 단위 테스트는 없음(경미).
   - **무엇**: 지금은 `_DYN`(동적 결합)과 `_EXEC`(실행)이 **한 줄에 같이** 있어야 sink로 본다.
     쿼리를 여러 줄에 걸쳐 만들거나(변수에 SQL을 조립한 뒤 다음 줄에서 실행), JS 백틱 템플릿
     리터럴(`` `...${q}...` ``), ORM raw 호출(`sequelize.query(...)`, `knex.raw(...)`,
@@ -138,7 +153,11 @@
   - **완료 판정**: 다중 라인 SELECT 조립 + 백틱 리터럴 + `sequelize.query` 각각에 대한 단위
     테스트(`tests/test_inject_xss_bridge.py`)가 injection candidate를 만들고, write SQL은 여전히 blocked.
 
-- [ ] **I3. 주입 파라미터 이름 추론 정확도** — `surface/candidates.py:405`
+- [x] **I3. 주입 파라미터 이름 추론 정확도** — `surface/candidates.py:405`
+  **(완료 확인 2026-07-22, P1 감사)** — `_http_param_for`(`candidates.py:399`)가
+  `req.query.q`/`req.body.X`/`req.params.X`를 sink 줄 → 대입 → body로 역추적한다.
+  query/body/path 각 케이스와 "SQL 변수명 ≠ HTTP 파라미터명"(Juice Shop 케이스)까지
+  단위 테스트로 확인됨.
   - **무엇**: 지금 `param = _interp_var(line) or "q"` — 못 뽑으면 `"q"`로 가정한다. 파라미터를
     틀리게 잡으면 verifier가 **엉뚱한 필드를 찔러 false negative**가 난다.
   - **왜**: 오라클이 아무리 정확해도, 틀린 파라미터로 재현하면 취약점을 못 재현한다 → recall 손해.
@@ -178,6 +197,12 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 **① 후보 생성 커버리지(가장 큰 약점)**
 
 - [ ] **X1. 서버측 반사 XSS 패턴 확장** — `surface/candidates.py:414 _HTMLRESP`
+  **(부분 진행 확인 2026-07-22, P1 감사)** — 커밋 `31df59a`/`96600bc`로 프리필터
+  (`surface/inject_xss.py`)는 13개 sink 패턴(`jinja.safe`/`thymeleaf.utext` 포함)까지
+  늘었지만, **실제 candidate를 만드는** `_SERVER_XSS` 정규식(`candidates.py:355`)은 여전히
+  `HTMLResponse|mark_safe|render_template_string|Markup`(전부 Python 호출형) 4개뿐이다.
+  프리필터가 찾아도 candidate 생성 단계에서 걸러지는 gap이 남아있음 — Express `res.send`,
+  EJS `<%- %>`, Handlebars `{{{ }}}`는 아직 candidate로 안 이어짐.
   - **무엇**: 지금 자동 candidate는 FastAPI `HTMLResponse(f"...{var}...")` **한 패턴만** 잡는다.
   - **왜**: 실제 앱의 대다수 반사 XSS는 다른 형태다 → 못 잡으면 recall 0.
   - **어디**: Express `res.send(userInput)`/`res.write`, 템플릿 엔진의 비이스케이프 출력(Jinja2
@@ -231,6 +256,11 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 ### 4.3 측정 (두 종 공통 · 담당 P4, 소스는 P2)
 
 - [ ] **M1. Injection·XSS를 ablation/eval 표본에 포함** — `eval/priority_ablation.py`, `eval/compare.py`
+  **(2026-07-22 P1 감사)** — 부분 진행: `.vibecutter/targets/sources/`가 0개→7개(목표 16개)로
+  P2가 일부 채웠고, P4가 `eval/reflect_runs.py`(커밋 `2ee9b93`)로 "이 run이 235B로 돌았는지
+  휴리스틱 degrade였는지" 판정 전처리를 추가했다 — 이건 M1의 **전제조건**이지 M1 자체는 아니다.
+  `priority_ablation.py`/`compare.py`는 아직 클래스별(injection/xss/idor) precision·순위
+  집계 breakdown을 안 내고, 생성된 결과 아티팩트도 아직 없다.
   - **무엇**: 우선순위 ablation 하네스(MRR/first_true_rank)와 verified-precision을 **클래스별로**
     낸다. 현재 벤치 앱 16종 소스가 로컬에 없어(`.vibecutter/targets/sources/` 비어있음) 전체
     주행이 막혀 있다 → **P2가 소스 확보 후** 실주행.
@@ -356,6 +386,8 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
   확인(git stash로 격리 검증) — XSS/injection payload가 verifier 소스와 안 맞음, P3 소유
   `verifiers/xss.py`/`verifiers/injection.py` 쪽 최근 변경(`security/agent` 브랜치 merge
   추정) 때문으로 보이며 C2 범위 밖이라 손대지 않음. P3에게 별도 보고 필요.
+  **[해결됨 2026-07-22]** P3가 커밋 `2b482dc`(fix(profiles): vulnerability_profiles YAML을
+  verifier payload 소스와 sync)로 수정 완료 확인 — 23/23 통과, 전체 스위트 630/630 통과.
   - **딜레마**: 안전상 승인 2번(등록 argv·패치 diff)이 필요한데, 비전문가는 raw argv/diff를 의미
     있게 승인 못 한다. 숨기면 blind 승인(가짜 동의), raw로 보이면 이해 못 함.
   - **해법**: 승인 대상을 산출물이 아니라 **쉬운 말 설명**으로. 예: 등록="앱을 검사하려면 앱을
@@ -399,6 +431,10 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 ### 7.1 데모 2 완주(Injection FIXED) — 발표 핵심 증거
 - [ ] **[P3]** 4.1 **I1 해결 후 J-3 1회 완주**: Juice Shop SQLi → verify(불리언 차등) → localize →
   **235B 패치** → 6게이트 → **FIXED**. run_id 공유. (Docker/런타임 경로는 P2가 default-bridge로 확보 완료.)
+  **(2026-07-22 P1 감사)** I1은 이미 해결됨(4.1 참고) — **지금 바로 J-3 실주행에 착수 가능.**
+  다만 Juice Shop default-bridge는 P2가 "smoke baseline"으로만 채택했고 발표 경로로 아직
+  승격하지 않았다는 점(Windows Docker Desktop internal-network 헬스체크 타임아웃, Linux
+  npm install 지연)을 감안해 실주행 전 P2와 런타임 상태를 먼저 맞추는 게 안전하다.
 - [ ] **[P1]** 이 완주가 승인 흐름(`PATCH_PROPOSED` 정지 → 승인 → `vc_resume_audit` → 6게이트)으로 도는지 확인.
 - [ ] **[P4]** 그 run metadata(llm_used/tier/health)를 ablation 표본에 반영.
 
@@ -436,19 +472,28 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 
 ## 8. 팀원별 한눈 요약
 
-- **[P1]** 비전문 UX(6절 C1~C4) + egress 동의(U3) + manifest 스캐폴딩 tool 배선(U1) + adapter 안내
-  (U2) + patch diff redaction + `SECURITY_POLICY` 취합 + 데모 2 승인흐름 확인.
-- **[P2]** 72B endpoint 기동(3절) + XSS 데모 타깃 확보(X7) + ablation용 벤치 소스 확보(M1) + Juice
-  Shop default-bridge 런타임 안정화 + `RUNBOOK` runtime 섹션.
-- **[P3]** ★ **Injection·XSS 정확도·성능(4절 전체)** — I1(데모2 블로커) 최우선, 이어서 I2·I3·X1~X6 +
-  데모 2(J-3) 완주 + F-3 한계 문서.
-- **[P4]** 72B 코드/문서 반영(3절) + 클래스별 측정(M1/M2) + SARIF redaction + SAST 규칙 커버리지 점검(4.4).
+**(2026-07-22 P1 전수 감사 — 실제 코드/테스트 상태 기준. 아래 각 절의 상세 항목이 최신.)**
+
+- **[P1] 거의 완료.** 6절 UX(C1~C4) ✅ · U1~U3 ✅ · `SECURITY_POLICY.md` ✅. 남은 건 patch
+  diff/container log redaction(7.3, 미착수), 데모 2 승인흐름 확인(7.1, **지금 착수
+  가능** — I1 해결됨), `.env` 72B fallback 값 추가(3절, P2 URL 전달 대기로 블로킹), U4(전원).
+- **[P2] 진척 적음, 대부분 의도적 보류.** 72B endpoint 미착수(문서화된 결정으로 보류) · X7
+  XSS 데모 타깃 미착수(Juice Shop을 "발표 target 아님"으로 명시 제외) · M1 벤치 소스
+  0→7/16(부분) · Juice Shop default-bridge는 "smoke baseline"으로만 채택, 발표 경로 미승격 ·
+  루트 `RUNBOOK.md` 미착수(P2 전용 문서만 존재).
+- **[P3] ★ 가장 진척 큼.** I1·I2·I3 ✅ **완료 확인**(데모2 블로커 해소!) — 이어서 I4(선택)·I5·
+  X2~X6 미착수, X1은 부분(Python 계열 4패턴만 candidate 생성). `test_vulnerability_profiles.py`
+  선제 수정 완료. **다음 최우선: 7.1 J-3 실주행.**
+- **[P4]** M1/M2는 전제조건(`reflect_runs.py`, run 분류)만 착수, 클래스별 실제 집계는 아직.
+  SARIF redaction 여전히 0건(미착수). 72B로 `DEFAULT_FALLBACK_MODEL` 교체 미착수(문서도 7B
+  그대로). SAST 규칙 CWE 매핑은 존재하나 sink 완전성 공식 점검은 안 됨(4.4).
 
 ---
 
 ## 9. 크리티컬 패스 (다시 · endpoint UP 이후)
 
-**I1(Node 인라인 핸들러) → 데모 2 완주 → 데모 1 E2E(+U1 스캐폴딩) → 4절 나머지 정확도·성능 +
-6절 UX + 3절 72B → 측정·문서·리허설.**
-가장 큰 단일 리스크는 여전히 **I1 하나**. 그 다음 큰 레버는 **U1(manifest 스캐폴딩)**과 **X7(XSS
-데모 타깃)** — 각각 "임의 사용자 경험"과 "XSS 실증"을 여는 열쇠다.
+~~I1(Node 인라인 핸들러) →~~ **(2026-07-22 갱신) I1 해결됨** → **데모 2 완주(7.1 J-3, P3
+착수 가능)** → 데모 1 E2E(+U1 스캐폴딩, ✅ 완료) → 4절 나머지 정확도·성능 + 6절 UX(✅ 완료) +
+3절 72B → 측정·문서·리허설.
+가장 큰 단일 리스크는 이제 **7.1 J-3 실주행 하나**(P3). 그 다음 큰 레버는 **X7(XSS
+데모 타깃, P2 — 아직 미착수)**과 **3절 72B endpoint(P2/P4 — 아직 미착수)**.
