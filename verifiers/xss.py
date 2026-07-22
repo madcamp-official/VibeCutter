@@ -101,15 +101,21 @@ def xss_oracle(executed: bool, raw_reflected: bool, escaped_reflected: bool) -> 
 
 
 def _benign_payloads(flag: str) -> list[str]:
-    """실행 시 `window.<flag>=1`만 하는 무해 payload들. 컨텍스트별(태그/속성/SVG)로 몇 개."""
+    """실행 시 `window.<flag>=1`만 하는 무해 payload들. 컨텍스트(태그/속성/SVG)와 **필터 우회**(대소문자·
+    슬래시 구분자·비-script 자동실행 태그)를 함께 커버해, script/img/svg를 블록리스트로 막는 앱에서도
+    실행 근거를 얻는다. 전부 window 플래그만 세팅(네트워크·쿠키·지속성 없음)."""
     js = f"window['{flag}']=1"
     return [
-        f"<script>{js}</script>",           # HTML 본문에 태그 주입
-        f'"><script>{js}</script>',         # 속성값 안에서 태그 탈출
-        f'"><img src=x onerror="{js}">',    # 속성 탈출 + 이벤트 핸들러
-        f"<img src=x onerror={js}>",         # 본문 이벤트 핸들러
-        f"<svg onload={js}>",                # SVG onload
-        f"'><svg onload={js}>",              # 홑따옴표 속성 탈출
+        f"<script>{js}</script>",            # HTML 본문에 태그 주입
+        f'"><script>{js}</script>',          # 속성값 안에서 태그 탈출
+        f'"><img src=x onerror="{js}">',     # 속성 탈출 + 이벤트 핸들러
+        f"<img src=x onerror={js}>",          # 본문 이벤트 핸들러
+        f"<svg onload={js}>",                 # SVG onload
+        f"'><svg onload={js}>",               # 홑따옴표 속성 탈출
+        f"<details open ontoggle={js}>",      # ontoggle 자동 실행 — script/img/svg 블록리스트 우회
+        f'"><details open ontoggle={js}>',    # 속성 탈출 + details ontoggle
+        f"'><svg/onload={js}>",               # 슬래시 구분자 — 공백/태그 필터 우회
+        f"<ScRiPt>{js}</ScRiPt>",             # 대소문자 혼합 — 대소문자 기반 필터 우회
     ]
 
 
@@ -125,9 +131,19 @@ class _Attempt(BaseModel):
 
 
 def _reflection_kind(body: str, payload: str) -> tuple[bool, bool]:
-    """응답/DOM에서 payload가 (그대로 반사됐나, 이스케이프돼 반사됐나)."""
+    """응답/DOM에서 payload가 (그대로 반사됐나, 이스케이프돼 반사됐나).
+
+    이스케이프는 명명 엔티티만이 아니라 십진/십육진 수치 엔티티, JS 유니코드 이스케이프까지 인식한다 —
+    안전(escaped)과 위험(raw 반사)을 정확히 가르기 위함(oracle 근거 정확도).
+    """
     raw = payload in body
-    escaped = (payload.replace("<", "&lt;").replace(">", "&gt;") in body) or ("&lt;script&gt;" in body)
+    variants = (
+        payload.replace("<", "&lt;").replace(">", "&gt;"),        # 명명 엔티티
+        payload.replace("<", "&#60;").replace(">", "&#62;"),      # 십진 수치 엔티티
+        payload.replace("<", "&#x3c;").replace(">", "&#x3e;"),    # 십육진 수치 엔티티
+        payload.replace("<", "\\u003c").replace(">", "\\u003e"),  # JS 유니코드 이스케이프
+    )
+    escaped = any(v in body for v in variants) or ("&lt;script&gt;" in body) or ("&#60;script&#62;" in body)
     return raw, escaped
 
 

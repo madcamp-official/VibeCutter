@@ -11,7 +11,7 @@ import unittest
 
 from contracts.schemas import Candidate
 from verifiers import dispatch, xss
-from verifiers.xss import _benign_payloads, xss_oracle, xss_probe_from_candidate
+from verifiers.xss import _benign_payloads, _reflection_kind, xss_oracle, xss_probe_from_candidate
 
 
 class XssOracleTests(unittest.TestCase):
@@ -71,6 +71,32 @@ class XssPayloadSafetyTests(unittest.TestCase):
             for bad in forbidden:
                 self.assertNotIn(bad, low, f"benign 위반: {payload!r} 에 {bad!r} 포함")
             self.assertIn("__vc_xss_test", payload, "payload는 지정된 marker 플래그만 세팅해야")
+
+    def test_payloads_cover_filter_evasion_contexts(self) -> None:
+        # script/img/svg를 블록리스트로 막는 앱에도 실행 근거를 얻도록 우회 컨텍스트를 포함해야 한다.
+        joined = " ".join(_benign_payloads("__vc_xss_test"))
+        self.assertIn("ontoggle", joined, "비-script 자동실행(details ontoggle) payload 없음")
+        self.assertIn("svg/onload", joined, "슬래시 구분자 우회 payload 없음")
+        self.assertIn("ScRiPt", joined, "대소문자 혼합 우회 payload 없음")
+
+
+class XssReflectionKindTests(unittest.TestCase):
+    def test_raw_reflection_detected(self) -> None:
+        raw, esc = _reflection_kind("<div><script>window['f']=1</script></div>", "<script>window['f']=1</script>")
+        self.assertTrue(raw)
+
+    def test_named_entity_escaping_is_escaped_not_raw(self) -> None:
+        body = "x &lt;script&gt;window['f']=1&lt;/script&gt; y"
+        raw, esc = _reflection_kind(body, "<script>window['f']=1</script>")
+        self.assertFalse(raw)
+        self.assertTrue(esc)
+
+    def test_numeric_entity_escaping_is_recognized(self) -> None:
+        # 십진 수치 엔티티로 이스케이프한 앱도 안전(escaped)으로 정확히 분류해야 한다(강화 전엔 놓침).
+        body = "x &#60;script&#62;window['f']=1&#60;/script&#62; y"
+        raw, esc = _reflection_kind(body, "<script>window['f']=1</script>")
+        self.assertFalse(raw)
+        self.assertTrue(esc)
 
 
 if __name__ == "__main__":
