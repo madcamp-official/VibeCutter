@@ -410,7 +410,17 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 - [ ] **[P4]** SARIF redaction — `eval/report_export.py`의 `render_sarif`/`_finding_to_sarif_result`에
   `redact()` 적용(현재 0건).
 - [ ] **[P1]** patch diff / container log redaction(patch diff는 `git apply` 바이트 정확성 때문에 별도 접근).
-- [ ] **[P1]** `SECURITY_POLICY.md` — 승인모델·loopback 불변식·argv 승인·LLM 전송 범위·"제3자 LLM API 안 씀".
+- [x] **[P1]** `SECURITY_POLICY.md` — 승인모델·loopback 불변식·argv 승인·LLM 전송 범위·"제3자 LLM API 안 씀".
+  **(완료 2026-07-22)** — 저장소 루트에 신설. 승인 모델(6개 승인 지점 표), loopback 불변식
+  (스키마+allowlist 이중 계층), argv 승인(shell=False + 구문 거부 이중 방어), LLM 전송 범위
+  (TEAM_CONTRACT의 확정 문구 "제3자 LLM API를 쓰지 않는다" 그대로 인용 + 자체 서빙/vLLM/
+  OpenAI-호환-프로토콜이지 OpenAI Inc.가 아님을 명확히 구분 + Cloudflare 엣지 TLS 종단이라는
+  잔여 위험까지 정직하게 명시 + U3 동의 게이트 반영), redaction 범위(정확한 패턴 목록 +
+  patch diff/container log/SARIF 세 가지 미해결 gap을 숨기지 않고 명시), kill switch, 패치
+  worktree 범위 제한, secret 취급(manifest엔 이름만) 순으로 구성. 마지막 "알려진 한계"
+  절에서 fallback 아직 7B인 점 등 진행 중 상태도 정직하게 적음. 문서 작성 전 서브에이전트로
+  모든 인용 사실(엔드포인트가 실제로 팀 자체 GPU인지, redaction 패턴 정확한 목록, 각
+  승인 게이트의 정확한 강제 코드 위치)을 코드에서 재확인해 틀린 보안 주장을 담지 않도록 함.
 - [ ] **[P2/P4]** `RUNBOOK.md` — P2 runtime(build/start/reset/lease·default-bridge) + P4 serving
   (235B/72B tier·degrade). **여기서 fallback 모델 표기를 72B로 확정**(3절과 연결).
 - [ ] **[P3]** F-3 한계 문서 — injection positive=liveness / xss positive=benign / running_local N/A 게이트.
