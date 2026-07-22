@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
 
 from model.serving import ChatFn, liveness_check, make_chained_chat_fn, openai_chat_fn
@@ -47,6 +48,23 @@ DEFAULT_PRIMARY_MAX_TOKENS = 512
 # 그 전까지는 레거시 7B 문자열을 둔다(fallback endpoint 자체가 미설정이라 현재 미사용).
 DEFAULT_FALLBACK_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"  # TODO(P2 72B id): 72B 로 교체
 DEFAULT_FALLBACK_TIMEOUT = 60.0
+
+
+def _runtime_env() -> Mapping[str, str]:
+    """Load the project ``.env`` once, without overriding real environment vars.
+
+    Explicit ``env=`` mappings remain pure/testable; only the process-backed
+    path used by the application and ``python -m model.endpoints`` loads the
+    local secret file.  Secrets never enter logs or source-controlled config.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        # Keep offline/minimal installs usable; requirements.txt provides the
+        # dependency for normal operation.
+        return os.environ
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+    return os.environ
 
 
 @dataclass(frozen=True)
@@ -142,7 +160,8 @@ def _prepared_tiers(
     precheck: bool, precheck_timeout: float, max_tokens: Optional[int],
 ) -> list[Endpoint]:
     """env → (max_tokens override + precheck 통과) 최종 tier 목록. 살아있는 게 없으면 []."""
-    tiers = _with_max_tokens(resolve_tiers(os.environ if env is None else env), max_tokens)
+    source_env = _runtime_env() if env is None else env
+    tiers = _with_max_tokens(resolve_tiers(source_env), max_tokens)
     if precheck:
         tiers = [t for t in tiers if liveness_check(t.base_url, timeout=precheck_timeout)]
     return tiers
@@ -255,7 +274,7 @@ def observed_chat_fn_from_env(
 
 def probe(env: Optional[Mapping[str, str]] = None, *, timeout: float = 5.0) -> list[tuple[Endpoint, bool]]:
     """각 tier 의 `GET /health` 도달성을 확인한다(인증 불필요). 진단·기동 점검용."""
-    tiers = resolve_tiers(os.environ if env is None else env)
+    tiers = resolve_tiers(_runtime_env() if env is None else env)
     return [(t, liveness_check(t.base_url, timeout=timeout)) for t in tiers]
 
 
