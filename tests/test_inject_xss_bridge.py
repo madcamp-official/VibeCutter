@@ -240,6 +240,29 @@ class InjectionXssBridgeTests(unittest.TestCase):
             self.assertEqual(res.candidates, [])
             self.assertTrue(any("프론트 XSS" in b.reason for b in res.blocked))
 
+    def test_x2_frontend_sink_with_fixture_hint_becomes_candidate(self):
+        # X2(a): 프론트 XSS sink에 fixture 계약(inject_path/param)을 주면 blocked→verify 가능한 candidate.
+        src = {"C.tsx": "export const C = ({html}) => <div dangerouslySetInnerHTML={{__html: html}} />;\n"}
+        hints = {"C.tsx": {"context": "reflected", "inject_path": "/render", "inject_param": "html"}}
+        with _tree(src) as d:
+            res = injection_xss_candidates("r", _prov(), d, xss_fixture_hints=hints)
+            x = [c for c in res.candidates if c.vuln_class == "xss"]
+            self.assertEqual(len(x), 1)
+            self.assertEqual(x[0].attack_params["inject_path"], "/render")
+            self.assertEqual(x[0].attack_params["inject_param"], "html")
+            self.assertEqual(x[0].attack_params["context"], "reflected")
+            self.assertFalse(any("프론트 XSS" in b.reason for b in res.blocked))  # 승격됐으니 blocked 아님
+            p = xss.xss_probe_from_candidate(x[0])  # verify-ready
+            self.assertEqual(p.inject_path, "/render")
+
+    def test_x2_hint_requires_path_and_param(self):
+        # inject_path/param 없는 불완전 계약은 승격 안 하고 blocked 유지(안전).
+        src = {"C.tsx": "export const C = ({h}) => <div dangerouslySetInnerHTML={{__html: h}} />;\n"}
+        with _tree(src) as d:
+            res = injection_xss_candidates("r", _prov(), d, xss_fixture_hints={"C.tsx": {"context": "reflected"}})
+            self.assertEqual([c for c in res.candidates if c.vuln_class == "xss"], [])
+            self.assertTrue(any("프론트 XSS" in b.reason for b in res.blocked))
+
     def test_parameterized_query_yields_no_candidate(self):
         with _tree({"app.py": _SAFE_PARAM}) as d:
             res = injection_xss_candidates("r", _prov(), d)
