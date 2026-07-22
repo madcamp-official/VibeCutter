@@ -37,6 +37,9 @@ class AdditiveMigrationTests(unittest.TestCase):
                 rows = conn.exec_driver_sql(
                     "SELECT id, origin_candidate_id FROM candidate"
                 ).fetchall()
+            # Windows keeps SQLite's pooled file handle until the engine is
+            # disposed; release it before TemporaryDirectory cleanup.
+            engine.dispose()
 
         self.assertIn("origin_candidate_id", cols)
         self.assertEqual(rows, [("old-cand", None)])  # 기존 데이터 보존 + 새 컬럼 NULL
@@ -54,6 +57,7 @@ class AdditiveMigrationTests(unittest.TestCase):
 
             with engine.begin() as conn:
                 cols = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(candidate)")]
+            engine.dispose()
         # 컬럼이 중복 추가되지 않는다.
         self.assertEqual(cols.count("origin_candidate_id"), 1)
 
@@ -72,6 +76,7 @@ class AdditiveMigrationTests(unittest.TestCase):
             with engine.begin() as conn:
                 cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(audit_log)")}
                 rows = conn.exec_driver_sql("SELECT tool, run_id FROM audit_log").fetchall()
+            engine.dispose()
         self.assertIn("run_id", cols)
         self.assertEqual(rows, [("vc_ping", None)])
 
@@ -80,6 +85,7 @@ class AdditiveMigrationTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             engine = create_engine(f"sqlite:///{Path(tmp) / 'fresh.db'}")
             _apply_additive_migrations(engine)  # 예외 없이 통과해야 한다.
+            engine.dispose()
 
 
 if __name__ == "__main__":
