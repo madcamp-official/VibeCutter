@@ -20,7 +20,15 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.prompts import base
 
-_STEPS = """target_id={target_id!r}에 대한 전체 보안 감사를 시작한다. 아래 순서를 지켜라:
+_STEPS = """target_id={target_id!r}에 대한 전체 보안 감사를 시작한다.
+
+**시작 전에** vibecutter://consent/llm_egress resource로 LLM egress 동의 상태를 확인한다.
+`granted`가 아직 false면, 스캔·패치 단계에서 코드 일부(secret 제거)가 우선순위 판단·수정안
+생성을 위해 외부 AI 모델로 전송될 수 있음을 사용자에게 알리고 vc_consent_llm_egress(granted=
+True/False)로 답을 받아 기록한다 — 이미 동의(또는 거부)한 적이 있으면 다시 묻지 않는다.
+`False`를 선택해도 감사는 막히지 않는다: LLM 없이 휴리스틱 정렬·기본 패치로 계속 진행된다.
+
+아래 순서를 지켜라:
 
 1. vc_register_target / vc_check_readiness로 target이 등록·준비됐는지 확인한다.
    등록되지 않은 target_id는 정책 계층(policies/scope.yaml)이 모든 후속 tool에서
@@ -87,6 +95,10 @@ _VERIFY_CANDIDATE = """scan Run scan_run_id={scan_run_id!r}에서 나온 후보 
 
 _REPAIR_VERIFIED_FINDING = """검증된(verified) finding finding_id={finding_id!r}의 root cause를 찾고 패치를
 제안한다. 이미 vc_verify_* 로 verified된 finding에만 쓴다:
+
+(이 흐름을 audit_local_target 없이 단독으로 시작했다면, 2번 전에 vibecutter://consent/
+llm_egress로 LLM egress 동의 상태를 확인한다 — 아직 미동의면 vc_consent_llm_egress로 먼저
+묻는다. 동의 없이 진행해도 막히지 않고 template 기반 패치로 대체된다.)
 
 1. vc_localize_root_cause(finding_id)로 결함 위치·원인을 특정한다.
 2. vc_generate_patch(finding_id)로 최소 변경 패치를 생성한다(1의 결과를 저장해 재사용한다).

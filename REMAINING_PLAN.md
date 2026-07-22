@@ -286,7 +286,19 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
   - **해야 할 일**: 등록 거부 시 "매칭 안 되면 `generic-docker`를 쓰세요"라는 **쉬운 안내**를 준다.
   - **완료 판정**: 미지원 스택명으로 등록 시도 시 명확한 대안 안내가 나온다.
 
-- [ ] **U3. egress 동의(코드가 외부 LLM으로 나가는 것)** — `mcp_server/**`(P1)
+- [x] **U3. egress 동의(코드가 외부 LLM으로 나가는 것)** — `mcp_server/**`(P1)
+  **(완료 2026-07-22)** — `core/egress_consent.py`(kill switch와 같은 durable marker-file
+  패턴) + `vc_consent_llm_egress(granted: bool)` tool(`mcp_server/tools_control.py`) +
+  `vibecutter://consent/llm_egress` 조회 resource(`mcp_server/resources.py`, Host가 매번
+  다시 묻지 않게). 동의 범위는 TEAM_CONTRACT §3A-10대로 **패치 합성 + rerank 스니펫 둘 다**
+  — `mcp_server/tools_repair.py::_get_llm_client`와 `mcp_server/tools_analysis.py::
+  _rerank_hook_from_env` 두 호출 지점 모두에서 동의 없으면 endpoint를 아예 probe하지 않고
+  기존 "endpoint 없음" 폴백(template-only 패치 / 휴리스틱 정렬)으로 조용히 degrade한다 —
+  새 예외를 만들지 않고 안전 불변식 3(판정에 LLM 없음)과 같은 정신을 따름. `prompts.py`의
+  `audit_local_target`/`repair_verified_finding`에 동의 확인 안내 추가(강제는 아님 — 실제
+  게이트는 코드가 함). `tests/test_egress_consent.py`(11 tests, 신규) + 기존
+  `test_tools_repair_llm_wiring.py`/`test_scan_tool_wiring.py`에 동의 전제 추가. 전체
+  스위트 594 그린.
   - **무엇**: 첫 LLM 호출/등록 시 "코드 일부(secret 제거)가 AI 모델로 전송돼 수정안을 만든다"를
     **쉬운 예/아니오로 1회 동의**받고 기록한다(현재 미구현).
   - **완료 판정**: 동의 표시·기록이 남고, 동의 없이는 LLM 합성 경로로 넘어가지 않는다.
