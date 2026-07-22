@@ -5,6 +5,13 @@ vc_build_target, vc_start_target, vc_reset_target (Lifecycle)
 
 Lifecycle 도구의 실제 빌드/실행/reset 로직은 P2(target manifest/adapter) 소유다.
 여기서는 부록 A 방식으로 스키마만 고정하고 본문은 NotImplementedError로 남겨둔다.
+
+**진입점**: 사용자가 "이 프로젝트 검사해줘"처럼 target_id 없이 한 문장으로 요청하면
+`vc_scaffold_manifest` → (쉬운 말 승인) → `vc_register_local_target(confirmed=True)`에서
+시작한다. target_id가 있는 이미 등록된 target이면 이 등록 단계를 건너뛰고
+`vc_check_readiness` → `vc_build_target` → `vc_start_target`부터 시작해 Analysis 카테고리
+(`tools_analysis.py`)로 넘어간다 — 전체 순서는 `mcp_server/server.py`의 `FastMCP(instructions=...)`
+및 `SKILL.md` "표준 절차"와 동일하다.
 """
 
 from __future__ import annotations

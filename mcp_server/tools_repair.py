@@ -9,6 +9,13 @@ vc_generate_report, vc_export_sarif (Report, P1/P4 소유)
 generate와 apply를 별도 도구로 분리하는 것은 절대 원칙(원본 branch 직접 변경 금지,
 worktree에만 적용, 6.7절)과 직결되므로 오늘부터 시그니처로 강제한다: apply는
 `confirmed: bool` 없이는 무조건 거부한다.
+
+**진입점(계속)**: `tools_analysis.py`에서 finding이 verified되면 여기서
+`vc_localize_root_cause` → `vc_generate_patch`로 패치를 만들고, **raw diff를 그대로
+보여주지 말고 쉬운 말로 승인을 구한 뒤에만** `vc_apply_patch(confirmed=True)`를 부른다.
+승인 후에는 `vc_resume_audit` 하나로 build/attack/positive_test/regression/static/scope
+6게이트 재검증과 patch 보존(`vc_export_patch`)까지 이어간다 — 순서는
+`mcp_server/server.py`의 `instructions`/`SKILL.md` "표준 절차"와 동일하다.
 """
 
 from __future__ import annotations

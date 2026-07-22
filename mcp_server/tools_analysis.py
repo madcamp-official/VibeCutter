@@ -16,6 +16,12 @@ Verification 도구는 Day2에 P1이 실배선했다: policy 검사 + run-level 
 RunState 전이 + Candidate→Finding 승격 + evidence 기반 judge 판정
 (core.evidence_store.update_finding_status)은 P1이 맡고, "이 후보가 실제 보안 영향인가"만
 판정하는 verifier 본문은 P3 소유(`verifiers/*.py`)를 그대로 호출한다.
+
+**진입점(계속)**: target이 READY 상태가 되면(`tools_inventory.py`의 build/start 이후)
+여기서 `vc_scan_access_control`/`vc_run_sast`/`vc_run_sca`로 candidate를 만든다. 후보마다
+`vc_materialize_worker_run`으로 worker Run을 분리한 뒤, 맞는 `vc_verify_*(approved=True)`로
+실제 재현 검증한다 — verified finding은 `tools_repair.py`(localize→patch→apply→재검증)로
+이어간다. 순서는 `mcp_server/server.py`의 `instructions`/`SKILL.md` "표준 절차"와 동일하다.
 """
 
 from __future__ import annotations
