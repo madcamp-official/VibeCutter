@@ -23,10 +23,15 @@
 - **함의**: injection 패치가 6게이트 FIXED여도, 그건 "취약점 차단 + 엔드포인트가 정상 입력에 살아있음"
   까지의 주장이지 "검색 결과가 이전과 동일하게 정확하다"는 아니다.
 
-### 1.2 XSS positive = **benign 마커 반영** (`repair/validators.py:xss_positive_gate_oracle`)
-- **확인**: 정상 입력(특수문자 없는 평문 마커)이 패치 후에도 응답에 반영된다(raw substring).
+### 1.2 XSS positive = **benign 마커가 렌더된 DOM에 반영** (`repair/validators.py:xss_positive_gate_oracle`)
+- **확인**: 정상 입력(특수문자 없는 평문 마커)이 패치 후에도 **격리 브라우저로 렌더된 DOM**에 반영된다(raw substring).
+- **왜 브라우저인가(X9)**: hash-routed SPA(`#/search?q=…`)는 URL fragment가 RFC 3986상 서버로 전송되지 않아
+  httpx로는 SPA shell만 받고 클라이언트 렌더 검색어를 못 본다 → positive가 패치 품질과 무관하게 항상 False로
+  오판됐다. 그래서 `_send_xss_benign`은 attack 게이트(`_replay_reflected`)와 같은 Playwright 경로(`verifiers/xss.render_benign`,
+  전용 스레드 `_run_isolated`)로 실제 렌더 DOM을 관찰한다. payload가 아니라 benign 평문이라 실행 검사는 없다.
 - **과이스케이프는 실패가 아니다**: XSS에서 escape는 안전한 방향이므로, 마커가 escape돼 반영돼도 통과.
 - **잡는 것**: 입력을 통째로 삭제/거부하거나 페이지를 깨는 overblocking.
+- **한계**: 격리 브라우저(chromium) 필요는 attack 게이트와 동일 — 미설치면 렌더 관찰 불가.
 
 ### 1.3 IDOR positive = **소유자 재조회** (`repair/validators.py:positive_gate_oracle`)
 - **확인**: 패치 후에도 **정당한 소유자는 자기 자원을 여전히 볼 수 있다**(공격만 막고 정상 접근은 유지).

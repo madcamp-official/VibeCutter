@@ -55,6 +55,51 @@ class ReflectedUrlTests(unittest.TestCase):
         self.assertEqual(out.count("?"), 1)
 
 
+class RenderBenignTests(unittest.TestCase):
+    """render_benign(positive 게이트용): hash-routed SPA는 서버가 fragment를 못 받아 httpx로는 렌더를
+    못 보므로 격리 브라우저로 클라이언트 렌더 DOM을 관찰한다(X9 라이브 발견). Playwright는 mock."""
+
+    def _mock_pw(self, status=200, dom="<html>MARK</html>"):
+        from unittest.mock import MagicMock
+        page = MagicMock()
+        page.goto.return_value = MagicMock(status=status)
+        page.content.return_value = dom
+        ctx = MagicMock(); ctx.new_page.return_value = page
+        browser = MagicMock(); browser.new_context.return_value = ctx
+        pw = MagicMock(); pw.chromium.launch.return_value = browser
+        cm = MagicMock(); cm.__enter__.return_value = pw
+        return cm, page
+
+    def test_reflected_navigates_single_query_url_and_returns_dom(self):
+        from unittest.mock import patch
+        cm, page = self._mock_pw()
+        probe = xss.xss_probe_from_candidate(Candidate(id="c", run_id="r", vuln_class="xss", attack_params={
+            "base_url": "http://127.0.0.1:14020", "context": "reflected",
+            "inject_path": "/#/search?q=", "inject_param": "q"}))
+        with patch("playwright.sync_api.sync_playwright", return_value=cm):
+            status, dom = xss.render_benign(probe, "MARK")
+        self.assertEqual(status, 200)
+        self.assertIn("MARK", dom)
+        url = page.goto.call_args.args[0]
+        self.assertEqual(url, "http://127.0.0.1:14020/#/search?q=MARK")  # 겹침 없음
+        self.assertNotIn("?q=?q=", url)
+
+    def test_stored_posts_then_navigates_render_path(self):
+        from unittest.mock import MagicMock, patch
+        cm, page = self._mock_pw(dom="<div>stored MARK</div>")
+        probe = xss.xss_probe_from_candidate(Candidate(id="c", run_id="r", vuln_class="xss", attack_params={
+            "base_url": "http://127.0.0.1:14020", "context": "stored", "inject_method": "POST",
+            "inject_path": "/api/Feedbacks", "inject_param": "comment", "render_path": "/#/about"}))
+        http_client = MagicMock()
+        http_cm = MagicMock(); http_cm.__enter__.return_value = http_client
+        with patch("playwright.sync_api.sync_playwright", return_value=cm), \
+             patch("verifiers.xss.httpx.Client", return_value=http_cm):
+            status, dom = xss.render_benign(probe, "MARK")
+        http_client.request.assert_called_once()  # server-side POST로 저장
+        self.assertEqual(page.goto.call_args.args[0], "http://127.0.0.1:14020/#/about")  # render_path 관찰
+        self.assertIn("MARK", dom)
+
+
 class XssOracleTests(unittest.TestCase):
     def test_executed_is_verified(self) -> None:
         ok, _ = xss_oracle(executed=True, raw_reflected=True, escaped_reflected=False)

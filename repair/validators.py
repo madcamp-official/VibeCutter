@@ -60,7 +60,7 @@ from verifiers.access_control import (
 from verifiers.dispatch import class_of
 from verifiers.injection import _send as _send_injection, injection_probe_from_candidate
 from verifiers.types import MAX_REQUESTS_DEFAULT
-from verifiers.xss import _reflected_url, xss_probe_from_candidate
+from verifiers.xss import xss_probe_from_candidate
 
 PRODUCER = "vc_validate_patch"
 
@@ -240,36 +240,27 @@ def _store_positive_evidence(run_id: str, kind: str, data: dict) -> str:
 
 
 def _send_xss_benign(probe, value: str) -> tuple[int, str]:
-    """benign 값 하나로 정상 요청을 보내 (status, body)를 돌려준다(reflected/stored 대응).
+    """benign 값을 넣고 **격리 브라우저로 클라이언트 렌더된 DOM**을 (status, dom)으로 돌려준다.
 
-    attack이 아니라 정상 입력이라 payload·격리 브라우저·egress 가드가 필요 없다(평문 GET/POST).
+    이전엔 httpx로 평문 GET/POST했으나, hash-routed SPA(`#/search?q=…`)는 URL fragment가 서버로
+    전송되지 않아(RFC 3986) 검색어가 응답에 절대 없었고 → positive_test가 패치 품질과 무관하게 항상
+    False가 됐다(X9 Juice Shop 라이브 발견, P1). attack 게이트(_replay_reflected)와 같은 Playwright
+    경로로 실제 렌더를 관찰한다. Playwright Sync API는 MCP asyncio 루프 밖 전용 스레드에서 돌려야
+    하므로(verify와 동일 제약) `_run_isolated`로 감싼다. 판정은 여전히 오라클이 benign 값의 DOM 반영으로 한다.
     """
-    try:
-        with httpx.Client(follow_redirects=True, timeout=10.0) as client:
-            if probe.context == "stored":
-                inject_url = f"{probe.base_url.rstrip('/')}{probe.inject_path}"
-                data = {**probe.extra_params, probe.inject_param: value}
-                try:
-                    client.request(probe.inject_method, inject_url, data=data)
-                except httpx.HTTPError:
-                    pass
-                render_url = f"{probe.base_url.rstrip('/')}{probe.render_path or probe.inject_path}"
-                r = client.get(render_url)
-            else:  # reflected
-                r = client.get(_reflected_url(probe, value))
-            return r.status_code, r.text
-    except httpx.HTTPError:
-        return 0, ""
+    from verifiers.xss import _run_isolated, render_benign
+
+    return _run_isolated(render_benign, probe, value)
 
 
 def _xss_positive_gate(
     run_id: str, candidate: Candidate, *, max_requests: int = MAX_REQUESTS_DEFAULT
 ) -> GateOutcome:
-    """XSS positive: 특수문자 없는 benign 값이 패치 후에도 정상 반영되는지 확인한다.
+    """XSS positive: 특수문자 없는 benign 값이 패치 후에도 **렌더된 DOM에 정상 반영**되는지 확인한다.
 
-    XSS verifier의 재현 machinery(`_reflected_url`/stored POST→render GET)를 그대로 재사용하되,
-    payload가 아니라 benign 값을 보낸다. 요청 수가 고정(reflected 1, stored 2)이라 max_requests는
-    계약 유지를 위해 받되 여기선 상한을 넘길 일이 없다.
+    `_send_xss_benign`이 attack 게이트와 같은 격리 브라우저 경로(`verifiers.xss.render_benign`,
+    전용 스레드 `_run_isolated`)로 클라이언트 렌더 DOM을 관찰한다 — hash-routed SPA는 httpx로는
+    검색어를 못 봐 항상 False로 오판됐다(X9). payload가 아니라 benign 평문이라 실행 검사는 없다.
     """
     probe = xss_probe_from_candidate(candidate)
     benign = f"vcbenign{uuid4().hex[:8]}"  # 평문 — HTML escape에 불변

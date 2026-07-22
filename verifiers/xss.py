@@ -360,3 +360,55 @@ def verify(
         evidence_ids.append(obs.id)
 
     return VerifierOutput(verified=verified, evidence_ids=evidence_ids, reason=reason)
+
+
+# --- positive functionality 게이트 지원 (repair.validators가 _run_isolated로 소비) --------
+
+
+def render_benign(probe: XssProbe, value: str, *, timeout_ms: int = 10000) -> tuple[int, str]:
+    """정상기능(positive) 게이트용: benign 평문 값을 넣고 **격리 브라우저로 클라이언트 렌더된 DOM**을
+    `(status, dom_html)`으로 돌려준다.
+
+    왜 httpx가 아니라 브라우저인가(X9 Juice Shop 라이브 발견, P1): hash-routed SPA(`#/search?q=…`)는
+    URL fragment(`#` 이후)가 RFC 3986상 서버로 전송되지 않아, httpx는 SPA shell(`GET /`)만 받고
+    Angular가 클라이언트에서 렌더하는 검색어는 응답에 절대 없다 → benign 값이 항상 '반영 안 됨'으로
+    잡혀 positive_test가 패치 품질과 무관하게 늘 False가 됐다. attack 게이트(`_replay_reflected`)와 같은
+    Playwright 경로로 실제 렌더를 관찰해 이 구조적 오판을 없앤다. payload가 아니라 benign 평문이라
+    실행 검사는 없다 — 호출자(positive 오라클)가 benign 값의 DOM 반영만 본다. egress는 대상 origin 밖 차단.
+
+    stored는 먼저 benign을 저장(server-side POST는 httpx로 충분)한 뒤 render_path를 브라우저로 연다.
+    """
+    from playwright.sync_api import sync_playwright
+
+    base = probe.base_url.rstrip("/")
+    if probe.context == "stored":
+        try:
+            with httpx.Client(follow_redirects=True, timeout=10.0) as client:
+                client.request(probe.inject_method, f"{base}{probe.inject_path}",
+                               data={**probe.extra_params, probe.inject_param: value})
+        except httpx.HTTPError:
+            pass
+        url = f"{base}{probe.render_path or probe.inject_path}"
+    else:  # reflected
+        url = _reflected_url(probe, value)
+
+    allowed = urlparse(probe.base_url).netloc
+    status, dom = 0, ""
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        context = browser.new_context()
+        context.route("**/*", _egress_guard(allowed))
+        try:
+            page = context.new_page()
+            try:
+                resp = page.goto(url, wait_until="load", timeout=timeout_ms)
+                page.wait_for_timeout(600)  # 클라이언트(Angular) 렌더 여유 — attack 경로와 동일
+                status = resp.status if resp is not None else 200
+                dom = page.content()
+            except Exception:  # noqa: BLE001 — 렌더 실패는 (0,"")로 → 오라클이 overblocking로 판정
+                pass
+            finally:
+                page.close()
+        finally:
+            browser.close()
+    return status, dom

@@ -126,6 +126,17 @@ class XssPositiveGateTests(unittest.TestCase):
             out = validators._xss_positive_gate("run-x", cand)
             self.assertFalse(out.passed)
 
+    def test_send_xss_benign_delegates_to_isolated_browser_render(self):
+        # X9 픽스: httpx 대신 격리 브라우저(render_benign)를 _run_isolated로 돌려야 한다 —
+        # hash-routed SPA는 URL fragment가 서버로 안 가 httpx로는 클라이언트 렌더를 못 본다.
+        import verifiers.xss as xssmod
+        probe = object()  # render_benign을 mock하므로 probe는 그대로 전달만
+        with patch.object(xssmod, "render_benign", return_value=(200, "<div>vcbenign here</div>")) as rb, \
+             patch.object(xssmod, "_run_isolated", side_effect=lambda fn, *a: fn(*a)):
+            status, dom = validators._send_xss_benign(probe, "vcbenign")
+        rb.assert_called_once_with(probe, "vcbenign")
+        self.assertEqual((status, dom), (200, "<div>vcbenign here</div>"))
+
 
 class InjectionPositiveGateTests(unittest.TestCase):
     """_injection_positive_gate: _send·evidence를 monkeypatch해 헤르메틱하게."""
