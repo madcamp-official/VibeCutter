@@ -250,13 +250,24 @@ def candidates_for_target(
     *,
     self_signup_hints: dict | None = None,
 ) -> BridgeResult:
-    """target 하나 → IDOR candidates(또는 blocked). MCP map/scan tool·배치가 부를 단일 진입점.
+    """target 하나 → 검증가능 Candidate(**IDOR + injection + XSS**) 또는 blocked. MCP scan tool·배치 단일 진입점.
 
-    `find_idor_suspects(source_root)` + `build_candidates(...)`를 한 번에 묶는다. P1 tool 배선은
-    `catalog.source_root_for(target_id)`와 `vc_get_verifier_provisioning(target_id)`만 넘기면 된다.
+    IDOR(`find_idor_suspects`+`build_candidates`)와 injection/XSS(`injection_xss_candidates`)를 **한
+    진입점에서 모두** 만든다. 이전엔 IDOR만 냈고 `injection_xss_candidates`는 어디서도 안 불려, 3군
+    엔진·오라클이 다 있어도 injection/XSS 후보가 실제 audit에 닿지 않았다(예: J-3 Juice Shop SQLi가
+    스캔에서 후보 0). vuln_class로 이미 구분되므로 dispatch가 각 verifier로 라우팅한다.
+    P1 tool 배선은 `source_root`·`provisioning`만 넘기면 되고 그대로 세 종을 다 받는다.
     """
     suspects = find_idor_suspects(source_root)
-    return build_candidates(run_id, provisioning, suspects, self_signup_hints=self_signup_hints)
+    result = build_candidates(run_id, provisioning, suspects, self_signup_hints=self_signup_hints)
+    try:
+        inj_xss = injection_xss_candidates(run_id, provisioning, source_root)
+    except Exception:  # noqa: BLE001 — injection/XSS 스캔 실패가 IDOR 후보 생성을 막지 않게(비파괴)
+        inj_xss = BridgeResult()
+    return BridgeResult(
+        candidates=[*result.candidates, *inj_xss.candidates],
+        blocked=[*result.blocked, *inj_xss.blocked],
+    )
 
 
 def build_candidates(
@@ -332,24 +343,56 @@ def build_candidates(
 # 안전: SELECT 싱크만 injection candidate로 만든다(불리언 payload가 파괴적 write의 WHERE에 안 들어가게).
 
 from surface.graph import _NODE_DECL, _iter_sources, _java_handlers, _node_handlers, _node_symbol_index, _python_handlers  # noqa: E402
-from surface.inject_xss import _DYN, _EXEC, _LOG_LINE, _interp_var, find_xss_suspects  # noqa: E402
+from surface.inject_xss import (  # noqa: E402
+    _DYN, _EXEC, _EXEC_WINDOW, _LOG_LINE, _assigned_var, _code_lines, _interp_var, find_xss_suspects,
+)
 
 _SELECT_SINK = re.compile(r"\bselect\b[\s\S]{0,240}?\bfrom\b", re.I)  # 불리언 payload에 안전(읽기)
 _WRITE_SINK = re.compile(r"\binsert\s+into\b|\bupdate\b[\s\S]{0,120}?\bset\b|\bdelete\s+from\b", re.I)
-_HTMLRESP = re.compile(r'HTMLResponse\s*\(\s*f["\'][^"\']*\{([^}]+)\}', re.I)  # 서버 반사 XSS
+# 서버측 반사 XSS sink: 응답 HTML에 동적 값을 escape 없이 싣는 함수들(f-string 보간). 프리필터
+# find_xss_suspects의 서버 sink(mark_safe·render_template_string·Markup)과 sync — HTMLResponse만
+# 잡던 것을 확장. 리터럴만 든 호출은 `\{...\}`(보간) 요구로 자연히 제외(precision).
+_SERVER_XSS = re.compile(
+    r'(?:HTMLResponse|mark_safe|render_template_string|Markup)\s*\(\s*f["\'][^"\']*\{([^}]+)\}', re.I)
 # HTTP 요청 파라미터 접근(Express/Node): `req.query.q`, `request.body.email`, `req.params.id`.
 _REQ_SOURCE = re.compile(r"req(?:uest)?\.(?:query|params|body)\.(\w+)")
 
 
 def _sql_sink_in_body(body: str) -> tuple[str, bool] | None:
-    """handler body에서 SQL 동적 결합+실행 라인을 찾아 (line, is_select). 없으면 None."""
-    for line in body.splitlines():
-        if _LOG_LINE.search(line) or not (_DYN.search(line) and _EXEC.search(line)):
+    """handler body에서 SQL 동적 결합+실행을 찾아 (sink_line, is_select). 없으면 None.
+
+    프리필터 `find_injection_suspects`와 **같은 규칙**을 쓴다(두 경로 드리프트 방지 — 공유 헬퍼 재사용):
+      - 한 줄(동적결합+실행)뿐 아니라 **줄 넘는 sink**(동적 SQL을 변수에 만들고 몇 줄 안에서 실행)도 잡는다.
+      - 통째 주석 라인(`#`/`//`/`--`, `/* */` 블록)은 `_code_lines`가 제외한다(주석 처리된 SQL 오탐 방지).
+    줄 넘는 건은 대입 라인(문자열 구성=고칠 지점)을 sink으로 돌려주고, is_select는 그 SQL 종류로 판정한다.
+    """
+    pending: dict[str, tuple[int, str]] = {}  # 동적 SQL 대입 변수 → (줄번호, 라인)
+    for i, line in _code_lines(body):
+        if _LOG_LINE.search(line):
             continue
-        if _SELECT_SINK.search(line):
-            return line.strip(), True
-        if _WRITE_SINK.search(line):
-            return line.strip(), False
+        has_dyn = bool(_DYN.search(line))
+        has_exec = bool(_EXEC.search(line))
+        # (A) 한 줄에 동적결합+실행 — 확정.
+        if has_dyn and has_exec:
+            if _SELECT_SINK.search(line):
+                return line.strip(), True
+            if _WRITE_SINK.search(line):
+                return line.strip(), False
+            continue
+        # (B) 동적 SQL 문자열이 변수에 대입 — 실행을 기다린다.
+        if has_dyn and (_SELECT_SINK.search(line) or _WRITE_SINK.search(line)):
+            var = _assigned_var(line)
+            if var:
+                pending[var] = (i, line)
+        # (B-guard) 같은 변수를 안전한 값(동적 아님)으로 재대입 → 오염 해제.
+        avar = _assigned_var(line)
+        if avar and avar in pending and not has_dyn:
+            del pending[avar]
+        # (C) 실행 라인이 대기 중 동적 SQL 변수를 참조 → 대입 라인을 sink으로.
+        if has_exec:
+            for var, (aline, atext) in list(pending.items()):
+                if 0 <= i - aline <= _EXEC_WINDOW and re.search(rf"\b{re.escape(var)}\b", line):
+                    return atext.strip(), bool(_SELECT_SINK.search(atext))
     return None
 
 
@@ -479,8 +522,8 @@ def injection_xss_candidates(
                         id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-89", vuln_class="injection",
                         endpoint=path, source_symbols=[sink_symbol], attack_params=ap,
                     ))
-            # ── XSS: 서버 HTMLResponse 반사 ──
-            hm = _HTMLRESP.search(body)
+            # ── XSS: 서버측 반사 sink(HTMLResponse·mark_safe·render_template_string·Markup) ──
+            hm = _SERVER_XSS.search(body)
             if hm and ("xss", path) not in seen:
                 seen.add(("xss", path))
                 param = re.match(r"[A-Za-z_]\w*", hm.group(1).strip())
