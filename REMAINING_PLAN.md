@@ -224,7 +224,7 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
   - **완료 판정**: 최소 한 프론트 XSS sink가 blocked가 아니라 verify 가능한 candidate로 전환되어
     오라클까지 도달.
 
-- [ ] **X3. stored XSS 후보 생성** — `surface/candidates.py`
+- [~] **X3. stored XSS 후보 생성** — **계약-seed 경로 확인·잠금(`befc3bf`)**. `_replay_stored`가 inject→render_path 분리를 지원, context=stored candidate가 정상 probe로. Juice Shop #3(POST /api/Feedbacks→/#/about) seed-ready(docs/P3_JUICE_SHOP_XSS_CONTRACT.md). **소스 자동생성(write→render 상관)은 정밀도 낮아 follow-up.** — `verifiers/xss._replay_stored`
   - **무엇**: 오라클은 stored를 지원하지만(`_replay_stored`), 후보 생성이 stored candidate
     (inject_path→render_path 매핑)를 **만들지 않는다**. 현재 자동 생성은 reflected만.
   - **완료 판정**: 저장 후 다른 경로에서 렌더되는 케이스에 대해 `context="stored"` candidate 생성.
@@ -238,7 +238,7 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
     종료(이미 `if executed: break`는 있음 — context 재사용으로 launch 비용 절감).
   - **완료 판정**: 동일 결과를 유지하면서 다수 후보 verify 시간이 눈에 띄게 감소.
 
-- [ ] **X5. Playwright 런타임 사전점검·degrade 보고** — `verifiers/xss.py` + 배선(P1)
+- [x] **X5. Playwright 런타임 사전점검·degrade 보고** — **완료(`a67b83d`)**. `_playwright_available`로 chromium 실행 가능 사전점검, 부재 시 verify가 크래시·억지 verified 대신 명확한 사유로 degrade. 사용자向 노출은 P1 report. — `verifiers/xss.py`
   - **무엇**: chromium이 없으면 XSS verify가 실패한다. 실행 전 설치 여부를 점검하고, 없으면
     "브라우저 미설치로 XSS 검증 불가"를 **사용자에게 쉬운 말로** 보고(억지로 verified 처리 금지).
   - **완료 판정**: chromium 부재 환경에서 명확한 사유 반환 + 파이프라인이 죽지 않음.
