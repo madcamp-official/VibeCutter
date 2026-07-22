@@ -4,6 +4,14 @@
 `render_html()`이 그 결과를 부록 B Finding Report Schema 형태의 self-contained HTML로
 렌더한다(REPORT.html, DoD C-7). SARIF export는 P4가 같은 `build_run_report` 데이터 소스를
 소비한다 — HTML은 P4 응답 지연으로 P1이 채웠고, SARIF만 P4 소유로 남는다.
+
+**2단 리포트 계약(C4, REMAINING_PLAN §6)**: 이 파일의 산출물(HTML)과 `eval/report_export.py`
+의 SARIF는 **전문가·감사용 상세 리포트**다 — CWE/게이트별 판정/evidence 원문이 전부
+들어간다. `mcp_server/tools_repair.py`의 `vc_generate_report`/`vc_export_sarif`가 만드는
+그대로 유지한다(내용을 줄이지 않는다). 기본 채팅에 자동으로 노출되지 않는 것은 Host의
+보고 방식 문제이지 이 렌더러의 문제가 아니다 — Host는 `SKILL.md` "출력 형식"의 3항목 쉬운
+요약만 기본으로 보여주고, 이 상세본은 사용자가 명시 요청하거나 외부 도구(GitHub code
+scanning 등)에 넘길 때만 안내한다.
 """
 
 from __future__ import annotations

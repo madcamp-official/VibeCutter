@@ -9,6 +9,11 @@
 
 구조: 순수 렌더러 `render_sarif(report)` — RunReport 만 받아 dict 를 낸다(목으로 유닛테스트).
 wrapper `export_report(run_id, ...)` — build_run_report(DB 조회) 후 파일로 쓴다.
+
+**2단 리포트 계약(C4, REMAINING_PLAN §6, P1 문서화 — 렌더링 로직은 그대로)**: 이 SARIF
+export는 `core.report`의 HTML과 같은 **전문가·감사용 상세** 산출물이다. 기본 채팅 요약
+(`SKILL.md` "출력 형식" 3항목)에는 자동으로 안 올라간다 — Host가 사용자 요청이나 외부 도구
+연동(GitHub code scanning 등) 시에만 `vc_export_sarif`를 안내한다. 내용은 줄이지 않는다.
 """
 
 from __future__ import annotations
