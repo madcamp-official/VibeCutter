@@ -11,7 +11,48 @@ import unittest
 
 from contracts.schemas import Candidate
 from verifiers import dispatch, xss
-from verifiers.xss import _benign_payloads, _reflection_kind, xss_oracle, xss_probe_from_candidate
+from verifiers.xss import (
+    _benign_payloads,
+    _reflected_url,
+    _reflection_kind,
+    xss_oracle,
+    xss_probe_from_candidate,
+)
+
+
+class ReflectedUrlTests(unittest.TestCase):
+    """_reflected_url: inject_path가 이미 쿼리를 담아도 `?id=?id=`로 겹치지 않는다(XSS 라이브 발견, P1)."""
+
+    def _url(self, path: str, param: str, extra_json: str | None = None) -> str:
+        ap = {"base_url": "http://127.0.0.1:14020", "context": "reflected",
+              "inject_path": path, "inject_param": param}
+        if extra_json:
+            ap["extra_params_json"] = extra_json
+        return _reflected_url(xss_probe_from_candidate(Candidate(
+            id="c", run_id="r", vuln_class="xss", attack_params=ap)), "MARK")
+
+    def test_path_with_existing_query_placeholder_not_doubled(self) -> None:
+        # Angular 해시라우트 `/#/track-result?id=` — 기존 `?id=`에 payload를 채우고 `?`를 안 겹친다.
+        self.assertEqual(self._url("/#/track-result?id=", "id"),
+                         "http://127.0.0.1:14020/#/track-result?id=MARK")
+        self.assertNotIn("?id=?id=", self._url("/#/track-result?id=", "id"))
+
+    def test_search_query_placeholder_filled(self) -> None:
+        self.assertEqual(self._url("/#/search?q=", "q"),
+                         "http://127.0.0.1:14020/#/search?q=MARK")
+
+    def test_path_without_query_appends_param(self) -> None:
+        # 쿼리 없는 경로는 기존대로 `?param=payload` 부착(무회귀).
+        self.assertEqual(self._url("/#/search", "q"),
+                         "http://127.0.0.1:14020/#/search?q=MARK")
+
+    def test_existing_unrelated_query_preserved(self) -> None:
+        import json
+        out = self._url("/page?foo=bar", "q", json.dumps({"csrf": "t"}))
+        self.assertIn("foo=bar", out)
+        self.assertIn("q=MARK", out)
+        self.assertIn("csrf=t", out)
+        self.assertEqual(out.count("?"), 1)
 
 
 class XssOracleTests(unittest.TestCase):

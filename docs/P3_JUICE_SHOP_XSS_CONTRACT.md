@@ -63,6 +63,12 @@
 | rollback / reset | **없음(읽기 전용)** |
 | regression | `xss_search_smoke`(track 경로 렌더 liveness). benign id로 track-result가 200/렌더되는지 |
 
+> **라이브 노트(2026-07-22, P1 X7 실주행)**: #1 검색은 **verified=true**(evidence obs-1bf69d9ac722, 격리
+> 브라우저에서 onerror marker 실행). #2 track-order는 `inject_path`에 이미 `?id=`가 있어 verifier의
+> `_reflected_url`이 `?id=?id=<payload>`로 겹쳐 실패했었음 → **verifier를 기존 쿼리 병합하도록 수정**(겹침
+> 제거, 검색/track 둘 다 `?id=<payload>` 한 벌). 이후에도 track이 안 뜨면, track-result는 **유효한 order
+> 백엔드 조회 후 렌더**되는 구조일 수 있어 seed된 order id fixture가 필요할 수 있음(P2와 확정 — X7 follow-up).
+
 ## 후보 3 (후속) — stored XSS · feedback
 - context=`stored`. `_replay_stored`가 inject→render_path 분리를 이미 지원한다. **계약-seed로 바로
   검증 가능**(아래 attack_params). 단 **DB 변경**이라 승인된 target reset + fixture 계약이 전제 →
