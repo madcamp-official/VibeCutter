@@ -24,3 +24,10 @@ targets:
     strategy: self_signup
     auth_mode: bearer
     notes: Local Node signup at /api/auth/signup returns a bearer token in token; P3 keeps ephemeral credentials in memory only.
+  w2c101-resume-matcher:
+    strategy: fixture_file
+    auth_mode: bearer_fixture
+    fixture_command_id: fixture
+    fixture_path: .vibecutter/fixtures/w2c101-resume-matcher-idor.json
+    notes: GitHub-OAuth-only app has no self_signup path; P1 fixture creates two local users
+      directly and the verifier reads a static bearer token from an env var it never persists.

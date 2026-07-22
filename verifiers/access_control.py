@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -86,12 +87,22 @@ class IdorProbe(BaseModel):
     """
 
     base_url: str
-    auth_mode: str = "session_form"  # "none" | "session_form" | "bearer" (기본은 D2 WebGoat 호환)
-    # none/session_form은 baseline_path/attack_path를 직접 받고, bearer는 path_template+생성 id로 런타임에 만든다.
+    auth_mode: str = "session_form"  # "none" | "session_form" | "bearer" | "bearer_fixture"
+    # none/session_form/bearer_fixture는 baseline_path/attack_path를 직접 받고, bearer는
+    # path_template+생성 id로 런타임에 만든다.
     baseline_path: str | None = None  # 공격자 자기 자원
     attack_path: str | None = None  # 피해자 자원
     victim_marker: str  # attack 응답에 이게 보이면 피해자 데이터
     owner_marker: str | None = None  # baseline 응답에 있어야 정상기능 OK (repair/validators.py)
+
+    # --- bearer_fixture 전용(OAuth-only 등 self_signup이 불가능한 bearer 인증 앱) ---
+    # 공격자 토큰 하나로 baseline(자기 자원)·attack(피해자 자원 id로 스왑) 둘 다 요청한다 —
+    # IDOR의 본질이 "내 유효한 세션으로 남의 id를 찔러본다"이므로 attack에도 같은 토큰을 쓴다.
+    # P2 fixture는 토큰 문자열이 아니라 "환경변수 이름"만 가리킨다 — 토큰 자체는 candidate/
+    # evidence/fixture 파일 어디에도 저장하지 않는다(self_signup의 "토큰은 재현 중 메모리에만"
+    # 규율과 동일, RoleFixture.secret_env_names와 같은 패턴). 재현 시점에 os.environ에서 직접
+    # 읽어 Authorization 헤더로만 쓰고 버린다.
+    baseline_token_env: str | None = None  # 공격자 토큰을 담은 VIBECUTTER_* 환경변수 이름
 
     # --- session_form 전용 (none 모드면 불필요) ---
     app_username: str | None = None
@@ -159,13 +170,15 @@ def probe_from_fixture(fixture: dict | str | Path) -> IdorProbe:
     victim = _pick_resource(resources, "victim_marker")
     attacker = _pick_resource(resources, "baseline_path")
     auth = data.get("auth") if isinstance(data.get("auth"), dict) else data.get("authentication", {})
+    auth_mode = auth.get("mode", "none") if isinstance(auth, dict) else "none"
     return IdorProbe(
         base_url=data["base_url"],
-        auth_mode=auth.get("mode", "none") if isinstance(auth, dict) else "none",
+        auth_mode=auth_mode,
         baseline_path=attacker["baseline_path"],
         attack_path=victim["read_path"],
         victim_marker=victim["victim_marker"],
         owner_marker=attacker.get("marker"),
+        baseline_token_env=auth.get("token_env") if auth_mode == "bearer_fixture" else None,
     )
 
 
@@ -211,6 +224,29 @@ def _replay_none(probe: IdorProbe) -> tuple[dict, dict]:
     with httpx.Client(follow_redirects=True, timeout=10.0) as client:
         r_base = client.get(f"{base}{probe.baseline_path}")
         r_atk = client.get(f"{base}{probe.attack_path}")
+    return _exchange("GET", probe.baseline_path, r_base), _exchange("GET", probe.attack_path, r_atk)
+
+
+def _replay_bearer_fixture(probe: IdorProbe) -> tuple[dict, dict]:
+    """P2 fixture가 미리 만든 사용자의 정적 bearer 토큰으로 IDOR 재현.
+
+    `bearer`(self_signup)와 달리 verify() 시점에 새로 가입하지 않는다 — GitHub OAuth 전용
+    앱처럼 자체 회원가입 API가 없어 self_signup을 못 쓰는 경우를 위한 것. 토큰은
+    `baseline_token_env`로 가리킨 환경변수에서 읽을 뿐 candidate/evidence에는 절대 안 남는다.
+    """
+    if not probe.baseline_path or not probe.attack_path:
+        raise ValueError("bearer_fixture 재현엔 baseline_path와 attack_path가 필요하다")
+    if not probe.baseline_token_env:
+        raise ValueError("bearer_fixture 재현엔 baseline_token_env(토큰을 담은 환경변수 이름)가 필요하다")
+    token = os.environ.get(probe.baseline_token_env)
+    if not token:
+        raise ValueError(f"환경변수 {probe.baseline_token_env!r}에 토큰이 설정되어 있지 않다")
+
+    base = probe.base_url.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}"}
+    with httpx.Client(follow_redirects=True, timeout=10.0) as client:
+        r_base = client.get(f"{base}{probe.baseline_path}", headers=headers)
+        r_atk = client.get(f"{base}{probe.attack_path}", headers=headers)
     return _exchange("GET", probe.baseline_path, r_base), _exchange("GET", probe.attack_path, r_atk)
 
 
@@ -394,6 +430,7 @@ _REPLAY: dict[str, tuple[int, object]] = {
     "none": (2, _replay_none),
     "session_form": (5, _replay_session_form),
     "bearer": (4, _replay_bearer),  # signup×2 + baseline + attack
+    "bearer_fixture": (2, _replay_bearer_fixture),  # baseline + attack (토큰은 fixture가 이미 발급)
 }
 
 

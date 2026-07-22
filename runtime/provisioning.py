@@ -32,7 +32,7 @@ class ProvisioningOverride(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     strategy: Literal[ProvisioningStrategy.FIXTURE_FILE, ProvisioningStrategy.SELF_SIGNUP]
-    auth_mode: Literal["none", "bearer", "session_form"]
+    auth_mode: Literal["none", "bearer", "session_form", "bearer_fixture"]
     fixture_command_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{1,62}$")
     fixture_path: str | None = Field(default=None, max_length=240)
     notes: str = Field(min_length=1, max_length=500)

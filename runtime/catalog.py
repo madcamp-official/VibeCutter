@@ -166,8 +166,19 @@ class TargetCatalog:
     def lifecycle_for(self, target_id: str) -> LifecycleManager:
         self.require_ready_source(target_id)
         target = self.get(target_id)
-        root = self.source_root_for(target_id) if target.user_registered else self.repository_root
-        return LifecycleManager(target.manifest, root)
+        # `source_root_for()` already resolves `source_repo / manifest.source_dir` for a
+        # user-registered target, so passing manifest.source_dir through unchanged makes
+        # LifecycleManager apply it a second time (2026-07-22 live discovery, IDOR fixture
+        # prep on a user target with source_dir="backend" tried to open ".../backend/backend").
+        # Mirrors `core.judge.check_build`'s existing `source_dir: "."` override for the same
+        # already-resolved-root situation.
+        if target.user_registered:
+            root = self.source_root_for(target_id)
+            manifest = target.manifest.model_copy(update={"source_dir": "."})
+        else:
+            root = self.repository_root
+            manifest = target.manifest
+        return LifecycleManager(manifest, root)
 
     @property
     def source_lock(self) -> SourceLock:
