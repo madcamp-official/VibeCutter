@@ -197,7 +197,7 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 
 **① 후보 생성 커버리지(가장 큰 약점)**
 
-- [ ] **X1. 서버측 반사 XSS 패턴 확장** — `surface/candidates.py:414 _HTMLRESP`
+- [x] **X1. 서버측 반사 XSS 패턴 확장** — **완료(`ea1ac35`)**. `_SERVER_XSS`(HTMLResponse·mark_safe·render_template_string·Markup) + Express `res.send/write/end`(템플릿 리터럴·직접·중간변수 concat, 살균/res.json/정적 제외). 템플릿엔진(EJS `<%- %>`·Handlebars `{{{ }}}`·jinja `|safe`)은 템플릿 **파일** sink이라 X2(라우트 매핑)로. — `surface/candidates.py _SERVER_XSS/_EXPRESS_XSS`
   **(부분 진행 확인 2026-07-22, P1 감사)** — 커밋 `31df59a`/`96600bc`로 프리필터
   (`surface/inject_xss.py`)는 13개 sink 패턴(`jinja.safe`/`thymeleaf.utext` 포함)까지
   늘었지만, **실제 candidate를 만드는** `_SERVER_XSS` 정규식(`candidates.py:355`)은 여전히
@@ -242,7 +242,7 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 
 **③ 패치·데모**
 
-- [ ] **X6. XSS 패치 locator 힌트(프레임워크별 출력 인코딩)** — `repair/locator.py`
+- [x] **X6. XSS 패치 locator 힌트(프레임워크별 출력 인코딩)** — **완료(`517c0f8`)**. `_xss_fix_hint`가 sink 파일 확장자로 프레임워크 추정해 rationale에 올바른 수정 방향(React→DOMPurify/JSX, Vue→v-html 제거, Python→autoescape/markupsafe.escape, JS/Express→textContent/escape-html, 템플릿→비이스케이프 출력 교체)을 실어 235B가 접근제어 가드 대신 이스케이프/정화 패치를 하게 함. — `repair/locator.py`
   - **무엇**: CWE-79는 이미 "sink형"으로 분류돼 출력 인코딩 힌트를 준다. 프레임워크별 정확한
     수정(autoescape on, `escape()`, `textContent` 대신 `innerHTML`, `DOMPurify`)을 힌트에 반영해
     235B가 소유권 가드 같은 엉뚱한 패치를 만들지 않게 한다.
