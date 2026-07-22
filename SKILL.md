@@ -82,20 +82,44 @@
 
 ## 출력 형식
 
-각 finding을 보고할 때 다음을 포함한다(`vibecutter://findings/{finding_id}` resource가
-실제 데이터를 반환한다):
+채팅 보고는 **딱 세 가지만, 전부 앱·데이터의 말로** 한다(REMAINING_PLAN §6 "3항목 쉬운
+보고 계약", C1) — 보안 지식이 없는 사용자가 읽는다고 가정한다:
 
-- `title`, `cwe`, `owasp_category`, `severity`
-- `verification_state`(`candidate`/`verified`/`rejected`/`fixed`/`human_review`)
-- `affected_endpoint`, `affected_roles`
-- `evidence_ids`가 가리키는 재현 증거(요청/응답 등 — secret은 저장 단계에서 이미
-  redaction되어 있다, `core/redaction.py`)
-- patch가 있으면 diff/rationale, 적용 후 `Validation`의 6게이트 결과와 verdict
+1. **발견한 위험** — 무엇을 누가 어떻게 할 수 있는가/없는가를 한두 문장으로. 예: "로그인한
+   사람이면 누구나 URL의 주문번호만 바꿔서 남의 주문을 볼 수 있어요." `Finding.
+   affected_endpoint`/`affected_roles`와 evidence 내용을 **이 문장으로 번역**하는 것이지,
+   필드를 그대로 나열하는 게 아니다.
+2. **수정 계획** — patch를 적용하기 **전**에 무엇을 어떻게 바꿀지, 같은 방식으로. 예:
+   "주문을 보여주기 전에 그게 본인 것인지 서버가 확인하도록 바꿀게요." 사용자가 여기서
+   승인해야만 3번으로 간다 — `vc_apply_patch(confirmed=True)`를 부르기 **전에** 이 계획을
+   보여주고 답을 받는다(규칙 3과 같은 지점).
+3. **(승인 시) 수정한 내용** — patch 적용 + 6게이트 통과 후. 예: "고쳤어요. 예전 공격이
+   이제 안 통하고, 앱이 정상 동작하는 것까지 다시 확인했어요."
 
-**알려진 한계**: `vc_generate_report`/`vc_export_sarif`(HTML/SARIF export)는 아직
-미구현(`NotImplementedError`)이다 — 입력 데이터(`core.report.build_run_report`)는
-finding+evidence+patch+validation을 이미 조인해 준비돼 있지만, 렌더링은 P4 담당으로
-남아 있다. 지금은 Host가 위 필드를 finding별로 직접 요약해서 사용자에게 보고한다.
+**기본적으로 채팅에 올리지 않는 것** — 전부 존재하고 조회 가능하지만, 사용자가 "자세히
+보여줘"처럼 명시적으로 요청할 때만 아래 resource/tool로 보여준다:
+
+- CWE/OWASP 코드, evidence ID → `vibecutter://findings/{finding_id}`의 `cwe`/
+  `owasp_category`/`evidence_ids`
+- 게이트별 개별 판정(build/attack/positive_test/regression/static/scope) →
+  기본 보고는 "정상 동작·공격 차단 확인"으로 뭉뚱그려 말하고, 요청 시에만 `Validation`
+  row를 보여준다
+- candidate/worker-run 내부 배선(`vc_materialize_worker_run`, scan Run vs worker Run
+  구분 등) → 언급 자체를 하지 않는다. 사용자가 신경 쓸 대상이 아니다
+- 재시도 예산(최대 3회, 몇 번째 시도인지) → 상한에 도달해 `human_review`로 넘어갈 때만
+  "자동으로는 못 고쳤어요, 사람이 봐야 해요" 정도로만 언급한다
+- SAST/SCA 스캐너 내부 결과 → 최종 finding으로 승격된 것만 보고한다. 원시 스캐너 출력은
+  보여주지 않는다
+
+**바뀌지 않는 것**: 이건 표현 계층 변경일 뿐이다. `confirmed=True` 승인 게이트(규칙 3),
+evidence 기반 판정(규칙 4), 재시도 상한(규칙 6)은 코드가 그대로 강제한다 — 채팅에 안
+보인다고 검사·승인을 건너뛰는 게 아니다.
+
+**상세 리포트(전문가용, 별도 층)**: `vc_generate_report`(HTML)/`vc_export_sarif`
+(SARIF 2.1.0)가 finding+evidence+patch+validation을 조인한 전체 상세 리포트를 파일로
+만든다 — CWE/게이트별 판정/evidence 원문이 전부 들어간다. 이건 위 3항목 채팅 요약과는
+**별도 층**이다: 기본 채팅에는 올리지 않고, 사용자가 상세본을 원하거나 GitHub code
+scanning 등 외부 도구에 넘기려 할 때만 안내한다.
 
 ## 절대 금지
 

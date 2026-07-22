@@ -325,7 +325,17 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 `evidence_ids`·diff·6게이트 결과를 보고하라고 하고, `mcp_server/prompts.py`는 "patch diff를 그대로
 보여주고 승인받아라"라고 한다 — 보안 전문가를 독자로 가정. 비전문 사용자에겐 정반대.
 
-- [ ] **C1. `SKILL.md` "출력 형식"을 3항목 쉬운 보고 계약으로 재작성** — `SKILL.md`
+- [x] **C1. `SKILL.md` "출력 형식"을 3항목 쉬운 보고 계약으로 재작성** — `SKILL.md`
+  **(완료 2026-07-22)** — "출력 형식" 절 전체를 ①발견한 위험 ②수정 계획 ③(승인 시)수정한
+  내용 3항목 계약으로 재작성(각 항목에 REMAINING_PLAN §0 예시 문장 재사용 + Finding 필드를
+  "번역"하는 것이지 나열이 아니라는 점을 명시). 기본적으로 숨기는 6항목(candidate/worker-run
+  내부, 재시도 예산, SAST/SCA 내부, evidence ID, 게이트별 개별 판정, CWE/OWASP 코드)을
+  각각 "요청 시 어느 resource로 보여줄지"까지 명시. `vc_generate_report`/`vc_export_sarif`가
+  이미 구현됐는데 옛 문서가 "미구현"으로 서술하던 stale 서술도 이 절 안에서 함께 바로잡고,
+  상세 리포트를 채팅 요약과 별도 층으로 명문화(C4 SKILL.md 쪽 요구사항 일부 선반영). 승인
+  게이트·evidence 기반 판정·재시도 상한은 코드가 그대로 강제한다는 점을 "바뀌지 않는 것"으로
+  명시해 표현 계층 변경임을 분명히 함. 문서 변경이라 자동 테스트 대상 없음(grep 확인:
+  `tests/`에 `SKILL.md`를 참조하는 테스트 없음).
   - 채팅 보고 = ①발견한 위험 ②수정 계획 ③(승인 시)수정한 내용, 전부 앱·데이터 언어의 쉬운 말.
   - **기본적으로 숨길 것**: candidate/worker-run 내부 기계, 재시도 예산, SAST/SCA 내부, evidence
     ID, 게이트별 개별 판정, CWE/OWASP 코드. (원하면 "자세히 보기"로만.)
