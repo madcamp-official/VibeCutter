@@ -38,18 +38,31 @@ class InjectionOracleTests(unittest.TestCase):
         self.assertFalse(verified)
 
     def test_juice_shop_sqli_demo_pattern(self):
-        # 데모 2 회귀 잠금 — J-2 실측(Juice Shop GET /rest/products/search?q=):
-        # baseline apple=631B, true(OR 1=1)=18662B, false(AND 1=2)=30B, status 전부 200.
-        # _MIN_DELTA 등 변경이 이 데모 verify 케이스를 깨면 여기서 실패한다.
-        verified, reason = injection.injection_oracle(200, "x" * 18662, 200, "x" * 30, baseline_variance=0)
+        # 데모 2 오라클 잠금 — Juice Shop GET /rest/products/search?q= 라이브 실측(J-3, P1 2026-07-22):
+        # baseline apple=631B, LIKE-aware AND payload로 true(전체행)≈13644B / false(0행)≈30B, status 전부 200.
+        # (초기 계약 문서의 18662/30은 오프라인 합성값이었다 — 라이브는 위 수치.) _MIN_DELTA 등 변경이
+        # 이 데모 verify 케이스를 깨면 여기서 실패한다. 참=전체행 vs 거짓=0행 델타가 커 verified.
+        verified, reason = injection.injection_oracle(200, "x" * 13644, 200, "x" * 30, baseline_variance=0)
         self.assertTrue(verified)  # 취약: verified
         self.assertIn("CWE-89", reason)
-        # 검색 응답이 요청마다 500B 흔들려도(노이즈) verified 유지 (18632 >> 임계 1048)
-        verified_noise, _ = injection.injection_oracle(200, "x" * 18662, 200, "x" * 30, baseline_variance=500)
+        # 검색 응답이 요청마다 500B 흔들려도(노이즈) verified 유지 (델타 >> 임계)
+        verified_noise, _ = injection.injection_oracle(200, "x" * 13644, 200, "x" * 30, baseline_variance=500)
         self.assertTrue(verified_noise)
         # 패치(파라미터화) 후 true≈false → attack 게이트 통과(verified=False)
         verified_patched, _ = injection.injection_oracle(200, "x" * 631, 200, "x" * 631)
         self.assertFalse(verified_patched)
+
+    def test_like_wildcard_context_payload_present(self):
+        # J-3 라이브 발견: LIKE '%...%' 검색은 OR tautology로 참/거짓이 안 갈린다(둘 다 전체행).
+        # AND로 결과셋을 닫는 LIKE-aware 쌍이 있어야 하고, 기본 예산(상위 4쌍)에서 시도돼야 한다.
+        top4 = injection._PAYLOAD_PAIRS[:(10 - 2) // 2]
+        like_pairs = [(t, f) for t, f in top4 if "LIKE" in t and t.startswith("%'")]
+        self.assertEqual(len(like_pairs), 1, "LIKE-aware AND 쌍이 기본 예산 상위 4쌍에 없음")
+        t, f = like_pairs[0]
+        self.assertEqual(len(t), len(f))                      # 한 글자만 차이
+        self.assertEqual(sum(a != b for a, b in zip(t, f)), 1)
+        self.assertIn("AND", t)                                # OR가 아니라 AND로 닫음
+        self.assertNotIn("--", t)                              # 주석 없음(닫는 괄호 훼손·syntax error 방지)
 
     def test_natural_variance_suppresses_false_positive(self):
         # 하드닝: 참-거짓 차이 120(옛 임계 48이면 탐지)이라도, 엔드포인트 자연 변동이 120이면
