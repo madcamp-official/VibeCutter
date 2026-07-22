@@ -222,7 +222,16 @@ def _repoint_to_patched_runtime(catalog, target, overlay) -> bool:
     """
     from runtime.lifecycle import LifecycleManager
 
-    LifecycleManager(target.manifest, catalog.repository_root).stop()
+    # For a user-registered local target, the *original* (unpatched) instance is
+    # defined by their own repository, not VibeCutter's — `catalog.repository_root`
+    # is only correct for built-in targets (2026-07-22, U4 live discovery: this
+    # always used `catalog.repository_root`, so stopping a local target's original
+    # container silently ran in the wrong directory, found nothing to stop, and the
+    # overlay's `start` then failed with "port is already allocated").
+    original_root = (
+        catalog.source_repository_for(target.manifest.id) if target.user_registered else catalog.repository_root
+    )
+    LifecycleManager(target.manifest, original_root).stop()
     start_result = overlay.execute("start")
     if start_result.status != "passed":
         _capture_command_log(overlay.run_id, "core.judge.check_build:start", start_result)

@@ -118,10 +118,19 @@ def _registry_entry(target_id: str, registry: Optional[_RegistryLike]) -> Option
     approved = registry.get(target_id)
     if approved is None:
         return None
+    base_url = getattr(approved, "base_url", None)
+    # scope.yaml의 built-in 엔트리는 항상 `port`를 명시하고(정적 검토된 값), P2
+    # `_require_authorized`(runtime/target_service.py)가 그 port를 manifest.base_url의
+    # 실제 port와 대조해 이중 확인한다. 이 정규화가 `port`를 안 채우면(2026-07-22, U4
+    # 라이브 발견 — 로컬 target 등록 경로가 실행된 적이 없어 아무도 못 봄) 로컬 레지스트리로
+    # 승인된 target은 이 대조에서 항상 `configured_port=None`이 돼 스캔조차 못 한다 —
+    # base_url에서 port를 뽑아 built-in과 같은 모양으로 맞춘다.
+    port = urlparse(base_url).port if base_url else None
     return {
         "allowed_hosts": list(approved.allowed_hosts),
         "source": "user_registry",
-        "base_url": getattr(approved, "base_url", None),
+        "base_url": base_url,
+        "port": port,
     }
 
 

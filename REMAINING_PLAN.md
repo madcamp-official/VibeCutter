@@ -404,11 +404,38 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
     **쉬운 예/아니오로 1회 동의**받고 기록한다(현재 미구현).
   - **완료 판정**: 동의 표시·기록이 남고, 동의 없이는 LLM 합성 경로로 넘어가지 않는다.
 
-- [ ] **U4. 데모 1 E2E 완주** — 전원
-  - **무엇**: 실제 사용자 프로젝트를 `vc_register_local_target(confirmed=True)`로 등록 → snapshot →
-    policy 통과 → 스캔 → verified → 수정계획 승인 → `vc_resume_audit`(6게이트) → **FIXED** → patch
-    export → reset까지 **한 번 끝까지** 돈다.
-  - **완료 판정**: 위 전 과정이 로그로 재현되고, IDOR c1-05와 별개의 "사용자 프로젝트" 사례가 생긴다.
+- [x] **U4. 데모 1 E2E 완주 — ✅ FIXED(2026-07-22, P1, run-2907a2028fa4).** 임의 사용자 프로젝트
+  (built-in도 IDOR c1-05도 아닌 신규 로컬 앱)를 로컬 레지스트리 경로로 처음부터 끝까지 라이브 실행.
+  - **데모 앱**: `demo-notes-app` — Flask+SQLite 메모 검색 앱, 별도 clean git repo, docker-compose,
+    `/api/notes/search?q=`에 f-string SQLi(CWE-89) 심음. U1 `vc_scaffold_manifest`(docker-compose
+    우선 경로)로 초안 생성 → `docker_isolation`/`test_suites` 수동 보강(scaffold가 "직접 추가하세요"로
+    올바르게 경고한 부분) → `vc_register_local_target(confirmed=True)` 승인.
+  - **전 과정 실주행**: scan(`vc_scan_access_control`, injection candidate 정확히 탐지) → verify
+    (LIKE-context payload pair, verified=true) → localize(정확히 `app.py::search_notes`) →
+    235B patch(`?` placeholder 파라미터 바인딩, SQLite에 맞는 정확한 문법) → 승인 → apply →
+    6게이트 → **attempt #1 RETRY(인프라 버그) → 버그 수정 → attempt #2 FIXED**. patch export:
+    `.vibecutter/runs/run-2907a2028fa4/security-fix.patch`.
+  - **로컬 레지스트리 경로가 한 번도 실행된 적이 없어 아무도 못 본 버그 3건 발견·직접 수정(P1)**
+    — "임의 사용자 프로젝트" 지원이 코드상 존재해도 실제로 안 되고 있었다는 뜻이라 U4 자체의
+    존재 이유를 증명한 셈:
+    1. `core/policy_engine.py::_registry_entry`가 로컬 승인 항목을 정규화할 때 `port`를 안 채워
+       모든 로컬 target이 스캔 이전 단계(`_require_authorized`)에서 무조건 거부되고 있었음.
+       built-in `scope.yaml`처럼 `base_url`에서 port를 뽑아 채우도록 수정.
+    2. `runtime/catalog.py::worktree_manager_for`가 `target_id in self._user_target_ids`를
+       확인 안 해서 로컬 target도 built-in 전용 `source_revision_for`(source-lock)를 불러
+       `vc_apply_patch` 자체가 실패(`has no built-in source lock`). 다른 메서드(`source_root_for`
+       등)와 같은 가드 추가.
+    3. `runtime/run_overlay.py::execute()`/`core/judge.py::_repoint_to_patched_runtime`이
+       non-compose 명령·원본 stop을 항상 `catalog.repository_root`(VibeCutter 자체 루트)
+       기준으로 실행 — built-in target은 맞지만 로컬 target은 사용자 자신의 레포 기준이어야
+       함(`prepare()`의 `project_root or repository_root` 패턴과 안 맞음). 그 결과 (a) regression
+       스모크 스크립트를 VibeCutter 레포에서 찾아 `FileNotFoundError`, (b) 원본 컨테이너를
+       못 찾아 stop 실패 → patched overlay가 포트 충돌로 시작 실패. 두 곳 다 같은 패턴으로 수정.
+    attempt #1이 이 버그들로 RETRY(build/attack/regression=false)였고, 고친 뒤 attempt #2가
+    첫 시도부터 6게이트 전부 통과. `tests/` 708/708 그린(mock에 `user_registered=False` 명시
+    보강 포함). 데모 종료 후 `LocalRegistry.revoke("demo-notes-app")`로 등록 해제, 컨테이너 정리.
+  - **완료 판정**: 위 전 과정이 로그로 재현되고, IDOR c1-05와 별개의 "사용자 프로젝트" 사례가
+    생긴다. **✅ 충족.**
 
 - [ ] **U5. (참고) 정직한 범위 제약 명시** — base_url loopback-only(로컬 앱만), closed-loop엔 clean
   git 필요. 이건 UX 버그가 아니라 안전 경계다 → "이 범위 안에서 다 자동으로 해준다"고 문서·안내에
@@ -569,11 +596,12 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 
 **(2026-07-22 P1 전수 감사 — 실제 코드/테스트 상태 기준. 아래 각 절의 상세 항목이 최신.)**
 
-- **[P1] 거의 완료.** 6절 UX(C1~C4) ✅ · U1~U3 ✅ · `SECURITY_POLICY.md` ✅ · **7.1 데모 2
+- **[P1] 사실상 완료.** 6절 UX(C1~C4) ✅ · U1~U3 ✅ · `SECURITY_POLICY.md` ✅ · **7.1 데모 2
   (J-3) 라이브 완주 ✅(2026-07-22, FIXED)** · **X7~X9 XSS 라이브 완주 ✅(2026-07-22, FIXED,
-  run-92fbb4bcd13c)** · **7.3 container log redaction ✅(2026-07-22)**, patch diff는
-  구조적 한계로 미해결(문서화). 남은 건 `.env` 72B fallback 값 추가(3절, P2 URL 전달
-  대기로 블로킹), U4(전원).
+  run-92fbb4bcd13c)** · **U4 데모1 E2E 라이브 완주 ✅(2026-07-22, FIXED, run-2907a2028fa4
+  — 로컬 레지스트리 경로가 처음 실행돼 버그 3건 발견·수정)** · **7.3 container log
+  redaction ✅(2026-07-22)**, patch diff는 구조적 한계로 미해결(문서화). 남은 건 `.env` 72B
+  fallback 값 추가(3절, P2 URL 전달 대기로 블로킹)뿐.
 - **[P2] (2026-07-22 갱신) X7 runtime 계약 당일 처리.** Discord 요청 받고 `docs/handoffs/
   D6-P2-xss-runtime.md`(커밋 `2338dc6`)로 Juice Shop reflected XSS 경로·DOM sink·smoke suite
   기록 — 다만 Windows Docker daemon에 컨테이너가 없어 **live 실행은 아직**(정직하게 명시).
@@ -600,11 +628,13 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 ## 9. 크리티컬 패스 (다시 · endpoint UP 이후)
 
 ~~I1(Node 인라인 핸들러) →~~ **(2026-07-22 갱신) I1 해결됨** → ~~데모 2 완주(7.1 J-3)~~
-**(2026-07-22) 완료, FIXED** → 데모 1 E2E(+U1 스캐폴딩, ✅ 완료) → 4절 나머지 정확도·성능 +
-6절 UX(✅ 완료) + 3절 72B → 측정·문서·리허설.
-~~가장 큰 단일 리스크는 X7 live 실행~~ — **(2026-07-22) X7·X8·X9 전부 완료.** 검색 XSS가
-scan→verify→localize→235B patch→6게이트까지 **FIXED**로 실주행 완주(run-92fbb4bcd13c) —
-IDOR(c1-05)·Injection(J-3)에 이어 XSS도 실앱 closed-loop 증거 확보. 과정에서 P1·P3가
-나눠 고친 버그 5건(Playwright asyncio 충돌, candidate dedup, diff hunk header, positive
-게이트 fragment 문제 등)은 X7/X9 절 상세 참고. 남은 단일 리스크는 **3절 72B endpoint
-(P2/P4 — 아직 미착수)**뿐 — 세 취약점군의 실증 자체는 더 이상 병목이 아니다.
+**(2026-07-22) 완료, FIXED** → ~~데모 1 E2E~~ **(2026-07-22) 완료, FIXED(U4)** → 4절 나머지
+정확도·성능 + 6절 UX(✅ 완료) + 3절 72B → 측정·문서·리허설.
+~~가장 큰 단일 리스크는 X7 live 실행~~ — **(2026-07-22) X7·X8·X9·U4 전부 완료.** 검색 XSS와
+임의 사용자 프로젝트(demo-notes-app) 둘 다 scan→verify→localize→235B patch→6게이트까지
+**FIXED**로 실주행 완주(각각 run-92fbb4bcd13c, run-2907a2028fa4) — IDOR(c1-05)·Injection
+(J-3)·XSS(X9)·임의 사용자 프로젝트(U4) 네 가지 실앱 closed-loop 증거를 전부 확보했다. 과정에서
+P1·P3가 나눠 고친 버그 8건(Playwright asyncio 충돌, candidate dedup, diff hunk header, positive
+게이트 fragment 문제, 로컬 레지스트리 port/worktree/overlay-root 버그 3종 등)은 X7/X9/U4 절
+상세 참고 — 전부 "그 경로가 지금까지 한 번도 실행된 적이 없어서" 아무도 못 본 것들이었다.
+남은 단일 리스크는 **3절 72B endpoint(P2/P4 — 아직 미착수)**뿐 — 실증 자체는 더 이상 병목이 아니다.

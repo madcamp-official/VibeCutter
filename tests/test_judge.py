@@ -194,7 +194,7 @@ class CheckBuildTests(unittest.TestCase):
             fake_manifest = MagicMock()
             fake_manifest.docker_isolation = MagicMock()  # Compose-based target
             fake_service = _fake_service_with_worktree(worktree)
-            fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest)
+            fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest, user_registered=False)
 
             fake_overlay = MagicMock()
             fake_overlay.execute.return_value = MagicMock(status="passed")

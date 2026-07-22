@@ -312,9 +312,16 @@ class TargetCatalog:
         """Create run worktrees from the target app repository, not VibeCutter itself."""
         from .worktree import WorktreeManager
 
+        # User-registered (local registry) targets have no built-in source-lock pin —
+        # they use whatever revision is currently at HEAD in the user's own approved
+        # repository (2026-07-22, U4 live discovery: this unconditionally called
+        # `source_revision_for`, which raises for any user target, so `vc_apply_patch`
+        # could never create a worktree for an arbitrary local project). Mirrors the
+        # `target_id in self._user_target_ids` guard already used by `source_root_for`/
+        # `source_check_for`/`bootstrap_source` above.
         locked_revision = (
             self.source_revision_for(target_id).revision
-            if self._source_lock is not None
+            if self._source_lock is not None and target_id not in self._user_target_ids
             else None
         )
         return WorktreeManager(

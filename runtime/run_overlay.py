@@ -146,7 +146,14 @@ class RunComposeOverlay:
         commands = self.manifest.commands.copy()
         commands[command_id] = command.model_copy(update={"argv": argv, "working_dir": "."})
         projected = self.manifest.model_copy(update={"commands": commands})
-        return LifecycleManager(projected, self.repository_root).execute(command_id)
+        # Non-Compose commands (e.g. a smoke-test script) resolve relative to the
+        # target's own source tree, same as `prepare()`'s compose-file resolution —
+        # for a built-in target that's VibeCutter's own repository (`project_root`
+        # unset); for a user-registered local target it's their approved repository,
+        # not VibeCutter's (2026-07-22, U4 live discovery: this always used
+        # `self.repository_root`, so a local target's own `tools/smoke.py` was looked
+        # up inside the VibeCutter repo instead and the regression gate crashed).
+        return LifecycleManager(projected, self.project_root or self.repository_root).execute(command_id)
 
     def check_health(self):
         return LifecycleManager(self.manifest, self.repository_root).check_health()
