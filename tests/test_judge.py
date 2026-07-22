@@ -256,6 +256,7 @@ class CheckBuildTests(unittest.TestCase):
             fake_service.catalog.get.return_value = MagicMock(manifest=fake_manifest)
 
             fake_overlay = MagicMock()
+            fake_overlay.run_id = run.id
             fake_overlay.execute.side_effect = lambda command_id: MagicMock(
                 status="passed" if command_id == "build" else "failed"
             )

@@ -20,8 +20,8 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
-from contracts.schemas import Candidate, Finding, Patch, Run, RunState, Validation, VerificationResult
-from core.evidence_store import get
+from contracts.schemas import Candidate, Finding, ObservationType, Patch, Run, RunState, Validation, VerificationResult
+from core.evidence_store import get, write_artifact
 from repair.validators import validate_patch
 from scanners.aggregate import aggregate
 from scanners.sast import run_semgrep
@@ -131,6 +131,29 @@ def check_attack(
     return not result.verified
 
 
+def _capture_command_log(run_id: str, producer: str, result) -> None:
+    """실패한 build/regression 명령의 stdout/stderr를 evidence로 남긴다(7.3 container log redaction).
+
+    지금까지 judge 게이트는 `CommandResult.status`만 보고 stdout/stderr를 버려서, RETRY
+    사유(예: SQLite `+` 문자열 결합 오류로 검색이 깨진 사례, J-3 실주행에서 직접 겪음)를
+    사람이 알 방법이 없었다 — SECURITY_POLICY.md 6절이 적어둔 "container/process 로그
+    redaction 미구현" gap의 실제 원인은 redaction 누락이 아니라 **로그를 남기는 경로
+    자체가 없었던 것**이다. `write_artifact`가 저장 전 이미 `redact()`를 거치므로
+    (core/evidence_store.py), 그 경로에 그대로 실어 캡처와 redaction을 한 번에 해결한다.
+    실패한 명령만 남긴다 — 전체 로그 보관이 아니라 RETRY 진단이 목적이다.
+    """
+    payload = (
+        f"command_id={result.command_id} status={result.status} exit_code={result.exit_code}\n"
+        f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}\n"
+    )
+    write_artifact(
+        run_id,
+        observation_type=ObservationType.LOG,
+        producer=producer,
+        data=payload.encode("utf-8", errors="replace"),
+    )
+
+
 def _target_kind(target: object) -> str:
     """target의 kind ("compose_project" | "running_local"). 미선언이면 "compose_project"(기존 기본).
 
@@ -180,10 +203,13 @@ def check_build(run_id: str, patch_id: str) -> bool | None:
         overlay.prepare()
         result = overlay.execute("build")
         if result.status != "passed":
+            _capture_command_log(run.id, "core.judge.check_build:build", result)
             return False
         return _repoint_to_patched_runtime(catalog, target, overlay)
     worktree_manifest = target.manifest.model_copy(update={"source_dir": "."})
     result = LifecycleManager(worktree_manifest, run_source_root).build()
+    if result.status != "passed":
+        _capture_command_log(run.id, "core.judge.check_build:build", result)
     return result.status == "passed"
 
 
@@ -199,6 +225,7 @@ def _repoint_to_patched_runtime(catalog, target, overlay) -> bool:
     LifecycleManager(target.manifest, catalog.repository_root).stop()
     start_result = overlay.execute("start")
     if start_result.status != "passed":
+        _capture_command_log(overlay.run_id, "core.judge.check_build:start", start_result)
         return False
     return overlay.check_health().status == "ready"
 
@@ -239,9 +266,18 @@ def check_regression(run_id: str, patch_id: str) -> bool:
             return False
         overlay = catalog.run_overlay_for(run.target_id, run.id)
         overlay.prepare()
-        return all(overlay.execute(suite.command_id).status == "passed" for suite in target.manifest.test_suites)
+        for suite in target.manifest.test_suites:
+            result = overlay.execute(suite.command_id)
+            if result.status != "passed":
+                _capture_command_log(run.id, f"core.judge.check_regression:{suite.command_id}", result)
+                return False
+        return True
 
     summary = catalog.test_runner_for(run.target_id).run(run.id)
+    if not summary.passed:
+        for result in summary.results:
+            if result.status != "passed":
+                _capture_command_log(run.id, f"core.judge.check_regression:{result.command_id}", result)
     return summary.passed
 
 

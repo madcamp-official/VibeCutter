@@ -474,7 +474,16 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 - [x] **[P4]** SARIF redaction — `eval/report_export.py`의 `render_sarif`/`_finding_to_sarif_result`에
   `redact()` 적용. **(완료)** message.text(title+impact)에 `redact()` 적용 → secret(token/password/
   Bearer/JWT) 제거. redaction 케이스 테스트 포함(5/5). (구조화 필드·파일경로 URI는 secret 아니라 제외.)
-- [ ] **[P1]** patch diff / container log redaction(patch diff는 `git apply` 바이트 정확성 때문에 별도 접근).
+- [~] **[P1]** patch diff / container log redaction. **(2026-07-22 부분 완료)** container/process
+  로그는 새로 구현: `core/judge.py::check_build`/`check_regression`이 실패한 build/regression
+  명령의 stdout/stderr를 `write_artifact()`(항상 `redact()`를 거침)로 evidence(`ObservationType.LOG`)에
+  캡처 — 이전엔 로그를 남기는 경로 자체가 없어 RETRY 원인(예: J-3의 SQLite `+` 문자열 결합
+  버그)을 직접 재현하지 않으면 알 방법이 없었다. `tests/test_judge.py` 기존 스위트로 회귀
+  확인(mock overlay에 `run_id` 보강), 전체 701/701 그린. **patch diff는 구조적으로 미해결로
+  남김** — context/삭제 줄은 원본과 바이트 단위로 일치해야 `git apply`가 성공하므로 redact할
+  수 없고(추가 줄만 redact하는 절충안도 검토했으나 실제 위험은 대개 "원본 코드에 이미 있던
+  secret"이라 도움이 안 돼 보류), HTML 리포트(사람이 읽는 경로)는 이미 `core/report.py`가
+  `patch.diff`에도 `redact()`를 적용해 커버돼 있음을 확인. `SECURITY_POLICY.md` 6절에 반영.
 - [x] **[P1]** `SECURITY_POLICY.md` — 승인모델·loopback 불변식·argv 승인·LLM 전송 범위·"제3자 LLM API 안 씀".
   **(완료 2026-07-22)** — 저장소 루트에 신설. 승인 모델(6개 승인 지점 표), loopback 불변식
   (스키마+allowlist 이중 계층), argv 승인(shell=False + 구문 거부 이중 방어), LLM 전송 범위
@@ -504,8 +513,9 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 **(2026-07-22 P1 전수 감사 — 실제 코드/테스트 상태 기준. 아래 각 절의 상세 항목이 최신.)**
 
 - **[P1] 거의 완료.** 6절 UX(C1~C4) ✅ · U1~U3 ✅ · `SECURITY_POLICY.md` ✅ · **7.1 데모 2
-  (J-3) 라이브 완주 ✅(2026-07-22, FIXED)**. 남은 건 patch diff/container log
-  redaction(7.3, 미착수), `.env` 72B fallback 값 추가(3절, P2 URL 전달 대기로 블로킹), U4(전원).
+  (J-3) 라이브 완주 ✅(2026-07-22, FIXED)** · **7.3 container log redaction ✅(2026-07-22)**,
+  patch diff는 구조적 한계로 미해결(문서화). 남은 건 `.env` 72B fallback 값 추가(3절, P2
+  URL 전달 대기로 블로킹), U4(전원).
 - **[P2] 진척 적음, 대부분 의도적 보류.** 72B endpoint 미착수(문서화된 결정으로 보류) · X7
   XSS 데모 타깃 미착수(Juice Shop을 "발표 target 아님"으로 명시 제외) · M1 벤치 소스
   0→7/16(부분) · Juice Shop default-bridge는 "smoke baseline"으로만 채택, 발표 경로 미승격 ·
