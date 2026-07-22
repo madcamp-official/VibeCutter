@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -9,6 +10,7 @@ from contracts.schemas import Candidate, Finding, Patch, Run, RunState, Validati
 from core.evidence_store import save
 from core.judge import (
     ScopeViolationError,
+    _target_kind,
     assert_diff_within_worktree,
     check_attack,
     check_build,
@@ -425,6 +427,23 @@ class ComputeVerdictTests(unittest.TestCase):
         )
         self.assertEqual(compute_verdict(v), "RETRY")
 
+    def test_none_gate_wins_over_failed_gate(self) -> None:
+        # 안전 불변식: 게이트가 하나라도 미실행(None)이면, 다른 게이트가 이미 False여도 verdict를
+        # 내지 않는다(None 우선). '아직 못 본 게이트'가 있는데 RETRY로 확정해 버리면 재시도 루프가
+        # 미완의 검증을 완료로 오인할 수 있다 — 미완은 언제나 '미확정(None)'이어야 한다.
+        v = Validation(
+            id="v-1", run_id="run-x", patch_id="patch-x",
+            build=False, attack=None, positive_test=True, regression=True, static=True, scope=True,
+        )
+        self.assertIsNone(compute_verdict(v))
+
+    def test_retry_when_all_gates_fail(self) -> None:
+        v = Validation(
+            id="v-1", run_id="run-x", patch_id="patch-x",
+            build=False, attack=False, positive_test=False, regression=False, static=False, scope=False,
+        )
+        self.assertEqual(compute_verdict(v), "RETRY")
+
 
 class DiffTouchedFilesTests(unittest.TestCase):
     def test_extracts_paths_from_plus_plus_plus_headers(self) -> None:
@@ -436,6 +455,12 @@ class DiffTouchedFilesTests(unittest.TestCase):
 
     def test_empty_diff_yields_no_files(self) -> None:
         self.assertEqual(diff_touched_files(""), [])
+
+    def test_dev_null_deletion_target_is_not_captured(self) -> None:
+        # 문서화된 경계: 정규식은 `+++ b/<path>`만 잡으므로 삭제(`+++ /dev/null`)는 대상이 아니다.
+        # patcher가 파일 삭제 diff를 만들게 되면 이 경계를 넓혀야 한다(judge.py 주석과 짝).
+        diff = "--- a/src/Foo.java\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-x\n"
+        self.assertEqual(diff_touched_files(diff), [])
 
 
 class AssertDiffWithinWorktreeTests(unittest.TestCase):
@@ -458,6 +483,41 @@ class AssertDiffWithinWorktreeTests(unittest.TestCase):
             diff = "--- a/../../etc/passwd\n+++ b/../../etc/passwd\n@@ -1,1 +1,1 @@\n-x\n+y\n"
             with self.assertRaises(ScopeViolationError):
                 assert_diff_within_worktree(diff, worktree)
+
+    def test_rejects_absolute_path_outside_worktree(self) -> None:
+        # `../` 순회와 별개의 우회: 절대 경로(`+++ b//etc/passwd`)는 worktree_path / rel이
+        # 절대 rel로 리셋돼 worktree 밖을 가리킨다 — scope 게이트가 이것도 막아야 한다.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td) / "worktree"
+            worktree.mkdir()
+            diff = "--- a//etc/passwd\n+++ b//etc/passwd\n@@ -1,1 +1,1 @@\n-x\n+y\n"
+            self.assertEqual(diff_touched_files(diff), ["/etc/passwd"])  # 절대 경로로 파싱됨
+            with self.assertRaises(ScopeViolationError):
+                assert_diff_within_worktree(diff, worktree)
+
+
+class TargetKindTests(unittest.TestCase):
+    """_target_kind: manifest.kind → target.kind → 'compose_project'(기본) 방어적 조회.
+
+    running_local target 분기(check_build이 None 반환)의 진입 조건이라 세 폴백을 고정한다.
+    기본이 compose_project라 kind 미선언 target 22개는 무영향(c1-05 gold 안전).
+    """
+
+    def test_manifest_kind_takes_precedence(self) -> None:
+        target = SimpleNamespace(manifest=SimpleNamespace(kind="running_local"), kind="compose_project")
+        self.assertEqual(_target_kind(target), "running_local")
+
+    def test_falls_back_to_target_kind_when_manifest_has_none(self) -> None:
+        target = SimpleNamespace(manifest=SimpleNamespace(), kind="running_local")  # manifest.kind 없음
+        self.assertEqual(_target_kind(target), "running_local")
+
+    def test_defaults_to_compose_project_when_unset_everywhere(self) -> None:
+        self.assertEqual(_target_kind(SimpleNamespace(manifest=SimpleNamespace())), "compose_project")
+
+    def test_defaults_when_manifest_missing_entirely(self) -> None:
+        self.assertEqual(_target_kind(SimpleNamespace()), "compose_project")
 
 
 class CheckScopeTests(unittest.TestCase):
