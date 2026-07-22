@@ -110,6 +110,22 @@ class JuiceShopXssContractTests(unittest.TestCase):
     승인 runtime의 격리 Playwright로만 — 여기선 계약 shape·payload 안전성만 회귀 고정.
     """
 
+    def test_juice_shop_stored_xss_contract_seed(self):
+        # 후보 3(stored feedback): 계약-seed로 context=stored candidate가 render_path까지 정상 probe로.
+        # 소스 자동생성(write→render 상관)은 follow-up; P2는 이 attack_params로 seed하면 된다.
+        c = Candidate(id="c", run_id="r", cwe="CWE-79", vuln_class="xss", attack_params={
+            "base_url": "http://127.0.0.1:3000", "context": "stored",
+            "inject_path": "/api/Feedbacks", "inject_param": "comment", "inject_method": "POST",
+            "render_path": "/#/about",
+        })
+        p = xss.xss_probe_from_candidate(c)
+        self.assertEqual(p.context, "stored")
+        self.assertEqual(p.inject_method, "POST")
+        self.assertEqual(p.render_path, "/#/about")
+        self.assertIn("stored", xss._REPLAY)  # 저장→렌더 재현기 등록됨
+        # 저장 XSS도 실행 관찰로만 verified(반사·저장만으론 아님).
+        self.assertFalse(xss_oracle(executed=False, raw_reflected=True, escaped_reflected=False)[0])
+
     def test_juice_shop_reflected_xss_contract(self):
         c = Candidate(id="c", run_id="r", cwe="CWE-79", vuln_class="xss", attack_params={
             "base_url": "http://127.0.0.1:3000", "context": "reflected",
