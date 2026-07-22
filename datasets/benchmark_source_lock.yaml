@@ -1,0 +1,38 @@
+# Benchmark source lock (P4 / Model·Eval 소유) — M1 ablation 전용.
+#
+# ⚠️ targets/source-lock.yaml 과 **분리**된 별도 파일이다. targets/source-lock 은
+#    "runtime manifest 와 ID 가 정확히 일치"해야 하는 계약(runtime.source_lock,
+#    test_source_lock_contract)이라, manifest 없는 공개 벤치 앱을 거기 넣으면 registry
+#    테스트가 FAIL 한다(P2 2026-07-22 실측). 그래서 벤치 소스는 여기서 고정한다.
+#
+# 용도: M1(클래스별 우선순위 ablation)은 앱을 **실행하지 않고** 소스만 정적 스캔(semgrep)
+#    + RAG(code_index) + 235B rerank 한 뒤 inventory_benchmark.yaml 정답과 대조한다.
+#    → 필요한 건 소스 체크아웃뿐. build/start/test_suite/manifest 불필요.
+#
+# 계약: id 는 datasets/inventory_benchmark.yaml 의 app id 와 1:1. repository 도 그 yaml 의
+#    repo_url 과 동일. revision 은 40-hex 전체 SHA(2026-07-22 각 repo HEAD 고정). 재현성을
+#    위해 bootstrap 은 이 revision 으로 checkout 한다.
+#
+# 우선순위(P2 로컬에 우선 준비된 6개, 3군 전부 커버): dsvw, dvwa, vampi, dvga,
+#    juice-shop, 26s-w1-c2-05(음성 정답). 나머지 10개는 여력 될 때.
+
+lock_version: 1
+targets:
+  # ── 우선순위(먼저 bootstrap) ─────────────────────────────────────────────
+  dsvw: {repository: https://github.com/stamparm/DSVW, revision: 7d40f4b7939c901610ed9b85724552d60e7d63fa}
+  dvwa: {repository: https://github.com/digininja/DVWA, revision: d45ba3c4e7efa7f023f25f58ab4af9912c887057}
+  vampi: {repository: https://github.com/erev0s/VAmPI, revision: f16052dce83f05847133ec98f01c5193a41de7d8}
+  dvga: {repository: https://github.com/dolevf/Damn-Vulnerable-GraphQL-Application, revision: a961308c02d1fb462b192681c336b0739e432da7}
+  juice-shop: {repository: https://github.com/juice-shop/juice-shop, revision: 1867b926c5f50e4e692dc9c8f61821413cebe0cd}
+  26s-w1-c2-05: {repository: https://github.com/madcamp-official/26s-w1-c2-05, revision: 880b783d67721f7012ece85cd3ee9017d512493f}
+  # ── 나머지(여력 될 때) ───────────────────────────────────────────────────
+  nodegoat: {repository: https://github.com/OWASP/NodeGoat, revision: c5cb68a7084e4ae7dcc60e6a98768720a81841e8}
+  dvna: {repository: https://github.com/appsecco/dvna, revision: 9ba473add536f66ac9007966acb2a775dd31277a}
+  vulnerable-node: {repository: https://github.com/cr0hn/vulnerable-node, revision: 4e2058201e4443026c11de1799d1e2f2e37f9f9b}
+  tiredful-api: {repository: https://github.com/payatu/Tiredful-API, revision: 0134124496b3c4f1b969e51a24fd8a059104fb98}
+  dvpwa: {repository: https://github.com/anxolerd/dvpwa, revision: a1d8f89fac2e57093189853c6527c2b01fc1d9c1}
+  webgoat: {repository: https://github.com/WebGoat/WebGoat, revision: 5142935bf7c279882c3b0fc0ecec42c447de6fd5}
+  java-sec-code: {repository: https://github.com/JoyChou93/java-sec-code, revision: 4711f4e186258c6e0dd5c3863e7c9592e7e9026a}
+  crapi: {repository: https://github.com/OWASP/crAPI, revision: 73d309cc8f28bbdeed31dbb35f05dba8354de3c9}
+  bwapp: {repository: https://github.com/raesene/bWAPP, revision: 53bcfdd59c02dcfdbf79e218f0a99c54ff42d799}
+  mutillidae: {repository: https://github.com/webpwnized/mutillidae, revision: 84f2c00d9141dbb9e26a448c8288e651e0b5bb04}
