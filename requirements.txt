@@ -5,3 +5,4 @@ PyYAML==6.0.3
 sqlmodel==0.0.39
 semgrep==1.90.0
 setuptools<81  # semgrep(opentelemetry-instrumentation)이 pkg_resources를 쓴다; 81+는 이걸 뺐다
+python-dotenv>=1.0,<2

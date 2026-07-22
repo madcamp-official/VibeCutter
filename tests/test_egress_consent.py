@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import unittest
 from unittest.mock import patch
 
@@ -117,7 +118,10 @@ class RerankHookGateTests(unittest.TestCase):
         from mcp_server.tools_analysis import _rerank_hook_from_env
 
         grant_consent()
-        rerank_fn, outcome_fn = _rerank_hook_from_env()
+        # Keep this unit test deterministic even when the developer's .env
+        # contains a real endpoint; an explicitly empty value disables tiers.
+        with patch.dict(os.environ, {"VIBECUTTER_LLM_ENDPOINTS": ""}, clear=False):
+            rerank_fn, outcome_fn = _rerank_hook_from_env()
         self.assertIsNone(rerank_fn)
         self.assertFalse(outcome_fn().llm_used)
 
