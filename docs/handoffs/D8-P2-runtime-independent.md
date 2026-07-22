@@ -75,3 +75,13 @@
 - user registry snapshot과 built-in source-lock은 별도 경로입니다.
 - lease 파일은 `~/.vibecutter/leases/<target_id>/lease.json`에 저장되며 evidence DB와
   섞지 않습니다.
+
+## 사용자 확정 운영 결정 (2026-07-22)
+
+- 72B fallback 준비 전에는 235B primary 단독 운영.
+- 235B 장애 시 안전한 휴리스틱 degrade 허용. 해당 run은 LLM 사용 표본에서 별도 표시/제외.
+- Juice Shop은 발표 target에서 제외하고 Injection 후보·verifier·LLM patch 경로의 엔지니어링
+  검증용으로만 유지.
+- Juice Shop runtime smoke/검증은 CAMP default-bridge를 기준으로 하며, 기존 pinned source와
+  Compose 계약은 build/static/scope/patch 재현성을 위해 보존.
+- 발표 순서는 c1-05 → c2-04, c3-09는 holdout/clean-room으로 유지.

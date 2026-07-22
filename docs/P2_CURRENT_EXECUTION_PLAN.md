@@ -77,6 +77,18 @@ LLM health 실패·fallback·잔여 리소스가 확인된 run은 `FIXED` 통계
 7. **데모 리허설**: P1의 one-command lifecycle에 맞춰 c1-05, c2-04, c3-09 및 Juice Shop을 reset 포함으로 반복 점검하고 상태표를 갱신한다.
 6. **장애 대응**: health failure, port leak, stale overlay, volume/secret mismatch만 P2가 즉시 처리한다. verifier·patch·judge failure는 증거와 함께 P3/P1으로 넘긴다.
 
+## 4.1 사용자 확정 운영 결정 (2026-07-22)
+
+- **모델 운영**: 72B fallback이 준비되기 전까지는 235B endpoint를 primary로 단독 사용한다.
+- **endpoint 장애 시**: 안전한 휴리스틱 재랭킹/degrade를 허용한다. 이 경우 해당 run은 LLM 사용 표본이
+  아니며 P4 평가 집계에서 별도 표시하거나 제외한다.
+- **Juice Shop 용도**: 발표 데모 target에서는 제외하고, Injection 후보·verifier·LLM patch 경로를
+  검증하는 엔지니어링 테스트 target으로만 유지한다.
+- **Juice Shop 런타임**: CAMP에서 확인된 default-bridge 경로를 운영 smoke/검증 기준으로 사용한다.
+  기존 Compose 파일과 pinned source는 build·static·scope·patch 재현성을 위해 보존하며, internal
+  network의 host published-port 문제를 해결하지 않은 상태에서 발표 경로로 승격하지 않는다.
+- **발표 target 순서**: `c1-05 → c2-04`를 기본으로 하고 `c3-09`는 holdout/clean-room으로 유지한다.
+
 ## 5. 다른 역할에 필요한 입력
 
 | 대상 | P2가 기다리는 것 | P2가 되돌려 주는 것 |
