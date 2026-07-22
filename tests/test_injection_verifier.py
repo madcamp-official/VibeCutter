@@ -70,6 +70,53 @@ class InjectionOracleTests(unittest.TestCase):
         self.assertFalse(verified)
 
 
+class InjectionContentDivergenceTests(unittest.TestCase):
+    """I4: 길이-델타가 놓치는 '길이 우연 일치' 케이스를 콘텐츠 발산으로 잡되 precision은 지킨다."""
+
+    def test_similar_length_divergent_bodies_is_injectable(self):
+        # 참=행 목록, 거짓=없음 페이지 — byte 길이는 비슷(델타<임계)해도 구조가 크게 갈림 → verified.
+        true_body = "<tr><td>row</td></tr>" * 12      # 결과셋 열림(행 반복)
+        false_body = "no matching records found. " * 9  # 결과셋 닫힘(없음)
+        self.assertLess(abs(len(true_body) - len(false_body)), injection._MIN_DELTA)  # 길이 델타로는 못 잡음
+        verified, reason = injection.injection_oracle(200, true_body, 200, false_body)
+        self.assertTrue(verified)
+        self.assertIn("구조적으로", reason)
+        self.assertIn("CWE-89", reason)
+
+    def test_one_char_echo_similar_bodies_not_injectable(self):
+        # 한 글자(payload) 에코만 다른 큰 본문 → 유사도 높음 → 발산 신호 안 걸림(precision).
+        base = "search page content block " * 10
+        verified, _ = injection.injection_oracle(200, base + "1", 200, base + "2")
+        self.assertFalse(verified)
+
+    def test_sanitized_same_notfound_page_not_injectable(self):
+        # 살균 앱: 두 무효값이 같은 '없음' 페이지 → 유사도 높음 → 발산 안 걸림(precision).
+        page = "No results were found for your query. Please try again. " * 6
+        verified, _ = injection.injection_oracle(200, page, 200, page)
+        self.assertFalse(verified)
+
+    def test_noisy_baseline_suppresses_divergence(self):
+        # 발산이 커도 benign 2-sample 유사도 바닥이 낮으면(노이즈 큰 엔드포인트) 신뢰하지 않는다.
+        true_body = "<tr><td>row</td></tr>" * 12
+        false_body = "no matching records found. " * 9
+        verified, _ = injection.injection_oracle(
+            200, true_body, 200, false_body, baseline_similarity=0.30)
+        self.assertFalse(verified)
+
+    def test_short_bodies_skip_divergence_signal(self):
+        # 너무 짧은 본문(_SIM_MIN_BODY 미만)은 유사도 비율이 불안정 → 발산 신호 미적용.
+        verified, _ = injection.injection_oracle(200, "rows", 200, "none")
+        self.assertFalse(verified)
+
+    def test_unstable_status_suppresses_divergence(self):
+        # baseline 상태 불안정이면 발산 신호도 노이즈로 보고 쓰지 않는다.
+        true_body = "<tr><td>row</td></tr>" * 12
+        false_body = "no matching records found. " * 9
+        verified, _ = injection.injection_oracle(
+            200, true_body, 200, false_body, baseline_status_stable=False)
+        self.assertFalse(verified)
+
+
 class InjectionProbeTests(unittest.TestCase):
     def test_probe_from_candidate_basic(self):
         c = Candidate(id="c", run_id="r", vuln_class="injection", attack_params={
