@@ -53,6 +53,50 @@ class InjectionPrefilterTests(unittest.TestCase):
         with _tree({"x.py": 'msg = f"select items from {menu}"\n'}) as d:
             self.assertEqual(find_injection_suspects(d), [])
 
+    def test_detects_cross_line_assign_then_execute(self):
+        # 줄 넘는 sink: 동적 SQL을 변수에 만들고 다음 줄에서 실행 (문서화된 최대 recall 공백 해소)
+        src = 'def q(db, name):\n    sql = f"SELECT * FROM users WHERE name = \'{name}\'"\n    return db.execute(sql)\n'
+        with _tree({"dao.py": src}) as d:
+            sus = find_injection_suspects(d)
+            self.assertEqual(len(sus), 1)
+            self.assertEqual(sus[0].line, 2)          # 대입 라인(문자열 구성=고칠 지점)을 sink으로
+            self.assertEqual(sus[0].inject_param, "name")
+
+    def test_detects_cross_line_concat_node(self):
+        src = "function h(uid){\n  const sql = 'SELECT * FROM a WHERE id = ' + uid\n  return db.query(sql)\n}\n"
+        with _tree({"repo.ts": src}) as d:
+            self.assertEqual(len(find_injection_suspects(d)), 1)
+
+    def test_cross_line_reassigned_safe_is_not_flagged(self):
+        # 동적 SQL을 만들었다가 실행 전에 안전한(파라미터화) 값으로 재대입하면 오염 해제 → 제외(precision)
+        src = ('def q(db, u):\n'
+               '    sql = f"SELECT * FROM t WHERE x = \'{u}\'"\n'
+               '    sql = "SELECT * FROM t WHERE x = ?"\n'
+               '    return db.execute(sql, (u,))\n')
+        with _tree({"dao.py": src}) as d:
+            self.assertEqual(find_injection_suspects(d), [])
+
+    def test_cross_line_execution_too_far_is_not_flagged(self):
+        # 대입과 실행이 창(_EXEC_WINDOW) 밖으로 멀면 같은 sink으로 보지 않는다(오염 전파 추정 제한)
+        far = "def q(db, u):\n    sql = f\"SELECT * FROM t WHERE x = '{u}'\"\n" + "    pass\n" * 8 + "    return db.execute(sql)\n"
+        with _tree({"dao.py": far}) as d:
+            self.assertEqual(find_injection_suspects(d), [])
+
+    def test_rejects_commented_out_sql(self):
+        # 주석 처리된(비활성) SQL은 sink이 아니다 → 오탐 안 함(precision)
+        with _tree({"dao.py": 'def q(db, u):\n    # return db.execute(f"SELECT * FROM t WHERE x = \'{u}\'")\n    return safe(u)\n'}) as d:
+            self.assertEqual(find_injection_suspects(d), [])
+
+    def test_rejects_block_commented_sql(self):
+        src = 'def q(db, u):\n    /*\n    db.execute(f"SELECT * FROM t WHERE x = \'{u}\'")\n    */\n    return safe(u)\n'
+        with _tree({"dao.ts": src}) as d:
+            self.assertEqual(find_injection_suspects(d), [])
+
+    def test_trailing_comment_does_not_suppress_real_sink(self):
+        # 후행 주석(코드 뒤 # note)은 라인 시작이 아니므로 실제 sink을 억제하지 않는다
+        with _tree({"dao.py": 'def q(db, u):\n    return db.execute(f"SELECT * FROM t WHERE x = \'{u}\'")  # danger\n'}) as d:
+            self.assertEqual(len(find_injection_suspects(d)), 1)
+
 
 class XssPrefilterTests(unittest.TestCase):
     def test_detects_dynamic_dangerously_set_inner_html(self):
@@ -79,6 +123,46 @@ class XssPrefilterTests(unittest.TestCase):
             sus = find_xss_suspects(d)
             self.assertEqual(len(sus), 1)
             self.assertEqual(sus[0].sink, "v-html")
+
+    def test_detects_django_mark_safe_dynamic(self):
+        with _tree({"views.py": 'def v(name):\n    return mark_safe(f"<h1>{name}</h1>")\n'}) as d:
+            sus = find_xss_suspects(d)
+            self.assertEqual(len(sus), 1)
+            self.assertEqual(sus[0].sink, "django.mark_safe")
+            self.assertEqual(sus[0].score, 1.0)  # escape를 끄는 지점 → strong
+
+    def test_detects_flask_render_template_string(self):
+        with _tree({"views.py": 'def v(name):\n    return render_template_string("<h1>" + name + "</h1>")\n'}) as d:
+            sus = find_xss_suspects(d)
+            self.assertEqual(len(sus), 1)
+            self.assertEqual(sus[0].sink, "flask.render_template_string")
+
+    def test_detects_insert_adjacent_html_dynamic(self):
+        with _tree({"dom.js": 'function r(html){ el.insertAdjacentHTML("beforeend", html); }\n'}) as d:
+            sus = find_xss_suspects(d)
+            self.assertEqual(len(sus), 1)
+            self.assertEqual(sus[0].sink, "insertAdjacentHTML")
+
+    def test_detects_jinja_safe_filter(self):
+        with _tree({"page.html": "<div>{{ user_bio | safe }}</div>\n"}) as d:
+            sus = find_xss_suspects(d)
+            self.assertEqual(len(sus), 1)
+            self.assertEqual(sus[0].sink, "jinja.safe")
+
+    def test_rejects_mark_safe_literal(self):
+        # 정적 리터럴을 mark_safe 하는 건 안전 → 제외(precision)
+        with _tree({"views.py": 'def v():\n    return mark_safe("<b>static</b>")\n'}) as d:
+            self.assertEqual(find_xss_suspects(d), [])
+
+    def test_rejects_python_list_append_not_xss(self):
+        # jQuery `.append`류를 sink에 안 넣었으므로 파이썬 list.append는 오탐 안 함
+        with _tree({"svc.py": "def add(items, x):\n    items.append(x)\n    return items\n"}) as d:
+            self.assertEqual(find_xss_suspects(d), [])
+
+    def test_rejects_commented_out_xss_sink(self):
+        # 주석 처리된 innerHTML 할당은 sink이 아니다 → 오탐 안 함(precision)
+        with _tree({"dom.js": "function r(x){\n  // el.innerHTML = x;\n  el.textContent = x;\n}\n"}) as d:
+            self.assertEqual(find_xss_suspects(d), [])
 
 
 if __name__ == "__main__":

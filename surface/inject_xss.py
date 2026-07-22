@@ -49,17 +49,35 @@ _DYN = re.compile(
 _EXEC = re.compile(r"execute|executeQuery|createQuery|createNativeQuery|\.raw\s*\(|\.query\s*\(|cursor|prepareStatement|db\.exec", re.I)
 # 로깅/출력 라인은 쿼리가 아니다 → 제외.
 _LOG_LINE = re.compile(r"console\.(?:log|info|warn|error|debug)|logger?\.|logging\.|System\.out|\bprintln?\s*\(", re.I)
+# 변수 대입 LHS(줄 넘는 sink용): `sql = ` / `String q += ` / `const s = `. `==`는 제외.
+_SQL_ASSIGN = re.compile(r"^\s*(?:[\w.<>\[\]]+\s+)*?(\w+)\s*\+?=(?!=)")
+_EXEC_WINDOW = 6  # 동적 SQL 문자열 대입 후 이 줄 수 안에서 실행되면 같은 sink으로 본다
 
 # ── XSS 신호: 위험 sink + 동적 값 ─────────────────────────────────────────────────────
+# 클라이언트 DOM sink + 서버 템플릿(escape를 명시적으로 끄는 지점). jQuery `.append/.prepend`류는
+# 파이썬 list.append 등과 구분이 안 돼 오탐이 커서 제외한다(`.html(`만 유지).
 _XSS_SINKS: list[tuple[str, re.Pattern]] = [
     ("dangerouslySetInnerHTML", re.compile(r"dangerouslySetInnerHTML\s*=\s*\{\{[^}]*__html\s*:\s*([^}]+)\}")),
     ("v-html", re.compile(r'v-html\s*=\s*["\']([^"\']+)["\']')),
     ("innerHTML", re.compile(r"\.innerHTML\s*=(?!=)\s*(.+)")),
     ("outerHTML", re.compile(r"\.outerHTML\s*=(?!=)\s*(.+)")),
+    ("insertAdjacentHTML", re.compile(r"insertAdjacentHTML\s*\(\s*[^,]+,\s*([^)]+)")),  # 2번째 인자=HTML
     ("document.write", re.compile(r"document\.write(?:ln)?\s*\(\s*([^)]+)")),
     ("jquery.html", re.compile(r"\.html\s*\(\s*([^)]+)\)")),
     ("HTMLResponse", re.compile(r'HTMLResponse\s*\(\s*(f["\'][^"\']*\{[^}]+\}[^"\']*["\']|[^)]*\+[^)]*)')),
+    # ── 서버 템플릿: 출력 인코딩을 명시적으로 끄는 지점(입력이 동적이면 XSS) ──
+    ("django.mark_safe", re.compile(r"\bmark_safe\s*\(\s*([^)]+)")),
+    ("flask.render_template_string", re.compile(r"\brender_template_string\s*\(\s*([^),]+)")),
+    ("markupsafe.Markup", re.compile(r"\bMarkup\s*\(\s*([^)]+)")),
+    ("jinja.safe", re.compile(r"\{\{\s*([^}|]+?)\s*\|\s*safe\b")),          # {{ x|safe }}
+    ("thymeleaf.utext", re.compile(r'th:utext\s*=\s*["\']([^"\']+)["\']')),  # th:utext="${x}"
 ]
+# 프레임워크가 escape를 명시적으로 끄는 sink → 높음(0.9~1.0). 나머지 DOM sink는 0.7.
+_STRONG_SINKS = frozenset({
+    "dangerouslySetInnerHTML", "v-html", "HTMLResponse",
+    "django.mark_safe", "flask.render_template_string", "markupsafe.Markup",
+    "jinja.safe", "thymeleaf.utext",
+})
 _LITERAL = re.compile(r"""^\s*(["'])(?:\\.|(?!\1).)*\1\s*$""")  # 순수 문자열 리터럴(무해)
 # 인코딩/살균을 거친 값은 안전 → 제외.
 _SANITIZED = re.compile(r"encode|escape|sanitiz|dompurify|purif|striptags|\.textContent|xss[_-]?clean", re.I)
@@ -98,6 +116,12 @@ def _interp_var(snippet: str) -> str:
     return next((g for g in m.groups() if g), "") if m else ""
 
 
+def _assigned_var(line: str) -> str:
+    """`sql = ...` / `String q += ...` / `const s = ...`의 LHS 변수명. 없으면 ""."""
+    m = _SQL_ASSIGN.match(line)
+    return m.group(1) if m else ""
+
+
 def _is_dynamic(value: str) -> bool:
     """XSS sink 값이 동적(변수/식)이고 살균을 안 거쳤는가. 리터럴·인코딩된 값이면 무해."""
     v = value.strip().rstrip(",);")
@@ -122,32 +146,85 @@ def _stack_of(suffix: str) -> str:
     return {".java": "java", ".py": "python"}.get(suffix, "node")
 
 
+def _code_lines(text: str):
+    """(줄번호, 라인) — 통째 주석 라인(`#`/`//`/`--`)과 `/* */` 블록 주석은 건너뛴다.
+
+    주석 처리된(비활성) 코드가 SQL/XSS sink로 오탐되는 것을 막는다(precision). 줄 안에 SQL 문자열이
+    들어있고 `#`가 SQL의 MySQL 주석일 수는 있으나, 여기서는 **라인이 주석 마커로 시작할 때만** 건너뛰어
+    실제 코드 라인의 후행 주석(`code  # note`)은 영향받지 않는다. 줄번호는 원본 기준으로 유지한다.
+    """
+    in_block = False
+    for i, line in enumerate(text.splitlines(), 1):
+        s = line.lstrip()
+        if in_block:
+            if "*/" in line:
+                in_block = False
+            continue
+        if s.startswith(("#", "//", "--")):
+            continue
+        if s.startswith("/*"):
+            if "*/" not in line:
+                in_block = True
+            continue
+        yield i, line
+
+
 def find_injection_suspects(source_root: str | Path) -> list[InjectionSuspect]:
     """source_root에서 원시 SQL 동적 결합+실행 의심 라인을 반환.
 
-    조건(전부 충족): 강한 SQL 문장 형태 + 동적 결합 + 실행 지점 인접 + 로그 라인 아님.
+    두 형태를 잡는다:
+      (A) **한 줄**에 SQL 문장 + 동적 결합 + 실행 (`cursor.execute(f"SELECT ... {x}")`).
+      (B) **줄 넘는** sink — 동적 SQL 문자열을 변수에 대입한 뒤 몇 줄 안에서 그 변수를 실행
+          (`sql = f"SELECT ... {x}"` … `cursor.execute(sql)`). 실행 전 안전한 값으로 재대입되면 해제.
+    로그 라인은 제외. 줄 넘는 건은 대입 라인(문자열이 만들어지는 곳=고칠 지점)을 sink으로 보고한다.
     """
     root = Path(source_root)
     out: list[InjectionSuspect] = []
     seen: set[tuple[str, int]] = set()
+
+    def _emit(line_no: int, rel: str, stack: str, snippet: str, score: float, reason: str) -> None:
+        key = (rel, line_no)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(InjectionSuspect(
+            file=rel, line=line_no, stack=stack, inject_param=_interp_var(snippet),
+            snippet=snippet.strip()[:160], score=score, reason=reason,
+        ))
+
     for p in _iter_sources(root):  # .java/.py/.ts/.js, tests/dist/node_modules 제외
         text = p.read_text(encoding="utf-8", errors="replace")
         rel = str(p.relative_to(root)) if p.is_relative_to(root) else str(p)
         stack = _stack_of(p.suffix)
-        for i, line in enumerate(text.splitlines(), 1):
+        pending: dict[str, tuple[int, str]] = {}  # 동적 SQL 대입 변수 → (줄번호, 라인)
+        for i, line in _code_lines(text):  # 통째 주석/블록 주석 라인 제외(precision)
             if _LOG_LINE.search(line):
                 continue
-            if not (_SQL_STMT.search(line) and _DYN.search(line) and _EXEC.search(line)):
+            has_sql = bool(_SQL_STMT.search(line))
+            has_dyn = bool(_DYN.search(line))
+            has_exec = bool(_EXEC.search(line))
+            # (A) 한 줄에 전부 — 확정.
+            if has_sql and has_dyn and has_exec:
+                _emit(i, rel, stack, line, 1.0,
+                      "원시 SQL 문장이 변수와 동적 결합돼 실행됨(파라미터화 아님) → SQL Injection 의심")
                 continue
-            key = (rel, i)
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(InjectionSuspect(
-                file=rel, line=i, stack=stack, inject_param=_interp_var(line),
-                snippet=line.strip()[:160], score=1.0,
-                reason="원시 SQL 문장이 변수와 동적 결합돼 실행됨(파라미터화 아님) → SQL Injection 의심",
-            ))
+            # (B-1) 동적 SQL 문자열이 변수에 대입 — 실행을 기다린다.
+            if has_sql and has_dyn:
+                var = _assigned_var(line)
+                if var:
+                    pending[var] = (i, line)
+            # (B-2) 같은 변수를 안전한 값(동적 아님)으로 재대입 → 오염 해제(precision).
+            avar = _assigned_var(line)
+            if avar and avar in pending and not (has_sql and has_dyn):
+                del pending[avar]
+            # (B-3) 실행 라인이 대기 중 동적 SQL 변수를 참조 → 대입 라인을 sink으로 flag.
+            if has_exec:
+                for var, (aline, atext) in list(pending.items()):
+                    if 0 <= i - aline <= _EXEC_WINDOW and re.search(rf"\b{re.escape(var)}\b", line):
+                        _emit(aline, rel, stack, atext, 0.9,
+                              f"동적 결합된 SQL 문자열이 {i - aline}줄 뒤 실행됨(줄 넘는 sink, "
+                              "파라미터화 아님) → SQL Injection 의심")
+                        del pending[var]
     return out
 
 
@@ -159,7 +236,7 @@ def find_xss_suspects(source_root: str | Path) -> list[XssSuspect]:
     for p in _iter_frontend(root):
         text = p.read_text(encoding="utf-8", errors="replace")
         rel = str(p.relative_to(root)) if p.is_relative_to(root) else str(p)
-        for i, line in enumerate(text.splitlines(), 1):
+        for i, line in _code_lines(text):  # 통째 주석/블록 주석 라인 제외(precision)
             for sink_name, rx in _XSS_SINKS:
                 m = rx.search(line)
                 if not m or not _is_dynamic(m.group(1)):
@@ -168,8 +245,8 @@ def find_xss_suspects(source_root: str | Path) -> list[XssSuspect]:
                 if key in seen:
                     continue
                 seen.add(key)
-                # v-html/dangerouslySetInnerHTML/HTMLResponse는 프레임워크가 명시적으로 살균을 끄는 지점 → 높음
-                strong = sink_name in ("dangerouslySetInnerHTML", "v-html", "HTMLResponse")
+                # 프레임워크가 명시적으로 살균을 끄는 지점(서버 템플릿 포함) → 높음
+                strong = sink_name in _STRONG_SINKS
                 out.append(XssSuspect(
                     file=rel, line=i, sink=sink_name, snippet=line.strip()[:160],
                     score=1.0 if strong else 0.7,

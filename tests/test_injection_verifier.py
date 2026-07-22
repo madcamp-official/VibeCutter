@@ -110,6 +110,16 @@ class InjectionSafetyTests(unittest.TestCase):
             diff = sum(1 for a, b in zip(true_pl, false_pl) if a != b)
             self.assertLessEqual(diff, 1)
 
+    def test_default_budget_pairs_cover_diverse_contexts(self):
+        # 기본 예산(10 = baseline 2 + 4쌍×2)에서 시도되는 상위 4쌍이 문자열·숫자·괄호 컨텍스트를
+        # 모두 덮어야 한다. 괄호로 감싼 WHERE(`(col='...')`)는 괄호를 닫아야 tautology가 성립 —
+        # 이 컨텍스트가 예산 밖으로 밀리면 그런 앱에서 verify recall이 떨어진다(회귀 방지).
+        top4 = injection._PAYLOAD_PAIRS[:(10 - 2) // 2]
+        joined = " ".join(t for t, _ in top4)
+        self.assertIn("(", joined, "괄호 닫기 컨텍스트가 기본 예산 상위 4쌍에 없음")
+        self.assertIn("1 OR 1=1", joined, "숫자 컨텍스트가 상위 4쌍에 없음")
+        self.assertTrue(any(t.startswith("'") for t, _ in top4), "홑따옴표 문자열 컨텍스트 없음")
+
     def test_non_get_without_read_query_is_refused(self):
         # 비-GET은 read_query 보증 없이는 재현 거부(파괴적 쿼리에 불리언 payload 방지, 추측 금지).
         probe = injection.InjectionProbe(
