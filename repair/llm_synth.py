@@ -115,12 +115,48 @@ def _looks_like_diff(text: str) -> bool:
     return "--- " in text and "+++ " in text
 
 
+# `@@ -old_start[,old_count] +new_start[,new_count] @@ [trailer]`. count 생략은 1줄 hunk(git 표준).
+_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$")
+
+
+def _fix_hunk_headers(diff: str) -> str:
+    """LLM이 쓴 hunk header의 줄 수(`@@ -a,b +c,d @@`)가 실제 본문과 다르면 재계산해 고친다.
+
+    모델이 시작 줄번호(a/c)는 대체로 맞게 쓰지만 줄 수(b/d)를 잘못 세는 경우가 있다(2026-07-22,
+    X7 XSS 라이브 검증 중 발견 — `@@ -156,7 +156,7 @@`인데 본문은 5줄뿐이라 `git apply`가
+    "corrupt patch"로 통째로 거부, `vc_apply_patch` 자체가 실패). 본문(context/removed/added
+    줄)은 재작성하지 않는다 — count만 본문을 실제로 세어 맞춘다. TODO 항목 "diff 파서 강건화"
+    반영.
+    """
+    lines = diff.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        m = _HUNK_RE.match(lines[i])
+        if m is None:
+            out.append(lines[i])
+            i += 1
+            continue
+        old_start, _old_count, new_start, _new_count, trailer = m.groups()
+        i += 1
+        body: list[str] = []
+        while i < len(lines) and lines[i][:1] in (" ", "+", "-", "\\"):
+            body.append(lines[i])
+            i += 1
+        old_count = sum(1 for line in body if line[:1] in (" ", "-"))
+        new_count = sum(1 for line in body if line[:1] in (" ", "+"))
+        out.append(f"@@ -{old_start},{old_count} +{new_start},{new_count} @@{trailer}")
+        out.extend(body)
+    return "\n".join(out)
+
+
 def parse_diffs(raw: str, *, expected_file: str) -> list[str]:
     """모델 원문에서 unified diff 블록을 뽑아 expected_file을 실제로 건드리는 것만 남긴다.
 
     견고성(S-3): 펜스 언어 무관 추출 → diff 마커를 가진 블록만 → 펜스가 없으면 원문 전체 폴백 →
     `+++ …`가 expected_file을 (접미 일치로) 가리키는 것만. 설명문·오타 경로·빈 응답이 섞여도
     후보를 조용히 버릴 뿐 **예외를 던지지 않는다**(합성 실패가 파이프라인을 죽이지 않게).
+    hunk header count는 `_fix_hunk_headers`로 본문 기준 재계산한다(모델이 자주 틀리는 지점).
     """
     try:
         text = raw or ""
@@ -132,7 +168,7 @@ def parse_diffs(raw: str, *, expected_file: str) -> list[str]:
             norm = block.strip("\n") + "\n"
             targets = _diff_target_files(norm)
             if targets and any(_path_matches(t, expected_file) for t in targets):
-                kept.append(norm)
+                kept.append(_fix_hunk_headers(norm))
         return kept
     except Exception:
         return []  # 파싱은 어떤 입력에도 터지지 않는다 — 후보를 못 만들 뿐.
