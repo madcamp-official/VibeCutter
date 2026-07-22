@@ -110,29 +110,50 @@ def main(app_ids: list[str]) -> None:
         print("실행할 소스가 하나도 없음. checkout 먼저.")
         return
 
-    # 클래스별 순위 ablation(MRR) — heuristic vs rag-llm
-    by_class = compare_by_class(heuristic, ragllm, {k: truth[k] for k in heuristic if k in truth})
-    # 클래스별 precision (정답 대조; set 기반이라 두 팔 동일 → detection precision)
+    # rag-llm 표본: **235B가 실제로 응답한 앱만** (P2 요청 — 미응답/degrade run 은 제외).
+    # candidate 1개라 rerank 자체가 무의미(호출 안 됨)한 경우도 llm_used=False → 제외된다.
+    llm_apps = [a for a in heuristic if per_app_meta[a]["llm_used"]]
+    excluded = [a for a in heuristic if not per_app_meta[a]["llm_used"]]
+
+    # 클래스별 순위 ablation(MRR): rag-llm 표본(llm_apps)만. heuristic 도 같은 앱집합으로 비교.
+    by_class = compare_by_class(
+        {a: heuristic[a] for a in llm_apps},
+        {a: ragllm[a] for a in llm_apps},
+        {a: truth[a] for a in llm_apps if a in truth},
+    ) if llm_apps else {}
+    # precision/recall(detection)은 스캔한 전체 앱 기준(rerank 무관, SAST 산출).
     report = evaluate({k: predictions[k] for k in heuristic},
                       {k: truth[k] for k in heuristic if k in truth})
 
-    print("\n" + "=" * 72)
-    print(f"M1 결과 (앱 {list(heuristic)}) — RQ3 클래스별")
-    print("=" * 72)
-    print(f"{'class':<12}{'MRR_heur':>10}{'MRR_ragllm':>12}{'Δ':>8}{'precision':>11}{'recall':>9}{'cands':>7}")
-    print("-" * 72)
+    print("\n" + "=" * 78)
+    print("M1 결과 — 앱별 요약")
+    print("=" * 78)
+    print(f"{'app':<16}{'cands':>6}{'kept':>6}{'idor':>6}{'inj':>6}{'xss':>6}{'235B':>16}")
+    print("-" * 78)
+    for a, m in per_app_meta.items():
+        fc = m['focus_counts']
+        tag = f"{m['tier']}/{m['endpoint_health']}"
+        print(f"{a:<16}{m['candidates']:>6}{m['kept']:>6}{fc['idor']:>6}{fc['injection']:>6}{fc['xss']:>6}{tag:>16}")
+    print("-" * 78)
+
+    print(f"\nrag-llm 표본(235B 실제 응답): {llm_apps or '없음'}")
+    print(f"제외(235B 미응답 → 표본 제외): {excluded or '없음'}")
+
+    print("\n" + "=" * 78)
+    print("RQ3 클래스별 — precision/recall(전체 앱) · MRR(rag-llm 표본만)")
+    print("=" * 78)
+    print(f"{'class':<12}{'precision':>11}{'recall':>9}{'cands':>7}   {'MRR_heur':>9}{'MRR_ragllm':>12}{'Δ':>8}")
+    print("-" * 78)
     total_focus = {c: sum(m['focus_counts'].get(c, 0) for m in per_app_meta.values()) for c in FOCUS_CLASSES}
     for c in FOCUS_CLASSES:
         conf = report.per_group[c]
+        base = f"{c:<12}{conf.precision:>11.2f}{conf.recall:>9.2f}{total_focus[c]:>7}   "
         if c in by_class:
             b = by_class[c]
-            print(f"{c:<12}{b.heuristic_mrr:>10.3f}{b.ragllm_mrr:>12.3f}{b.mrr_delta:>+8.3f}"
-                  f"{conf.precision:>11.2f}{conf.recall:>9.2f}{total_focus[c]:>7}")
+            print(base + f"{b.heuristic_mrr:>9.3f}{b.ragllm_mrr:>12.3f}{b.mrr_delta:>+8.3f}")
         else:
-            print(f"{c:<12}{'—':>10}{'—':>12}{'—':>8}{conf.precision:>11.2f}{conf.recall:>9.2f}{total_focus[c]:>7}")
-    print("-" * 72)
-    print(f"235B health/tier (앱별): " +
-          ", ".join(f"{a}={m['tier']}/{m['endpoint_health']}" for a, m in per_app_meta.items()))
+            print(base + f"{'—':>9}{'—':>12}{'—':>8}")
+    print("-" * 78)
 
 
 def _main() -> None:
