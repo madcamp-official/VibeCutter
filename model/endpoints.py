@@ -17,8 +17,8 @@ env (모두 선택 — 없으면 아래 기본값):
   VIBECUTTER_LLM_API_KEY     Authorization: Bearer <key>
   VIBECUTTER_LLM_TIMEOUT     기본 600 (7.7 tok/s → 긴 응답이 정상)
   VIBECUTTER_LLM_MAX_TOKENS  기본 512 (rerank 는 인덱스 나열이면 충분 — 폭주 방지)
-  VIBECUTTER_LLM_FALLBACK_ENDPOINT  7B base_url (미설정이면 fallback 없음)
-  VIBECUTTER_LLM_FALLBACK_MODEL     기본 Qwen/Qwen2.5-Coder-7B-Instruct
+  VIBECUTTER_LLM_FALLBACK_ENDPOINT  72B base_url (미설정이면 fallback 없음)
+  VIBECUTTER_LLM_FALLBACK_MODEL     기본 qwen2.5-72b-awq
   VIBECUTTER_LLM_FALLBACK_TIMEOUT   기본 60
   VIBECUTTER_LLM_DISABLE     "1" 이면 LLM 훅을 전부 끈다(휴리스틱만 — CI/오프라인).
 
@@ -42,11 +42,9 @@ DEFAULT_PRIMARY_ENDPOINTS = (
 DEFAULT_PRIMARY_MODEL = "qwen3-235b"
 DEFAULT_PRIMARY_TIMEOUT = 600.0
 DEFAULT_PRIMARY_MAX_TOKENS = 512
-# fallback tier 의 기본 모델. 팀 결정: fallback 을 **72B 로 전환**(7B 는 72B 작동 확인 후 폐기,
-# REMAINING_PLAN §3). ⚠️ 72B 의 **정확한 model id 는 P2 가 endpoint 기동 시 제공** — 확정되면
-# 이 상수를 그 id 로 교체하거나 env `VIBECUTTER_LLM_FALLBACK_MODEL=<72B id>` 로 지정한다.
-# 그 전까지는 레거시 7B 문자열을 둔다(fallback endpoint 자체가 미설정이라 현재 미사용).
-DEFAULT_FALLBACK_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"  # TODO(P2 72B id): 72B 로 교체
+# 팀 제공 fallback endpoint의 현재 모델 ID. 운영 환경에서 모델명이 바뀌면
+# `VIBECUTTER_LLM_FALLBACK_MODEL`로 override한다.
+DEFAULT_FALLBACK_MODEL = "qwen2.5-72b-awq"
 DEFAULT_FALLBACK_TIMEOUT = 60.0
 
 
