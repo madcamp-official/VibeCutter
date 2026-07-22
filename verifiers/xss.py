@@ -256,6 +256,28 @@ def _replay_stored(probe: XssProbe, flag: str, max_requests: int) -> list[_Attem
 _REPLAY = {"reflected": _replay_reflected, "stored": _replay_stored}
 
 
+def _playwright_available() -> tuple[bool, str]:
+    """chromium 격리 브라우저가 실행 가능한지 사전점검한다(브라우저를 띄우진 않는다). (가능, 사유).
+
+    없으면 verify()가 크래시하거나 억지로 verified 처리하지 않고, 명확한 사유로 degrade하게 한다(X5).
+    chromium이 없으면 XSS 실행 관찰이 불가능하므로 '검증 불가'가 정직한 결과다.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception:
+        return False, "playwright 미설치 — `pip install playwright && playwright install chromium` 필요"
+    try:
+        import os
+
+        with sync_playwright() as pw:
+            exe = pw.chromium.executable_path
+        if not exe or not os.path.exists(exe):
+            return False, "chromium 브라우저 미설치 — `playwright install chromium` 필요"
+    except Exception as exc:  # noqa: BLE001 — 사전점검 실패도 degrade로(크래시 금지)
+        return False, f"격리 브라우저 사전점검 실패({type(exc).__name__}) — chromium 설치·권한 확인 필요"
+    return True, ""
+
+
 # --- ③ verify() 조립 + evidence 저장 --------------------------------------------------
 
 
@@ -275,6 +297,15 @@ def verify(
     strategy = _REPLAY.get(probe.context)
     if strategy is None:
         raise ValueError(f"지원하지 않는 XSS context {probe.context!r} (지원: {sorted(_REPLAY)})")
+
+    # X5: 격리 브라우저 사전점검. 없으면 크래시·억지 verified 대신 명확한 사유로 degrade한다.
+    ok, why = _playwright_available()
+    if not ok:
+        return VerifierOutput(
+            verified=False, evidence_ids=[],
+            reason=(f"XSS 검증 불가 — {why}. 격리 브라우저 없이는 스크립트 실행을 관찰할 수 없어 "
+                    "verified로 처리하지 않는다(안전). 브라우저 설치 후 재검증 필요."),
+        )
 
     flag = f"__vc_xss_{uuid4().hex[:8]}"  # 재현마다 fresh — 이전 실행이 남긴 플래그 오판 방지
     attempts = strategy(probe, flag, max_requests)

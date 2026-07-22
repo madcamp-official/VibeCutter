@@ -126,6 +126,28 @@ def _xss_fix_hint(cwe: str | None, file: str) -> str:
     return " 수정 방향: 출력 컨텍스트에 맞는 이스케이프/인코딩을 적용하고, HTML이 불필요하면 텍스트로 렌더하라."
 
 
+def _sqli_fix_hint(cwe: str | None, file: str) -> str:
+    """CWE-89 SQLi의 **프레임워크별 파라미터화 수정 방향**. rationale에 실어 235B가 문자열 결합을
+    그대로 두거나 접근제어 가드를 만드는 대신 정확한 파라미터 바인딩을 하게 한다(X6의 injection 짝).
+    비-SQLi면 "". 파일 확장자로 프레임워크 추정."""
+    if _cwe_num(cwe) != "89":
+        return ""
+    low = (file or "").lower()
+    if low.endswith((".ts", ".js")):
+        return (" 수정 방향(Node): 문자열 결합·템플릿 리터럴 대신 파라미터 바인딩을 써라 — "
+                "Sequelize `sequelize.query(sql, { replacements: { k: v } })`(또는 `:k` bind), knex는 `?` "
+                "바인딩, node-postgres는 `$1` placeholder + values 배열.")
+    if low.endswith(".py"):
+        return (" 수정 방향(Python): `cursor.execute(sql, params)`처럼 파라미터화(`%s`/`?` placeholder + "
+                "튜플)하거나, SQLAlchemy는 `text(sql).bindparams(...)` 또는 ORM `filter(Model.col == v)`를 써라. "
+                "f-string/`+`/`.format`으로 값을 잇지 마라.")
+    if low.endswith(".java"):
+        return (" 수정 방향(Java): 문자열 결합 대신 `PreparedStatement` + `setString`/`setInt` 바인딩, JPA는 "
+                "named/positional 파라미터(`:name`)를 써라.")
+    return (" 수정 방향: 사용자 입력을 쿼리 문자열에 잇지 말고 prepared statement/파라미터 바인딩으로 "
+            "값을 전달하라(식별자가 꼭 동적이면 화이트리스트 검증).")
+
+
 def _sast_files(finding: Finding) -> set[str]:
     """Finding.source_symbols("파일:줄")에서 파일 경로만 뽑는다(SAST 교차검증용)."""
     return {s.split(":")[0] for s in finding.source_symbols if ":" in s}
@@ -227,7 +249,7 @@ def localize(finding: Finding, *, source_root: str | Path) -> RootCause:
             f"공격이 실제로 이 경로로 도달했다"
             f"{' — SAST 지목 위치와도 일치' if agree else ''}. "
             f"{finding.cwe or 'IDOR'}의 원인은 {_root_cause_reason(finding.cwe)}.{sink_note} "
-            f"권장 수정 계층: {layer}.{_xss_fix_hint(finding.cwe, hint_file)}"
+            f"권장 수정 계층: {layer}.{_xss_fix_hint(finding.cwe, hint_file)}{_sqli_fix_hint(finding.cwe, hint_file)}"
         )
         return RootCause(file=file, symbol=symbol, rationale=rationale)
 
@@ -241,7 +263,7 @@ def localize(finding: Finding, *, source_root: str | Path) -> RootCause:
                 f"소스 route 매핑에서 endpoint {endpoint!r}를 못 찾아(비-Spring이거나 파서 한계), "
                 f"SAST가 지목한 위치를 근본 원인 후보로 채택했다. "
                 f"{finding.cwe or '취약점'}의 원인은 {_root_cause_reason(finding.cwe)}. "
-                f"수정 계층은 파일 확인 후 결정 권장.{_xss_fix_hint(finding.cwe, file)}"
+                f"수정 계층은 파일 확인 후 결정 권장.{_xss_fix_hint(finding.cwe, file)}{_sqli_fix_hint(finding.cwe, file)}"
             ),
         )
 

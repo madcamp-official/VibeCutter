@@ -80,6 +80,29 @@ class XssPayloadSafetyTests(unittest.TestCase):
         self.assertIn("ScRiPt", joined, "대소문자 혼합 우회 payload 없음")
 
 
+class XssPlaywrightPreflightTests(unittest.TestCase):
+    """X5: 격리 브라우저 미설치 시 verify()가 크래시·억지 verified 대신 명확한 사유로 degrade한다."""
+
+    def test_verify_degrades_cleanly_when_browser_unavailable(self):
+        from unittest.mock import patch
+
+        c = Candidate(id="c", run_id="r", cwe="CWE-79", vuln_class="xss", attack_params={
+            "base_url": "http://127.0.0.1:9", "context": "reflected", "inject_path": "/s", "inject_param": "q"})
+        with patch("verifiers.xss._playwright_available", return_value=(False, "chromium 미설치")):
+            out = xss.verify("run-x5", c)  # 브라우저 안 띄우고 즉시 degrade → evidence 미기록
+        self.assertFalse(out.verified)
+        self.assertIn("검증 불가", out.reason)
+        self.assertIn("chromium", out.reason)
+        self.assertEqual(out.evidence_ids, [])
+
+    def test_preflight_returns_tuple(self):
+        ok, why = xss._playwright_available()
+        self.assertIsInstance(ok, bool)
+        self.assertIsInstance(why, str)
+        if not ok:
+            self.assertTrue(why)  # 불가하면 사유가 있어야
+
+
 class JuiceShopXssContractTests(unittest.TestCase):
     """P2 Juice Shop XSS 후보 1(reflected 검색)의 verify 계약 shape 잠금(docs/P3_JUICE_SHOP_XSS_CONTRACT.md).
 
