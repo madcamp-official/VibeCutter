@@ -53,6 +53,35 @@ class InjectionPrefilterTests(unittest.TestCase):
         with _tree({"x.py": 'msg = f"select items from {menu}"\n'}) as d:
             self.assertEqual(find_injection_suspects(d), [])
 
+    def test_detects_cross_line_assign_then_execute(self):
+        # 줄 넘는 sink: 동적 SQL을 변수에 만들고 다음 줄에서 실행 (문서화된 최대 recall 공백 해소)
+        src = 'def q(db, name):\n    sql = f"SELECT * FROM users WHERE name = \'{name}\'"\n    return db.execute(sql)\n'
+        with _tree({"dao.py": src}) as d:
+            sus = find_injection_suspects(d)
+            self.assertEqual(len(sus), 1)
+            self.assertEqual(sus[0].line, 2)          # 대입 라인(문자열 구성=고칠 지점)을 sink으로
+            self.assertEqual(sus[0].inject_param, "name")
+
+    def test_detects_cross_line_concat_node(self):
+        src = "function h(uid){\n  const sql = 'SELECT * FROM a WHERE id = ' + uid\n  return db.query(sql)\n}\n"
+        with _tree({"repo.ts": src}) as d:
+            self.assertEqual(len(find_injection_suspects(d)), 1)
+
+    def test_cross_line_reassigned_safe_is_not_flagged(self):
+        # 동적 SQL을 만들었다가 실행 전에 안전한(파라미터화) 값으로 재대입하면 오염 해제 → 제외(precision)
+        src = ('def q(db, u):\n'
+               '    sql = f"SELECT * FROM t WHERE x = \'{u}\'"\n'
+               '    sql = "SELECT * FROM t WHERE x = ?"\n'
+               '    return db.execute(sql, (u,))\n')
+        with _tree({"dao.py": src}) as d:
+            self.assertEqual(find_injection_suspects(d), [])
+
+    def test_cross_line_execution_too_far_is_not_flagged(self):
+        # 대입과 실행이 창(_EXEC_WINDOW) 밖으로 멀면 같은 sink으로 보지 않는다(오염 전파 추정 제한)
+        far = "def q(db, u):\n    sql = f\"SELECT * FROM t WHERE x = '{u}'\"\n" + "    pass\n" * 8 + "    return db.execute(sql)\n"
+        with _tree({"dao.py": far}) as d:
+            self.assertEqual(find_injection_suspects(d), [])
+
 
 class XssPrefilterTests(unittest.TestCase):
     def test_detects_dynamic_dangerously_set_inner_html(self):

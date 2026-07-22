@@ -49,6 +49,9 @@ _DYN = re.compile(
 _EXEC = re.compile(r"execute|executeQuery|createQuery|createNativeQuery|\.raw\s*\(|\.query\s*\(|cursor|prepareStatement|db\.exec", re.I)
 # 로깅/출력 라인은 쿼리가 아니다 → 제외.
 _LOG_LINE = re.compile(r"console\.(?:log|info|warn|error|debug)|logger?\.|logging\.|System\.out|\bprintln?\s*\(", re.I)
+# 변수 대입 LHS(줄 넘는 sink용): `sql = ` / `String q += ` / `const s = `. `==`는 제외.
+_SQL_ASSIGN = re.compile(r"^\s*(?:[\w.<>\[\]]+\s+)*?(\w+)\s*\+?=(?!=)")
+_EXEC_WINDOW = 6  # 동적 SQL 문자열 대입 후 이 줄 수 안에서 실행되면 같은 sink으로 본다
 
 # ── XSS 신호: 위험 sink + 동적 값 ─────────────────────────────────────────────────────
 _XSS_SINKS: list[tuple[str, re.Pattern]] = [
@@ -98,6 +101,12 @@ def _interp_var(snippet: str) -> str:
     return next((g for g in m.groups() if g), "") if m else ""
 
 
+def _assigned_var(line: str) -> str:
+    """`sql = ...` / `String q += ...` / `const s = ...`의 LHS 변수명. 없으면 ""."""
+    m = _SQL_ASSIGN.match(line)
+    return m.group(1) if m else ""
+
+
 def _is_dynamic(value: str) -> bool:
     """XSS sink 값이 동적(변수/식)이고 살균을 안 거쳤는가. 리터럴·인코딩된 값이면 무해."""
     v = value.strip().rstrip(",);")
@@ -125,29 +134,59 @@ def _stack_of(suffix: str) -> str:
 def find_injection_suspects(source_root: str | Path) -> list[InjectionSuspect]:
     """source_root에서 원시 SQL 동적 결합+실행 의심 라인을 반환.
 
-    조건(전부 충족): 강한 SQL 문장 형태 + 동적 결합 + 실행 지점 인접 + 로그 라인 아님.
+    두 형태를 잡는다:
+      (A) **한 줄**에 SQL 문장 + 동적 결합 + 실행 (`cursor.execute(f"SELECT ... {x}")`).
+      (B) **줄 넘는** sink — 동적 SQL 문자열을 변수에 대입한 뒤 몇 줄 안에서 그 변수를 실행
+          (`sql = f"SELECT ... {x}"` … `cursor.execute(sql)`). 실행 전 안전한 값으로 재대입되면 해제.
+    로그 라인은 제외. 줄 넘는 건은 대입 라인(문자열이 만들어지는 곳=고칠 지점)을 sink으로 보고한다.
     """
     root = Path(source_root)
     out: list[InjectionSuspect] = []
     seen: set[tuple[str, int]] = set()
+
+    def _emit(line_no: int, rel: str, stack: str, snippet: str, score: float, reason: str) -> None:
+        key = (rel, line_no)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(InjectionSuspect(
+            file=rel, line=line_no, stack=stack, inject_param=_interp_var(snippet),
+            snippet=snippet.strip()[:160], score=score, reason=reason,
+        ))
+
     for p in _iter_sources(root):  # .java/.py/.ts/.js, tests/dist/node_modules 제외
         text = p.read_text(encoding="utf-8", errors="replace")
         rel = str(p.relative_to(root)) if p.is_relative_to(root) else str(p)
         stack = _stack_of(p.suffix)
+        pending: dict[str, tuple[int, str]] = {}  # 동적 SQL 대입 변수 → (줄번호, 라인)
         for i, line in enumerate(text.splitlines(), 1):
             if _LOG_LINE.search(line):
                 continue
-            if not (_SQL_STMT.search(line) and _DYN.search(line) and _EXEC.search(line)):
+            has_sql = bool(_SQL_STMT.search(line))
+            has_dyn = bool(_DYN.search(line))
+            has_exec = bool(_EXEC.search(line))
+            # (A) 한 줄에 전부 — 확정.
+            if has_sql and has_dyn and has_exec:
+                _emit(i, rel, stack, line, 1.0,
+                      "원시 SQL 문장이 변수와 동적 결합돼 실행됨(파라미터화 아님) → SQL Injection 의심")
                 continue
-            key = (rel, i)
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(InjectionSuspect(
-                file=rel, line=i, stack=stack, inject_param=_interp_var(line),
-                snippet=line.strip()[:160], score=1.0,
-                reason="원시 SQL 문장이 변수와 동적 결합돼 실행됨(파라미터화 아님) → SQL Injection 의심",
-            ))
+            # (B-1) 동적 SQL 문자열이 변수에 대입 — 실행을 기다린다.
+            if has_sql and has_dyn:
+                var = _assigned_var(line)
+                if var:
+                    pending[var] = (i, line)
+            # (B-2) 같은 변수를 안전한 값(동적 아님)으로 재대입 → 오염 해제(precision).
+            avar = _assigned_var(line)
+            if avar and avar in pending and not (has_sql and has_dyn):
+                del pending[avar]
+            # (B-3) 실행 라인이 대기 중 동적 SQL 변수를 참조 → 대입 라인을 sink으로 flag.
+            if has_exec:
+                for var, (aline, atext) in list(pending.items()):
+                    if 0 <= i - aline <= _EXEC_WINDOW and re.search(rf"\b{re.escape(var)}\b", line):
+                        _emit(aline, rel, stack, atext, 0.9,
+                              f"동적 결합된 SQL 문자열이 {i - aline}줄 뒤 실행됨(줄 넘는 sink, "
+                              "파라미터화 아님) → SQL Injection 의심")
+                        del pending[var]
     return out
 
 
