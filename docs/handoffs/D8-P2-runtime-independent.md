@@ -85,3 +85,14 @@
 - Juice Shop runtime smoke/검증은 CAMP default-bridge를 기준으로 하며, 기존 pinned source와
   Compose 계약은 build/static/scope/patch 재현성을 위해 보존.
 - 발표 순서는 c1-05 → c2-04, c3-09는 holdout/clean-room으로 유지.
+
+## D9 독립 검증 (2026-07-22)
+
+- runtime/registry/metadata/lease/catalog/overlay/source-bootstrap/lifecycle/Compose-isolation/source-lock
+  회귀: **52 passed, 5 subtests passed** (기존 `utcnow()` deprecation warning 11건).
+- 로컬 default-bridge Juice Shop smoke: `/` 및 pinned search 계약을 `tools/juice_shop_smoke.py`로
+  실행해 **exit 0**. 임시 `p2-juice-runbook-smoke` container는 종료·삭제했고 14020은 listener가
+  남지 않았다(TCP TIME_WAIT만 일시 관찰).
+- 전체 registry policy 모음은 1건이 환경 간섭으로 실패했다. OS 임시 디렉터리가 상위 사용자
+  Git 저장소로 해석되어 non-Git 차단 테스트가 dirty-repo 경로를 탔다. P2 코드 변경으로 우회하지
+  않고 해당 테스트 하네스 이슈로 기록한다.

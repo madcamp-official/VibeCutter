@@ -64,6 +64,18 @@ port를 공유하므로 다음 target을 올리기 전에 이전 target의 reset
    원인을 기록한 뒤 다음 후보로 전환한다. P3의 공격·검증 실패와 P2 runtime 실패를
    상태표에서 분리한다.
 
+### 사용자 확정 운영 선택 (2026-07-22)
+
+- 72B fallback이 준비되기 전까지는 235B를 primary 단독으로 사용한다.
+- 235B가 unavailable이면 안전한 heuristic degrade를 허용한다. 이 run은 `llm_used=false`
+  표본으로 기록하고 LLM 성능 비교에는 포함하지 않는다.
+- Juice Shop은 발표 target이 아니다. Injection candidate/verifier/LLM patch 경로를 검증하는
+  엔지니어링 target으로만 유지한다.
+- Juice Shop의 CAMP runtime smoke는 default-bridge를 기준으로 한다. 기존 pinned source와
+  Compose 정의는 static/scope/patch 재현성을 위해 보존하되, `internal:true` host-port 경로가
+  확인되지 않은 상태에서는 발표 경로로 승격하지 않는다.
+- 발표 target 순서는 `c1-05 → c2-04`이며 `c3-09`는 holdout/clean-room이다.
+
 발표 직전에는 주력 후보를 최소 2회 연속 `clean reset → start/health → P3 run → reset`
 순서로 리허설한다. 이 체크리스트는 P1의 큰 API endpoint나 P4의 평가 결과를 대신하지
 않으며, 모델 서버 장애 시에는 P1/P4가 정한 fallback endpoint를 사용한다.
