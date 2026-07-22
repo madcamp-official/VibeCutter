@@ -56,11 +56,12 @@
 |---|---|---|---|
 | 검증 오라클 | ✅ 완성(read+write) | ✅ 완성(불리언 차등) | ✅ 완성(격리 브라우저 실행) |
 | 후보 자동생성 | ✅ 성숙 | ✅ **(2026-07-22) I1/I2/I3 완료 — Node 인라인 핸들러 gap 해소** | ⚠️ 서버 반사 4패턴(Python 계열만) + **(2026-07-22) Juice Shop 한정 fixture_hints로 Angular sink 2개 승격**(범용 아님) |
-| 실 235B 패치 | (template) | ✅ **(2026-07-22) 실주행 FIXED** | ❌ 미검증(패치 생성은 아직 미시도) |
-| **실앱 E2E(verified→FIXED)** | ✅ **완료** | ✅ **(2026-07-22) 완료**(J-3 실주행, run-4ce5d5400775) | ⚠️ **verified 1건 확보(2026-07-22, X8)**, localize→patch→FIXED는 미착수 |
+| 실 235B 패치 | (template) | ✅ **(2026-07-22) 실주행 FIXED** | ✅ **(2026-07-22) 실주행 FIXED**(X9) |
+| **실앱 E2E(verified→FIXED)** | ✅ **완료** | ✅ **(2026-07-22) 완료**(J-3 실주행, run-4ce5d5400775) | ✅ **(2026-07-22) 완료**(X9 실주행, run-92fbb4bcd13c) |
 
-세 종의 **판정 엔진·안전경계는 동등하게 완성**돼 있고, 차이는 "실증 진척"뿐이다. Injection은 코드
-한 곳 + 데모 1회면 IDOR급, XSS는 데모 타깃 확보와 후보 커버리지 확장이 더 필요하다.
+**(2026-07-22) 세 종 모두 실앱 closed-loop(verified→FIXED) 완주.** IDOR(c1-05)·Injection(J-3)·
+XSS(X9) 전부 6게이트 통과 증거를 확보했다 — 세 판정 엔진·안전경계·실증 모두 동등하게 완성.
+남은 차이는 커버리지(XSS는 Juice Shop 1개 target·후보 2종만, 서버측 반사 XSS 등 확장 여지 있음).
 
 ---
 
@@ -286,7 +287,12 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
     쪽(X1의 "candidate 생성 단계 gap")은 그대로 — Angular sink는 fixture_hints 경로로만
     candidate가 된다(현재 juice-shop 1개 target만 하드코드, `mcp_server/tools_analysis.py`
     `_XSS_FIXTURE_HINTS`). target이 늘면 파일 기반 설정으로 승격 필요(지금은 과설계 회피).
-  - **[X9] localize→patch 시도(2026-07-22, P1) — RETRY, judge 오라클 구조적 gap 발견.**
+  - **[X9] localize→patch→6게이트 — ✅ FIXED(2026-07-22, run-92fbb4bcd13c).** 아래 3연쇄
+    버그를 P1·P3가 나눠 고친 뒤 fresh run으로 재실행 → **attempt #1에서 바로 build/attack/
+    positive_test/regression/static/scope 6개 전부 통과, verdict FIXED.** patch export:
+    `.vibecutter/runs/run-92fbb4bcd13c/security-fix.patch`(`searchValue = queryParam`로
+    `bypassSecurityTrustHtml` 우회 제거). **Injection(J-3)에 이어 XSS도 verified→FIXED
+    실앱 closed-loop 완주 — IDOR·Injection·XSS 3종 모두 실증 완료.**
     검색 XSS finding(finding-046e8fa8fcfe)에 localize→patch를 이어갔더니 새 버그 3건 연쇄로
     드러남:
     1. **candidate dedup 버그(P1 직접 수정)**: `surface/candidates.py`의 프론트 XSS candidate
@@ -298,20 +304,20 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
        실제 본문(5줄)과 안 맞아 `git apply`가 "corrupt patch"로 거부 — `repair/llm_synth.py`에
        `_fix_hunk_headers`(본문에서 count 재계산, TODO "diff 파서 강건화" 반영) 추가로 해결.
        재현성 있는 버그(attempt #1/#2 동일하게 실패, #3에서 고친 뒤 정상 적용).
-    3. **[미해결, P3 보고 완료] XSS positive 게이트가 SPA 해시 라우트에서 구조적으로 항상
-       실패한다**: `repair/validators.py::_send_xss_benign`이 reflected 케이스에서 순수
-       `httpx.get()`으로 `#/search?q=...`를 요청하는데, URL fragment(`#` 이후)는 RFC 3986상
-       **서버로 전송되지 않는다**(httpx도 브라우저도 동일) — 실제로는 그냥 `GET /`(SPA
-       index.html shell)만 요청되고, Angular가 클라이언트에서 렌더링하는 검색어는 서버 응답
-       body에 영원히 없다. 그 결과 patch 품질과 무관하게 `positive_test`가 항상 False —
-       공격 게이트(Playwright로 실제 렌더링 확인, attack=true 통과)와 대조적. 6게이트 중
-       build/attack/regression/static/scope는 전부 통과했는데 이 구조적 gap 하나 때문에
-       verdict가 RETRY로 막힘. **재시도 예산(3회) 소진**이라 추가 patch 생성은 의미 없음
-       (오라클을 못 고치면 몇 번을 다시 만들어도 같은 결과) — P3에게 상세 보고, 대기 중.
-       patch 자체(`patch-c31e5d08af21`)는 `.vibecutter/runs/run-cf21c3f0743b/security-fix.patch`
-       로 export됨.
+    3. **positive 게이트 구조적 gap(P3 수정, 커밋 `53ea69b`)**: `repair/validators.py::
+       _send_xss_benign`이 reflected 케이스에서 순수 `httpx.get()`으로 `#/search?q=...`를
+       요청하는데, URL fragment(`#` 이후)는 RFC 3986상 **서버로 전송되지 않는다**(httpx도
+       브라우저도 동일) — 실제로는 그냥 `GET /`(SPA index.html shell)만 요청되고, Angular가
+       클라이언트에서 렌더링하는 검색어는 서버 응답 body에 영원히 없어 patch 품질과 무관하게
+       `positive_test`가 항상 False였다(1차 시도, `patch-c31e5d08af21`, 재시도 예산 3회
+       소진 — dedup·hunk-header 버그로 attempt #1/#2가 낭비돼 유효 시도가 사실상 1회뿐이었음).
+       P3가 `_send_xss_benign`을 attack 게이트(`_replay_reflected`)와 같은 Playwright 경로
+       (`verifiers.xss.render_benign`, `_run_isolated` 전용 스레드)로 교체 — 오라클(benign
+       값의 DOM 반영 확인) 자체는 그대로, reflected는 navigate로 클라이언트 렌더 DOM을 보고
+       stored는 POST 후 render_path를 브라우저로 열어 같은 fragment 문제를 예방. 38/38.
   - **완료 판정**: 승인된 Juice Shop XSS candidate가 Playwright oracle에 도달해 evidence를 만들고,
-    최소 1건의 실제 XSS 검증 결과가 재현된다. **✅ 충족 — 검색 candidate verified=true, evidence 확보.**
+    최소 1건의 실제 XSS 검증 결과가 재현된다. **✅ 충족, 그 이상 — verified뿐 아니라 patch까지
+    FIXED로 완주(X9).**
 
 ### 4.3 측정 (두 종 공통 · 담당 P4, 소스는 P2)
 
@@ -564,19 +570,23 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 **(2026-07-22 P1 전수 감사 — 실제 코드/테스트 상태 기준. 아래 각 절의 상세 항목이 최신.)**
 
 - **[P1] 거의 완료.** 6절 UX(C1~C4) ✅ · U1~U3 ✅ · `SECURITY_POLICY.md` ✅ · **7.1 데모 2
-  (J-3) 라이브 완주 ✅(2026-07-22, FIXED)** · **7.3 container log redaction ✅(2026-07-22)**,
-  patch diff는 구조적 한계로 미해결(문서화). 남은 건 `.env` 72B fallback 값 추가(3절, P2
-  URL 전달 대기로 블로킹), U4(전원).
+  (J-3) 라이브 완주 ✅(2026-07-22, FIXED)** · **X7~X9 XSS 라이브 완주 ✅(2026-07-22, FIXED,
+  run-92fbb4bcd13c)** · **7.3 container log redaction ✅(2026-07-22)**, patch diff는
+  구조적 한계로 미해결(문서화). 남은 건 `.env` 72B fallback 값 추가(3절, P2 URL 전달
+  대기로 블로킹), U4(전원).
 - **[P2] (2026-07-22 갱신) X7 runtime 계약 당일 처리.** Discord 요청 받고 `docs/handoffs/
   D6-P2-xss-runtime.md`(커밋 `2338dc6`)로 Juice Shop reflected XSS 경로·DOM sink·smoke suite
   기록 — 다만 Windows Docker daemon에 컨테이너가 없어 **live 실행은 아직**(정직하게 명시).
   남은 건: 72B endpoint(문서화된 결정으로 보류) · M1 벤치 소스 0→7/16(부분) · Juice Shop
   default-bridge 발표 경로 승격 확인(P1이 물어본 것, 답 대기) · 루트 `RUNBOOK.md` 미착수.
-- **[P3] ★ 가장 진척 큼, X7도 당일 처리.** I1·I2·I3 ✅ **완료 확인**(데모2 블로커 해소!),
+- **[P3] ★ 가장 진척 큼, X7~X9도 당일 처리.** I1·I2·I3 ✅ **완료 확인**(데모2 블로커 해소!),
   locator decoy-file 우선 선택 버그도 커밋 `7fac591`/`ea68e98`로 해소(P1이 7.1 J-3 라이브
   실행 중 발견·보고). **X7 verify 계약 확정**(`docs/P3_JUICE_SHOP_XSS_CONTRACT.md` 갱신,
   커밋 `6da9e45`, `tests/test_xss_verifier.py` 17/17) — Discord 요청 당일 응답, safe payload·
-  positive 조건·regression command까지 잠금. 이어서 I4(선택)·I5(추가 표본)·X2~X6 미착수,
+  positive 조건·regression command까지 잠금. `_reflected_url` 쿼리 중복 버그(`c89e9cb`)와
+  **XSS positive 게이트를 브라우저 렌더로 교체**(`53ea69b`, fragment가 서버로 안 가는 SPA
+  구조적 문제 해결, 38/38)도 P1 라이브 실행 중 발견 즉시 당일 수정 — X9 FIXED 완주의 마지막
+  블로커였음. 이어서 I4(선택)·I5(추가 표본)·X2~X6 미착수,
   X1은 부분(Python 계열 4패턴만 candidate 생성). `test_vulnerability_profiles.py` 선제 수정 완료.
 - **[P4] 측정·redaction 코드 완료(2026-07-22 P4 갱신 — 위 P1 감사는 이 작업 전 스냅샷).**
   SARIF redaction ✅(`report_export` render_sarif에 `redact()`, 5/5) · M1 클래스별 하네스 ✅
@@ -592,7 +602,9 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 ~~I1(Node 인라인 핸들러) →~~ **(2026-07-22 갱신) I1 해결됨** → ~~데모 2 완주(7.1 J-3)~~
 **(2026-07-22) 완료, FIXED** → 데모 1 E2E(+U1 스캐폴딩, ✅ 완료) → 4절 나머지 정확도·성능 +
 6절 UX(✅ 완료) + 3절 72B → 측정·문서·리허설.
-~~가장 큰 단일 리스크는 X7 live 실행~~ — **(2026-07-22) X7/X8 완료, 검색 XSS verified=true**
-(P1 라이브 실행, `verifiers/xss.py` Playwright asyncio 버그 발견·수정 포함). 남은 리스크는
-**3절 72B endpoint(P2/P4 — 아직 미착수)**와 XSS의 localize→patch→FIXED 전체 루프(미착수, 원하면
-데모 2와 같은 패턴으로 이어서 가능).
+~~가장 큰 단일 리스크는 X7 live 실행~~ — **(2026-07-22) X7·X8·X9 전부 완료.** 검색 XSS가
+scan→verify→localize→235B patch→6게이트까지 **FIXED**로 실주행 완주(run-92fbb4bcd13c) —
+IDOR(c1-05)·Injection(J-3)에 이어 XSS도 실앱 closed-loop 증거 확보. 과정에서 P1·P3가
+나눠 고친 버그 5건(Playwright asyncio 충돌, candidate dedup, diff hunk header, positive
+게이트 fragment 문제 등)은 X7/X9 절 상세 참고. 남은 단일 리스크는 **3절 72B endpoint
+(P2/P4 — 아직 미착수)**뿐 — 세 취약점군의 실증 자체는 더 이상 병목이 아니다.
