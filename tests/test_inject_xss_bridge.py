@@ -141,6 +141,21 @@ class InjectionXssBridgeTests(unittest.TestCase):
             self.assertEqual(p.context, "reflected")
             self.assertEqual(p.inject_param, "name")
 
+    def test_server_template_xss_becomes_candidate(self):
+        # 후보 경로도 프리필터와 sync — mark_safe/render_template_string 서버 sink도 XSS 후보로.
+        for src in ('@app.get("/ms")\ndef v(name: str):\n    return mark_safe(f"<h1>{name}</h1>")\n',
+                    '@app.get("/rt")\ndef v(name: str):\n    return render_template_string(f"<p>{name}</p>")\n'):
+            with _tree({"app.py": src}) as d:
+                x = [c for c in injection_xss_candidates("r", _prov(), d).candidates if c.vuln_class == "xss"]
+                self.assertEqual(len(x), 1)
+                self.assertEqual(x[0].attack_params["inject_param"], "name")
+
+    def test_literal_server_xss_yields_no_candidate(self):
+        # 정적 리터럴을 mark_safe 하는 건 무해 → 후보 안 만듦(precision)
+        with _tree({"app.py": '@app.get("/s")\ndef v():\n    return mark_safe("<b>static</b>")\n'}) as d:
+            res = injection_xss_candidates("r", _prov(), d)
+            self.assertEqual([c for c in res.candidates if c.vuln_class == "xss"], [])
+
     def test_write_sql_is_blocked_not_candidate(self):
         # 파괴적 write SQL은 불리언 payload가 위험 → candidate로 만들지 않고 blocked
         with _tree({"app.py": _WRITE_SQL}) as d:

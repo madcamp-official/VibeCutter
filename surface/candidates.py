@@ -338,7 +338,11 @@ from surface.inject_xss import (  # noqa: E402
 
 _SELECT_SINK = re.compile(r"\bselect\b[\s\S]{0,240}?\bfrom\b", re.I)  # 불리언 payload에 안전(읽기)
 _WRITE_SINK = re.compile(r"\binsert\s+into\b|\bupdate\b[\s\S]{0,120}?\bset\b|\bdelete\s+from\b", re.I)
-_HTMLRESP = re.compile(r'HTMLResponse\s*\(\s*f["\'][^"\']*\{([^}]+)\}', re.I)  # 서버 반사 XSS
+# 서버측 반사 XSS sink: 응답 HTML에 동적 값을 escape 없이 싣는 함수들(f-string 보간). 프리필터
+# find_xss_suspects의 서버 sink(mark_safe·render_template_string·Markup)과 sync — HTMLResponse만
+# 잡던 것을 확장. 리터럴만 든 호출은 `\{...\}`(보간) 요구로 자연히 제외(precision).
+_SERVER_XSS = re.compile(
+    r'(?:HTMLResponse|mark_safe|render_template_string|Markup)\s*\(\s*f["\'][^"\']*\{([^}]+)\}', re.I)
 # HTTP 요청 파라미터 접근(Express/Node): `req.query.q`, `request.body.email`, `req.params.id`.
 _REQ_SOURCE = re.compile(r"req(?:uest)?\.(?:query|params|body)\.(\w+)")
 
@@ -507,8 +511,8 @@ def injection_xss_candidates(
                         id=f"cand-{uuid4().hex[:12]}", run_id=run_id, cwe="CWE-89", vuln_class="injection",
                         endpoint=path, source_symbols=[sink_symbol], attack_params=ap,
                     ))
-            # ── XSS: 서버 HTMLResponse 반사 ──
-            hm = _HTMLRESP.search(body)
+            # ── XSS: 서버측 반사 sink(HTMLResponse·mark_safe·render_template_string·Markup) ──
+            hm = _SERVER_XSS.search(body)
             if hm and ("xss", path) not in seen:
                 seen.add(("xss", path))
                 param = re.match(r"[A-Za-z_]\w*", hm.group(1).strip())
