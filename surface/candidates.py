@@ -597,8 +597,16 @@ def injection_xss_candidates(
         if s.file.endswith(".py"):  # 서버측은 위에서 처리
             continue
         hint = _match_xss_hint(hints, s)
-        if hint is not None and ("xss", hint["inject_path"]) not in seen:
-            seen.add(("xss", hint["inject_path"]))
+        # X7 라이브 발견(P1): 같은 파일에 fixture hint의 inject_path로 매핑되는 sink가 여러 줄
+        # 있으면(예: Juice Shop search-result.component.ts의 133줄 trustProductDescription과
+        # 159줄 filterTable 둘 다 bypassSecurityTrustHtml, 같은 /#/search?q= hint에 매칭) 예전엔
+        # (vuln_class, inject_path)로만 dedup해 파일에서 먼저 나오는 sink 하나만 candidate가
+        # 되고 나머지는 건너뛰었다 — verify()는 HTTP 재현이라 어느 쪽이든 endpoint가 취약하면
+        # 통과하지만, 그 candidate의 source_symbols는 스킵된 실제 취약 줄이 아니라 먼저 걸린
+        # (엉뚱할 수 있는) 줄을 가리켜 이후 localize/patch가 잘못된 코드를 고쳤다. dedup 키에
+        # line을 포함시켜 같은 inject_path라도 서로 다른 줄의 sink는 각각 candidate가 되게 한다.
+        if hint is not None and ("xss", hint["inject_path"], s.line) not in seen:
+            seen.add(("xss", hint["inject_path"], s.line))
             cands.append(_xss_candidate_from_hint(run_id, base, s, hint))  # X2(a): blocked → candidate
             continue
         blocked.append(BlockedTarget(

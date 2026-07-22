@@ -286,6 +286,30 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
     쪽(X1의 "candidate 생성 단계 gap")은 그대로 — Angular sink는 fixture_hints 경로로만
     candidate가 된다(현재 juice-shop 1개 target만 하드코드, `mcp_server/tools_analysis.py`
     `_XSS_FIXTURE_HINTS`). target이 늘면 파일 기반 설정으로 승격 필요(지금은 과설계 회피).
+  - **[X9] localize→patch 시도(2026-07-22, P1) — RETRY, judge 오라클 구조적 gap 발견.**
+    검색 XSS finding(finding-046e8fa8fcfe)에 localize→patch를 이어갔더니 새 버그 3건 연쇄로
+    드러남:
+    1. **candidate dedup 버그(P1 직접 수정)**: `surface/candidates.py`의 프론트 XSS candidate
+       dedup이 `(vuln_class, inject_path)`만 봐서, 같은 파일·같은 inject_path에 매핑되는 sink가
+       여러 줄(search-result.component.ts의 133줄/159줄)이면 먼저 나오는 줄만 candidate가 되고
+       실제 verified된 줄(159)은 버려져 localize/patch가 엉뚱한 코드(133줄, 무관 기능)를 고쳤다.
+       dedup 키에 `s.line`을 추가해 줄마다 별도 candidate가 되도록 수정 — 705/705 그린.
+    2. **diff hunk header 버그(P1 직접 수정)**: 235B가 만든 diff의 `@@ -156,7 +156,7 @@`가
+       실제 본문(5줄)과 안 맞아 `git apply`가 "corrupt patch"로 거부 — `repair/llm_synth.py`에
+       `_fix_hunk_headers`(본문에서 count 재계산, TODO "diff 파서 강건화" 반영) 추가로 해결.
+       재현성 있는 버그(attempt #1/#2 동일하게 실패, #3에서 고친 뒤 정상 적용).
+    3. **[미해결, P3 보고 완료] XSS positive 게이트가 SPA 해시 라우트에서 구조적으로 항상
+       실패한다**: `repair/validators.py::_send_xss_benign`이 reflected 케이스에서 순수
+       `httpx.get()`으로 `#/search?q=...`를 요청하는데, URL fragment(`#` 이후)는 RFC 3986상
+       **서버로 전송되지 않는다**(httpx도 브라우저도 동일) — 실제로는 그냥 `GET /`(SPA
+       index.html shell)만 요청되고, Angular가 클라이언트에서 렌더링하는 검색어는 서버 응답
+       body에 영원히 없다. 그 결과 patch 품질과 무관하게 `positive_test`가 항상 False —
+       공격 게이트(Playwright로 실제 렌더링 확인, attack=true 통과)와 대조적. 6게이트 중
+       build/attack/regression/static/scope는 전부 통과했는데 이 구조적 gap 하나 때문에
+       verdict가 RETRY로 막힘. **재시도 예산(3회) 소진**이라 추가 patch 생성은 의미 없음
+       (오라클을 못 고치면 몇 번을 다시 만들어도 같은 결과) — P3에게 상세 보고, 대기 중.
+       patch 자체(`patch-c31e5d08af21`)는 `.vibecutter/runs/run-cf21c3f0743b/security-fix.patch`
+       로 export됨.
   - **완료 판정**: 승인된 Juice Shop XSS candidate가 Playwright oracle에 도달해 evidence를 만들고,
     최소 1건의 실제 XSS 검증 결과가 재현된다. **✅ 충족 — 검색 candidate verified=true, evidence 확보.**
 
