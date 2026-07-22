@@ -153,6 +153,35 @@ class InjectionXssBridgeTests(unittest.TestCase):
             self.assertEqual(len(inj), 1)
             self.assertEqual(inj[0].attack_params["inject_param"], "email")
 
+    def test_i2_sequelize_backtick_becomes_candidate(self):
+        # I2: ORM raw(sequelize.query) + 백틱 템플릿 리터럴 SELECT → injection candidate.
+        src = "router.get('/s', (req,res)=>{\n  return sequelize.query(`SELECT * FROM t WHERE n='${req.query.q}'`)\n})\n"
+        with _tree({"r.ts": src}) as d:
+            inj = [c for c in injection_xss_candidates("r", _prov(), d).candidates if c.vuln_class == "injection"]
+            self.assertEqual(len(inj), 1)
+
+    def test_i3_param_source_determines_location(self):
+        # I3: 요청 출처(query/body/params)로 inject_param + inject_location을 정확히 채운다.
+        cases = {
+            "query": ("router.get('/a', (req,res)=>{\n  return db.query(`SELECT * FROM t WHERE n='${req.query.q}'`)\n})\n",
+                      "q", "query"),
+            "body": ("router.post('/b', (req,res)=>{\n  return db.query(`SELECT * FROM u WHERE e='${req.body.email}'`)\n})\n",
+                     "email", "json"),
+            "path": ("router.get('/u/:id', (req,res)=>{\n  return db.query(`SELECT * FROM u WHERE id=${req.params.id}`)\n})\n",
+                     "id", "path"),
+        }
+        for label, (src, want_param, want_loc) in cases.items():
+            with _tree({"r.ts": src}) as d:
+                inj = [c for c in injection_xss_candidates("r", _prov(), d).candidates if c.vuln_class == "injection"]
+                self.assertEqual(len(inj), 1, label)
+                self.assertEqual(inj[0].attack_params["inject_param"], want_param, label)
+                self.assertEqual(inj[0].attack_params["inject_location"], want_loc, label)
+
+    def test_i3_path_injection_substitutes_token(self):
+        # 경로 주입: verifier가 :param 토큰에 payload를 URL 인코딩해 치환한다(파괴적 아님, SELECT).
+        self.assertEqual(injection._inject_into_path("/u/:id", "id", "1 OR 1=1"), "/u/1%20OR%201%3D1")
+        self.assertEqual(injection._inject_into_path("/u/{id}", "id", "x"), "/u/x")
+
     def test_htmlresponse_becomes_verifiable_xss_candidate(self):
         with _tree({"app.py": _HTML_XSS}) as d:
             res = injection_xss_candidates("r", _prov(), d)
