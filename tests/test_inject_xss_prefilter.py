@@ -82,6 +82,21 @@ class InjectionPrefilterTests(unittest.TestCase):
         with _tree({"dao.py": far}) as d:
             self.assertEqual(find_injection_suspects(d), [])
 
+    def test_rejects_commented_out_sql(self):
+        # 주석 처리된(비활성) SQL은 sink이 아니다 → 오탐 안 함(precision)
+        with _tree({"dao.py": 'def q(db, u):\n    # return db.execute(f"SELECT * FROM t WHERE x = \'{u}\'")\n    return safe(u)\n'}) as d:
+            self.assertEqual(find_injection_suspects(d), [])
+
+    def test_rejects_block_commented_sql(self):
+        src = 'def q(db, u):\n    /*\n    db.execute(f"SELECT * FROM t WHERE x = \'{u}\'")\n    */\n    return safe(u)\n'
+        with _tree({"dao.ts": src}) as d:
+            self.assertEqual(find_injection_suspects(d), [])
+
+    def test_trailing_comment_does_not_suppress_real_sink(self):
+        # 후행 주석(코드 뒤 # note)은 라인 시작이 아니므로 실제 sink을 억제하지 않는다
+        with _tree({"dao.py": 'def q(db, u):\n    return db.execute(f"SELECT * FROM t WHERE x = \'{u}\'")  # danger\n'}) as d:
+            self.assertEqual(len(find_injection_suspects(d)), 1)
+
 
 class XssPrefilterTests(unittest.TestCase):
     def test_detects_dynamic_dangerously_set_inner_html(self):
@@ -142,6 +157,11 @@ class XssPrefilterTests(unittest.TestCase):
     def test_rejects_python_list_append_not_xss(self):
         # jQuery `.append`류를 sink에 안 넣었으므로 파이썬 list.append는 오탐 안 함
         with _tree({"svc.py": "def add(items, x):\n    items.append(x)\n    return items\n"}) as d:
+            self.assertEqual(find_xss_suspects(d), [])
+
+    def test_rejects_commented_out_xss_sink(self):
+        # 주석 처리된 innerHTML 할당은 sink이 아니다 → 오탐 안 함(precision)
+        with _tree({"dom.js": "function r(x){\n  // el.innerHTML = x;\n  el.textContent = x;\n}\n"}) as d:
             self.assertEqual(find_xss_suspects(d), [])
 
 

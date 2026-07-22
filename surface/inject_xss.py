@@ -146,6 +146,29 @@ def _stack_of(suffix: str) -> str:
     return {".java": "java", ".py": "python"}.get(suffix, "node")
 
 
+def _code_lines(text: str):
+    """(줄번호, 라인) — 통째 주석 라인(`#`/`//`/`--`)과 `/* */` 블록 주석은 건너뛴다.
+
+    주석 처리된(비활성) 코드가 SQL/XSS sink로 오탐되는 것을 막는다(precision). 줄 안에 SQL 문자열이
+    들어있고 `#`가 SQL의 MySQL 주석일 수는 있으나, 여기서는 **라인이 주석 마커로 시작할 때만** 건너뛰어
+    실제 코드 라인의 후행 주석(`code  # note`)은 영향받지 않는다. 줄번호는 원본 기준으로 유지한다.
+    """
+    in_block = False
+    for i, line in enumerate(text.splitlines(), 1):
+        s = line.lstrip()
+        if in_block:
+            if "*/" in line:
+                in_block = False
+            continue
+        if s.startswith(("#", "//", "--")):
+            continue
+        if s.startswith("/*"):
+            if "*/" not in line:
+                in_block = True
+            continue
+        yield i, line
+
+
 def find_injection_suspects(source_root: str | Path) -> list[InjectionSuspect]:
     """source_root에서 원시 SQL 동적 결합+실행 의심 라인을 반환.
 
@@ -174,7 +197,7 @@ def find_injection_suspects(source_root: str | Path) -> list[InjectionSuspect]:
         rel = str(p.relative_to(root)) if p.is_relative_to(root) else str(p)
         stack = _stack_of(p.suffix)
         pending: dict[str, tuple[int, str]] = {}  # 동적 SQL 대입 변수 → (줄번호, 라인)
-        for i, line in enumerate(text.splitlines(), 1):
+        for i, line in _code_lines(text):  # 통째 주석/블록 주석 라인 제외(precision)
             if _LOG_LINE.search(line):
                 continue
             has_sql = bool(_SQL_STMT.search(line))
@@ -213,7 +236,7 @@ def find_xss_suspects(source_root: str | Path) -> list[XssSuspect]:
     for p in _iter_frontend(root):
         text = p.read_text(encoding="utf-8", errors="replace")
         rel = str(p.relative_to(root)) if p.is_relative_to(root) else str(p)
-        for i, line in enumerate(text.splitlines(), 1):
+        for i, line in _code_lines(text):  # 통째 주석/블록 주석 라인 제외(precision)
             for sink_name, rx in _XSS_SINKS:
                 m = rx.search(line)
                 if not m or not _is_dynamic(m.group(1)):
