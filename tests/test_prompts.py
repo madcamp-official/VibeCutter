@@ -49,6 +49,12 @@ class RegisterLocalProjectPromptTests(unittest.TestCase):
         text = _text(self._get("/home/user/my-app"))
         self.assertIn("audit_local_target", text)
 
+    def test_applies_easy_question_principle_confirm_not_ask(self) -> None:
+        """C3: 감지한 값은 확인만 받고(예/아니오), 못 감지한 값도 자유 서술보다 보기 선택을 우선한다."""
+        text = _text(self._get("/home/user/my-app"))
+        self.assertIn("보기 선택", text)
+        self.assertIn("맞나요", text)
+
 
 class AuditLocalTargetPromptTests(unittest.TestCase):
     def _get(self, target_id: str):
