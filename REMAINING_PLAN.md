@@ -223,11 +223,15 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
     235B가 소유권 가드 같은 엉뚱한 패치를 만들지 않게 한다.
   - **완료 판정**: XSS 패치가 attack 게이트(재실행 시 미실행)와 positive 게이트를 통과.
 
-- [ ] **X7. (P2) 로컬 XSS 데모 타깃 1개 확보** — `.vibecutter/targets/sources/`
-  - **무엇**: 현재 로컬에 XSS 취약 데모 앱 소스가 **하나도 없다**(있는 c-시리즈는 IDOR용).
-  - **왜**: 데모 타깃이 없으면 XSS는 실앱 verified→FIXED 완주를 영원히 못 보여준다.
-  - **완료 판정**: 승인된 교육용 XSS 앱(loopback·git·manifest)이 등록되어 X1~X6로 최소 1건
-    verified 도달.
+- [~] **X7. (P2/P3) XSS 검증 target 확보** — OWASP Juice Shop으로 결정(2026-07-22).
+  - 소스에는 DOM XSS 교육 경로가 존재한다(`frontend/src/hacking-instructor/challenges/domXss.ts`,
+    `/search`, query `q`, `#searchValue` 렌더링). 다만 현재 `targets/manifests/juice-shop.yaml`은
+    SQLi 검색 smoke만 선언한다.
+  - **남은 계약**: P3가 실제 verifier용 safe payload, observe/positive 조건, reflected/stored
+    context, rollback/reset, deterministic regression command를 확정해야 한다. 계약 전에는
+    XSS candidate를 verified로 주장하지 않는다.
+  - **완료 판정**: 승인된 Juice Shop XSS candidate가 Playwright oracle에 도달해 evidence를 만들고,
+    최소 1건의 실제 XSS 검증 결과가 재현된다.
 
 ### 4.3 측정 (두 종 공통 · 담당 P4, 소스는 P2)
 
@@ -440,8 +444,8 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 
 - **[P1]** 비전문 UX(6절 C1~C4) + egress 동의(U3) + manifest 스캐폴딩 tool 배선(U1) + adapter 안내
   (U2) + patch diff redaction + `SECURITY_POLICY` 취합 + 데모 2 승인흐름 확인.
-- **[P2]** runtime metadata/reset 지원 + 사용자 E2E runtime + Juice Shop 엔지니어링 runtime 유지.
-  72B endpoint·XSS target·전체 벤치 소스는 각각 보류/협업 대기.
+- **[P2]** runtime metadata/reset 지원 + 사용자 E2E runtime + Juice Shop SQLi/XSS 엔지니어링
+  runtime 유지. 72B endpoint는 보류. XSS 계약과 전체 벤치 source는 협업 대기.
 - **[P3]** ★ **Injection·XSS 정확도·성능(4절 전체)** — I1(데모2 블로커) 최우선, 이어서 I2·I3·X1~X6 +
   데모 2(J-3) 완주 + F-3 한계 문서.
 - **[P4]** 72B 코드/문서 반영(3절) + 클래스별 측정(M1/M2) + SARIF redaction + SAST 규칙 커버리지 점검(4.4).
@@ -452,4 +456,5 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 
 **J-3 엔지니어링 완주 → 데모 1 사용자 E2E → metadata/metric 반영 → 최종 리허설.**
 I1~I3와 사용자 onboarding/egress/UX 기반은 완료됐다. 현재 가장 큰 리스크는 실제 fresh
-closed-loop run이 아직 없다는 점이며, XSS 실증과 72B fallback은 발표 필수 경로가 아니다.
+closed-loop run과 Juice Shop XSS 계약이 아직 없다는 점이며, XSS 실증과 72B fallback은 발표 필수
+경로가 아니다.
