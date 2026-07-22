@@ -177,6 +177,36 @@ class InjectionSafetyTests(unittest.TestCase):
             injection._replay_injection(probe, max_requests=10)
 
 
+class JuiceShopInjectionContractTests(unittest.TestCase):
+    """데모2(J-3) Juice Shop 검색 SQLi의 seed 계약 shape 잠금(docs/P3_JUICE_SHOP_INJECTION_CONTRACT.md).
+
+    P2가 이 attack_params로 candidate를 seed하면 불리언 차등 오라클이 그대로 소비한다. 실제 verified는
+    승인 runtime의 실 target 재현 + evidence로만 — 여기선 계약 shape·GET 안전 경계·오라클 회귀만 고정.
+    """
+
+    def test_juice_shop_injection_contract_shape(self):
+        c = Candidate(id="c", run_id="r", cwe="CWE-89", vuln_class="injection", attack_params={
+            "base_url": "http://127.0.0.1:14020", "inject_method": "GET", "inject_location": "query",
+            "inject_path": "/rest/products/search", "inject_param": "q", "baseline_value": "apple",
+        })
+        p = injection.injection_probe_from_candidate(c)
+        self.assertEqual(p.inject_path, "/rest/products/search")
+        self.assertEqual(p.inject_param, "q")
+        self.assertEqual(p.inject_method, "GET")       # 읽기 — 파괴적 아님
+        self.assertEqual(p.inject_location, "query")
+        self.assertEqual(p.baseline_value, "apple")
+        self.assertFalse(p.read_query)                  # GET은 read_query 보증 불필요(자동 허용)
+        self.assertEqual(dispatch.class_of(c), "injection")
+
+    def test_juice_shop_contract_oracle_matches_measured(self):
+        # J-2 실측(baseline 631 / true 18662 / false 30, 전부 200) → verified. 계약이 이 수치와 정합.
+        verified, reason = injection.injection_oracle(200, "x" * 18662, 200, "x" * 30, baseline_variance=500)
+        self.assertTrue(verified)
+        self.assertIn("CWE-89", reason)
+        # 파라미터화 패치 후(참≈거짓) → verify가 False로 뒤집혀 FIXED를 확증.
+        self.assertFalse(injection.injection_oracle(200, "x" * 631, 200, "x" * 631)[0])
+
+
 class InjectionDispatchTests(unittest.TestCase):
     def test_vuln_class_injection_routes(self):
         c = Candidate(id="c", run_id="r", vuln_class="injection")
