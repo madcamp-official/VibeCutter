@@ -138,6 +138,44 @@ def _builtin_target_ids() -> set[str]:
     return set(load_scope())
 
 
+def _friendly_adapter_error(exc) -> str | None:
+    """adapter enum 거부만 쉬운 안내로 바꾼다(U2, R1-X).
+
+    4종 adapter(spring-boot/fastapi/node/generic-docker)는 실제로는 전부 같은
+    `ManifestCommandAdapter`로 실행된다(`adapters/registry.py:16`) — 기능 제한이 아니라
+    라벨일 뿐이고, `generic-docker`가 어떤 스택에도 쓸 수 있는 탈출구다. 그런데 지원하지
+    않는 스택명(예: django)을 넣으면 지금까지는 raw pydantic enum 에러만 나가 "탈출구가
+    있는데도 벽으로 느껴진다"는 문제가 있었다. adapter 필드 외의 다른 검증 실패는 손대지
+    않는다 — 여기서 다루는 건 이 케이스뿐이다.
+    """
+    for error in exc.errors():
+        if error.get("loc") == ("adapter",) and error.get("type") == "enum":
+            requested = error.get("input")
+            return (
+                f"adapter={requested!r}는 지원하지 않는 값입니다. "
+                f"이 프로젝트가 spring-boot/fastapi/node가 아니라면 'generic-docker'를 쓰세요 — "
+                f"4가지 adapter는 전부 똑같이 동작합니다(직접 지정한 build/start/stop/reset "
+                f"명령을 그대로 실행할 뿐이라 generic-docker를 써도 기능이 줄지 않습니다). "
+                f"manifest.adapter를 'generic-docker'로 바꾸고 다시 시도하세요."
+            )
+    return None
+
+
+def _validate_manifest(manifest: dict):
+    """`TargetManifest` 스키마 검증. adapter enum 거부만 쉬운 안내로 바꾼다(U2)."""
+    from pydantic import ValidationError
+
+    from runtime.manifest import TargetManifest
+
+    try:
+        return TargetManifest.model_validate(dict(manifest))
+    except ValidationError as exc:
+        friendly = _friendly_adapter_error(exc)
+        if friendly is not None:
+            raise ValueError(friendly) from exc
+        raise
+
+
 def _build_preview(manifest, source_path: Path, *, confirmed: bool) -> RegistrationPreview:
     blockers, warnings = _git_state(source_path)
 
@@ -223,10 +261,9 @@ def register(mcp: FastMCP) -> None:
         """
         from pathlib import Path
 
-        from runtime.manifest import TargetManifest
-
         # 1) 스키마 검증 — 여기서 loopback이 강제된다. 실패하면 저장 시도조차 하지 않는다.
-        validated = TargetManifest.model_validate(dict(manifest))
+        # adapter가 지원 목록에 없을 때만 쉬운 대안 안내로 바뀐다(U2) — 그 외 실패는 그대로.
+        validated = _validate_manifest(manifest)
         resolved_source = Path(source_path).expanduser().resolve()
 
         preview = _build_preview(validated, resolved_source, confirmed=confirmed)
