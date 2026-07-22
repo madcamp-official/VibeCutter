@@ -9,6 +9,8 @@ Lifecycle 도구의 실제 빌드/실행/reset 로직은 P2(target manifest/adap
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
@@ -104,11 +106,25 @@ def _git_state(source_path: Path, *, for_closed_loop: bool = True) -> tuple[list
         )
 
     try:
-        if _git("rev-parse", "--git-dir").returncode != 0:
+        git_root = _git("rev-parse", "--show-toplevel")
+        if git_root.returncode != 0:
             blockers.append(
                 f"{source_path}는 git 저장소가 아닙니다. 패치는 원본을 건드리지 않고 "
                 f"run별 git worktree에만 적용되므로 git이 필요합니다 — "
                 f"`git init && git add -A && git commit -m init` 후 다시 등록하세요."
+            )
+            return blockers, warnings
+
+        # A directory nested inside the VibeCutter/user repository is not an
+        # independent target repository.  Accepting it would make worktrees
+        # attach to the parent repo and violate the registration contract.
+        resolved_source = source_path.resolve()
+        resolved_root = Path(git_root.stdout.strip()).resolve()
+        if resolved_root != resolved_source:
+            blockers.append(
+                f"{source_path}는 독립 Git 저장소 루트가 아닙니다(상위 저장소: {resolved_root}). "
+                "대상 프로젝트의 최상위 경로를 선택하거나 별도 프로젝트라면 "
+                "`git init` 후 최초 커밋을 만든 뒤 다시 등록하세요."
             )
             return blockers, warnings
 

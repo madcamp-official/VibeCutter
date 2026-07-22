@@ -96,3 +96,12 @@
 - 전체 registry policy 모음은 1건이 환경 간섭으로 실패했다. OS 임시 디렉터리가 상위 사용자
   Git 저장소로 해석되어 non-Git 차단 테스트가 dirty-repo 경로를 탔다. P2 코드 변경으로 우회하지
   않고 해당 테스트 하네스 이슈로 기록한다.
+
+## D9 후속 수정 (2026-07-22)
+
+- 위 현상은 단순 테스트 간섭이 아니라 등록 preflight가 상위 Git 저장소의 하위 디렉터리를
+  독립 프로젝트로 오인할 수 있는 실제 계약 결함으로 확인했다.
+- `mcp_server/tools_inventory.py::_git_state()`가 `git rev-parse --show-toplevel` 결과와
+  `source_path`를 비교하도록 최소 보정했다. 상위 저장소 하위 경로는 명확한 blocker로 거부하고,
+  독립 프로젝트에는 `git init` 안내를 유지한다.
+- registry policy 및 P2 runtime 회귀: **68 passed, 5 subtests passed** (기존 deprecation warning만 남음).
