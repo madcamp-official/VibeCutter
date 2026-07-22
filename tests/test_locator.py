@@ -245,12 +245,25 @@ class LocalizeVulnClassReasonTests(unittest.TestCase):
             self.assertIn(expect, rc.rationale, sast_loc)
             self.assertNotIn("소유권/권한", rc.rationale, sast_loc)
 
-    def test_sqli_has_no_xss_fix_hint(self) -> None:
+    def test_sqli_gets_parameterization_hint_not_xss(self) -> None:
+        # SQLi는 파라미터화 수정 방향(_sqli_fix_hint)을 받되, XSS 전용 힌트(DOMPurify/autoescape)는 안 받는다.
         finding = self._finding_cwe("CWE-89", "GET /s", ["dao.py:5"])
         routes = [_route("GET", "/s", "S.q", "dao.py:3")]
         with patch("repair.locator.extract_routes", return_value=routes):
             rc = localize(finding, source_root="/nonexistent")
-        self.assertNotIn("수정 방향", rc.rationale)
+        self.assertIn("파라미터", rc.rationale)
+        self.assertIn("execute(sql, params)", rc.rationale)  # Python 프레임워크별 파라미터화
+        self.assertNotIn("DOMPurify", rc.rationale)
+        self.assertNotIn("autoescape", rc.rationale)
+
+    def test_sqli_fix_hint_is_framework_specific(self) -> None:
+        for sast_loc, expect in (("routes/search.ts:8", "Sequelize"), ("Dao.java:12", "PreparedStatement")):
+            finding = self._finding_cwe("CWE-89", "GET /s", [sast_loc])
+            routes = [_route("GET", "/s", "S.q", "server.ts:1")]
+            with patch("repair.locator.extract_routes", return_value=routes):
+                rc = localize(finding, source_root="/nonexistent")
+            self.assertIn(expect, rc.rationale, sast_loc)
+            self.assertNotIn("소유권/권한", rc.rationale, sast_loc)
 
     def test_sast_fallback_carries_class_reason(self) -> None:
         finding = self._finding_cwe("CWE-79", "POST /no/match", ["app/render.py:42"])
