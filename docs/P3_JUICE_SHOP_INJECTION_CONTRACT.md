@@ -16,15 +16,23 @@
 - **benign baseline 2회**로 엔드포인트 자연 변동(길이·상태·구조 유사도)을 재 노이즈 바닥을 깔고,
   그 위로만 판정한다(타임스탬프/nonce/페이지네이션 오탐 방지).
 
-## J-2 실측 (오라클이 이 타깃에서 발화함을 증명 — `tests/test_injection_verifier.py::test_juice_shop_sqli_demo_pattern`)
+## J-3 라이브 실측 (2026-07-22, P1 최초 라이브 run — Docker+235B) ⚠️ LIKE 컨텍스트 주의
+> **초기 계약의 18662/30은 오프라인 합성값이었다.** 실제 Juice Shop 검색은 `name LIKE '%<q>%'`라
+> 표준 OR tautology로는 참/거짓이 **안 갈린다** — 문자열을 `'`로 탈출하는 순간 앞의 `%`가 `LIKE '%'`
+> (전체 매치)가 돼 참·거짓 둘 다 전체 행을 연다. **LIKE-aware AND payload**로만 결과셋이 갈린다.
+
 | 요청 | 응답 크기 | 상태 |
 |---|---|---|
 | baseline `q=apple` | 631 B | 200 |
-| 참 `OR '1'='1` 계열 | 18,662 B | 200 |
-| 거짓 `OR '1'='2` 계열 | 30 B | 200 |
+| 참 `%' AND '1'='1' AND '1' LIKE '` | ~13,644 B (전체 행) | 200 |
+| 거짓 `%' AND '1'='2' AND '1' LIKE '` | ~30 B (0 행) | 200 |
+| (참고) 표준 `' OR '1'='1` / `'2` | 13,644 B / 13,644 B (**동일 — 미탐**) | 200 |
+| (참고) 주석형 `' OR '1'='1' -- ` | 942 B (닫는 괄호 훼손 → syntax error) | — |
 
-→ 참−거짓 델타 18,632 B ≫ 임계(자연 변동 500 B 가정 시 1,048 B). **verified**. 패치(파라미터화) 후
-참≈거짓(631 B ≈ 631 B) → attack 게이트가 **verified=False**(취약 아님)로 뒤집혀 FIXED를 확증.
+→ LIKE-aware 쌍의 참−거짓 델타(≈13,600 B) ≫ 임계 → **verified**. 이 쌍은 `verifiers/injection.py
+_PAYLOAD_PAIRS`에 상위 4쌍(기본 예산)으로 편입돼(SQLite로 Juice Shop 쿼리 재현 검증) J-3가 이제 통과한다.
+패치(파라미터화) 후 참≈거짓 → attack 게이트 **verified=False**로 뒤집혀 FIXED를 확증. 잠금:
+`tests/test_injection_verifier.py::{test_juice_shop_sqli_demo_pattern, test_like_wildcard_context_payload_present}`.
 
 ## P2가 seed할 candidate.attack_params
 ```
