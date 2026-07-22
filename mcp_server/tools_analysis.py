@@ -39,6 +39,23 @@ from scanners.aggregate import aggregate
 from scanners.sast import run_semgrep
 from scanners.sca import run_osv
 from surface.candidates import candidates_for_target
+
+# X7: 프론트 XSS sink(bypassSecurityTrustHtml 등)는 라우트·파라미터를 정적으로 못 붙여
+# 기본은 blocked다(`surface/candidates.py::injection_xss_candidates`, X2 (a)). P3가
+# `docs/P3_JUICE_SHOP_XSS_CONTRACT.md`(커밋 `6da9e45`)에서 확정한 Juice Shop reflected XSS
+# 계약(#1 검색, #2 track-order)을 여기서 fixture_hints로 wiring한다 — target별 계약이라
+# 코드에 하드코드 대신 별도 설정 파일을 두는 것도 고려했지만, 지금은 target 1개뿐이라
+# 과설계를 피해 여기 직접 둔다(target이 늘면 그때 파일로 승격).
+_XSS_FIXTURE_HINTS: dict[str, dict] = {
+    "juice-shop": {
+        "frontend/src/app/search-result/search-result.component.ts": {
+            "inject_path": "/#/search?q=", "inject_param": "q", "context": "reflected",
+        },
+        "frontend/src/app/track-result/track-result.component.ts": {
+            "inject_path": "/#/track-result?id=", "inject_param": "id", "context": "reflected",
+        },
+    },
+}
 from verifiers.access_control import verify as verify_access_control
 from verifiers.access_control import verify_mutation_access_control
 from verifiers.injection import verify as verify_injection
@@ -355,7 +372,10 @@ def register(mcp: FastMCP) -> None:
         service = _service()
         source_root = service.catalog.source_root_for(run.target_id)
         provisioning = service.verifier_provisioning(run.target_id)
-        bridge_result = candidates_for_target(run.id, provisioning, source_root)
+        xss_fixture_hints = _XSS_FIXTURE_HINTS.get(run.target_id)
+        bridge_result = candidates_for_target(
+            run.id, provisioning, source_root, xss_fixture_hints=xss_fixture_hints
+        )
 
         if bridge_result.blocked:
             record_trajectory_step(

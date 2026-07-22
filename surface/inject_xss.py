@@ -62,6 +62,10 @@ _XSS_SINKS: list[tuple[str, re.Pattern]] = [
     ("innerHTML", re.compile(r"\.innerHTML\s*=(?!=)\s*(.+)")),
     ("outerHTML", re.compile(r"\.outerHTML\s*=(?!=)\s*(.+)")),
     ("insertAdjacentHTML", re.compile(r"insertAdjacentHTML\s*\(\s*[^,]+,\s*([^)]+)")),  # 2번째 인자=HTML
+    # Angular `DomSanitizer.bypassSecurityTrustHtml` — 이름 그대로 살균을 명시적으로 우회하는
+    # API. 반환값은 대개 `[innerHTML]="x"` 템플릿 바인딩으로 렌더된다(X7, Juice Shop
+    # search-result/track-result 확정 sink, `docs/P3_JUICE_SHOP_XSS_CONTRACT.md`).
+    ("angular.bypassSecurityTrustHtml", re.compile(r"bypassSecurityTrustHtml\s*\(\s*([^)]+)")),
     ("document.write", re.compile(r"document\.write(?:ln)?\s*\(\s*([^)]+)")),
     ("jquery.html", re.compile(r"\.html\s*\(\s*([^)]+)\)")),
     ("HTMLResponse", re.compile(r'HTMLResponse\s*\(\s*(f["\'][^"\']*\{[^}]+\}[^"\']*["\']|[^)]*\+[^)]*)')),
@@ -74,7 +78,7 @@ _XSS_SINKS: list[tuple[str, re.Pattern]] = [
 ]
 # 프레임워크가 escape를 명시적으로 끄는 sink → 높음(0.9~1.0). 나머지 DOM sink는 0.7.
 _STRONG_SINKS = frozenset({
-    "dangerouslySetInnerHTML", "v-html", "HTMLResponse",
+    "dangerouslySetInnerHTML", "v-html", "HTMLResponse", "angular.bypassSecurityTrustHtml",
     "django.mark_safe", "flask.render_template_string", "markupsafe.Markup",
     "jinja.safe", "thymeleaf.utext",
 })

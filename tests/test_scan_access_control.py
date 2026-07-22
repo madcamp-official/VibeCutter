@@ -103,7 +103,9 @@ class VcScanAccessControlTests(unittest.TestCase):
         ):
             self._call({"run_id": run.id})
 
-        mock_bridge.assert_called_once_with(run.id, provisioning_sentinel, source_root)
+        mock_bridge.assert_called_once_with(
+            run.id, provisioning_sentinel, source_root, xss_fixture_hints=None
+        )
         fake_service.verifier_provisioning.assert_called_once_with(REGISTERED_TARGET_ID)
 
     def test_unregistered_target_is_rejected_before_bridge_runs(self) -> None:
