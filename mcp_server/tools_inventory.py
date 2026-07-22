@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from contracts.schemas import Run, Target
 from core.audit_log import audited
+from mcp_server.scaffold import ScaffoldResult, scaffold_manifest
 from runtime.target_service import TargetRuntimeService
 from runtime.provisioning import VerifierProvisioning
 
@@ -176,6 +177,26 @@ def register(mcp: FastMCP) -> None:
         사용자 자신의 로컬 프로젝트를 등록하려면 `vc_register_local_target`을 쓴다.
         """
         return _service().register(manifest)
+
+    @mcp.tool()
+    @audited
+    def vc_scaffold_manifest(source_path: str) -> ScaffoldResult:
+        """레포를 읽어 manifest **초안** + 근거를 만든다(U1). **아무것도 등록·실행하지 않는다.**
+
+        `vc_register_local_target`은 manifest를 이미 조립된 상태로 요구하는데, 비전문
+        사용자는 build/start/stop/reset argv·healthcheck·test_suites 값을 모른다. 이 tool은
+        `docker-compose.yml`/`package.json`/`pom.xml`/`requirements.txt` 등 레포에 이미 있는
+        파일을 읽어 그 값들을 추정하고, 각 값을 **어느 파일에서 뽑았는지**를 `evidence`에
+        같이 담는다. 확신이 부족한 값은 `warnings`로 알리고 조용히 틀리게 채우지 않는다.
+
+        반환된 `manifest`는 그대로 `vc_register_local_target(manifest, source_path,
+        confirmed=False)`에 넘겨 미리보기를 받고, 사람이 승인해야 `confirmed=True`로 등록된다
+        — 승인 게이트는 그대로다(TEAM_CONTRACT 안전 불변식 2). 이 tool 자체는 파일을 읽기만
+        하며 어떤 명령도 실행하지 않는다.
+        """
+        from pathlib import Path
+
+        return scaffold_manifest(Path(source_path).expanduser().resolve())
 
     @mcp.tool()
     @audited
