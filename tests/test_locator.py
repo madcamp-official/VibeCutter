@@ -229,7 +229,35 @@ class LocalizeSastFallbackTests(unittest.TestCase):
         with patch("repair.locator.extract_routes", return_value=[]):
             rc = localize(finding, source_root="/nonexistent")
         self.assertEqual(rc.file, "a/Early.java")  # sorted(sast)[0], 순서 아님
-        self.assertNotIn("sink 후보(보고 순)", rc.rationale)
+        self.assertNotIn("sink 후보(실행부 우선)", rc.rationale)
+
+    def test_sink_cwe_prefers_live_handler_over_decoy_reference_copy(self) -> None:
+        # J-3 라이브 발견: 같은 취약 SQL이 실행 핸들러(routes/search.ts)와 비실행 참고 사본
+        # (data/static/codefixes/…)에 모두 있고, SAST가 decoy를 먼저 보고해도 locator는 실행 핸들러를 짚어야 한다.
+        finding = Finding(
+            id="f", run_id="r", title="sqli", cwe="CWE-89", affected_endpoint="GET /rest/products/search",
+            source_symbols=["data/static/codefixes/dbSchemaChallenge_1.ts:12", "routes/search.ts:40"],
+        )
+        with patch("repair.locator.extract_routes", return_value=[]):  # route 매핑 실패 → SAST 폴백
+            rc = localize(finding, source_root="/nonexistent")
+        self.assertEqual(rc.file, "routes/search.ts")            # decoy 아니라 실행 핸들러
+        self.assertIn("codefixes", rc.rationale)                 # 후보 목록엔 남되 후순위
+        self.assertIn("실행부 우선", rc.rationale)
+
+
+class SinkFilePriorityTests(unittest.TestCase):
+    def test_handler_before_general_before_reference(self) -> None:
+        from repair.locator import _sink_file_priority as pri
+        self.assertEqual(pri("routes/search.ts"), 0)             # 실행 핸들러
+        self.assertEqual(pri("src/db/query.ts"), 1)             # 일반
+        self.assertEqual(pri("data/static/codefixes/x.ts"), 2)  # 비실행 decoy
+        self.assertLess(pri("routes/search.ts"), pri("data/static/codefixes/x.ts"))
+
+    def test_rank_sinks_stable_within_priority(self) -> None:
+        from repair.locator import _rank_sinks
+        ranked = _rank_sinks(["static/a.ts:1", "routes/b.ts:2", "lib/c.ts:3", "controllers/d.ts:4"])
+        # 핸들러(routes/controllers) 먼저(보고 순 유지) → 일반(lib) → decoy(static) 마지막
+        self.assertEqual(ranked, ["routes/b.ts:2", "controllers/d.ts:4", "lib/c.ts:3", "static/a.ts:1"])
 
 
 class LocalizeVulnClassReasonTests(unittest.TestCase):

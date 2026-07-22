@@ -182,6 +182,34 @@ def _is_frontend_file(file: str) -> bool:
     return any(f"/{part}/" in f"/{low}" for part in _FRONTEND_DIR_PARTS)
 
 
+# 비실행 '참고/decoy' 소스: 같은 취약 패턴이 코드-고치기 챌린지·문서·정적 참고용으로 복제된 사본
+# (예: Juice Shop `data/static/codefixes/*.ts` — 서버가 실행하지 않고 `fs.readFileSync`로 텍스트로만
+# 읽어 UI에 보여줌). 실행 핸들러 디렉터리(`routes/`·`controllers/`…)는 실제 라이브 sink이므로 앞으로 당긴다.
+# J-3 라이브 발견(P1): locator가 실행 안 되는 codefixes decoy를 root cause로 짚어 attack replay가 실패.
+_REFERENCE_DIR_PARTS = ("codefixes", "static", "snippets", "examples", "samples", "vendor",
+                        "node_modules", "dist", "build")
+_HANDLER_DIR_PARTS = ("routes", "route", "controllers", "controller", "handlers", "handler",
+                      "api", "endpoints", "resources")
+
+
+def _sink_file_priority(file: str) -> int:
+    """sink 파일 우선순위(작을수록 우선): 실행 핸들러(0) < 일반(1) < 비실행 참고/decoy 사본(2).
+
+    같은 취약 패턴이 실행 핸들러와 참고 사본에 중복될 때 실제로 도는 코드를 짚게 한다.
+    """
+    seg = "/" + file.replace("\\", "/").lower().strip("/") + "/"
+    if any(f"/{p}/" in seg for p in _REFERENCE_DIR_PARTS):
+        return 2  # 비실행 참고/decoy — 가장 뒤로
+    if any(f"/{p}/" in seg for p in _HANDLER_DIR_PARTS):
+        return 0  # 실제 실행 핸들러 — 우선
+    return 1
+
+
+def _rank_sinks(sinks: list[str]) -> list[str]:
+    """sink 'file:line' 목록을 실행 우선순위로 안정 정렬한다(동순위는 SAST 보고 순 유지 — I5)."""
+    return sorted(sinks, key=lambda s: _sink_file_priority(s.split(":")[0]))
+
+
 def _locate_by_code_index(source_root: Path, endpoint: str, cwe: str | None = None) -> RootCause | None:
     """route/SAST가 모두 실패했을 때 P4 code_index로 폴백 검색한다.
 
@@ -237,7 +265,7 @@ def localize(finding: Finding, *, source_root: str | Path) -> RootCause:
         sink_note = ""
         hint_file = file  # XSS 수정 힌트는 sink 파일 기준(프레임워크 추정). sink 미상이면 handler 파일.
         if _cwe_num(finding.cwe) in _SINK_TYPE_CWES:
-            sinks = _sast_sink_locations(finding)
+            sinks = _rank_sinks(_sast_sink_locations(finding))  # 실행 핸들러 우선, decoy/참고 사본 후순위
             if sinks:
                 hint_file = sinks[0].split(":")[0]
                 sink_note = (
@@ -258,16 +286,17 @@ def localize(finding: Finding, *, source_root: str | Path) -> RootCause:
         file = sorted(sast)[0]  # 기본: 결정적(알파벳) — IDOR 등은 handler 파일 아무거나로 충분
         sink_note = ""
         if _cwe_num(finding.cwe) in _SINK_TYPE_CWES:
-            # sink형(XSS/SQLi)은 알파벳 첫 파일이 진짜 sink(쿼리 실행/출력 렌더)가 아닐 수 있다 —
-            # 쿼리 조립과 실행이 **다른 파일**에 있는 cross-file 케이스. SAST 보고 순서의 첫 sink를
-            # 채택해 route 경로의 sink-우선(sinks[0])과 일치시키고, 다른 후보도 rationale에 남긴다.
-            sinks = _sast_sink_locations(finding)
+            # sink형(XSS/SQLi)은 알파벳 첫 파일이 진짜 sink가 아닐 수 있다. sink 후보를 **실행 우선순위**로
+            # 정렬해 채택한다: 실행 핸들러(routes/…) > 일반 > 비실행 참고/decoy 사본(codefixes/·static/…).
+            # ① cross-file(쿼리 조립≠실행, I5)과 ② 같은 취약 SQL이 코드-고치기 챌린지용으로 여러 파일에
+            # 복제된 decoy(Juice Shop, J-3 라이브 발견) 둘 다 잡는다. 동순위는 SAST 보고 순 유지.
+            sinks = _rank_sinks(_sast_sink_locations(finding))
             if sinks:
                 file = sinks[0].split(":")[0]
                 if len(sinks) > 1:
                     sink_note = (
-                        f" SAST가 짚은 sink 후보(보고 순): {', '.join(sinks)} — 쿼리 조립과 실행이 "
-                        f"다른 파일이면 실행부(쿼리를 넘겨받아 실행/렌더하는 곳)를 우선 수정하라."
+                        f" SAST가 짚은 sink 후보(실행부 우선): {', '.join(sinks)} — 쿼리 조립·실행이 "
+                        f"다른 파일이거나 비실행 참고 사본(codefixes/·static/)이 섞였으면 실제 라이브 핸들러를 고쳐라."
                     )
         return RootCause(
             file=file,
