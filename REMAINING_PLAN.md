@@ -56,8 +56,8 @@
 |---|---|---|---|
 | 검증 오라클 | ✅ 완성(read+write) | ✅ 완성(불리언 차등) | ✅ 완성(격리 브라우저 실행) |
 | 후보 자동생성 | ✅ 성숙 | ✅ **(2026-07-22) I1/I2/I3 완료 — Node 인라인 핸들러 gap 해소** | ⚠️ 서버 반사 4패턴(Python 계열만) |
-| 실 235B 패치 | (template) | ✅ 스모크 성공 | ❌ 미검증 |
-| **실앱 E2E(verified→FIXED)** | ✅ **완료** | ❌ **0회**(J-3 실주행만 남음, 착수 가능) | ❌ **0회**(데모 타깃 없음) |
+| 실 235B 패치 | (template) | ✅ **(2026-07-22) 실주행 FIXED** | ❌ 미검증 |
+| **실앱 E2E(verified→FIXED)** | ✅ **완료** | ✅ **(2026-07-22) 완료**(J-3 실주행, run-4ce5d5400775) | ❌ **0회**(데모 타깃 없음) |
 
 세 종의 **판정 엔진·안전경계는 동등하게 완성**돼 있고, 차이는 "실증 진척"뿐이다. Injection은 코드
 한 곳 + 데모 1회면 IDOR급, XSS는 데모 타깃 확보와 후보 커버리지 확장이 더 필요하다.
@@ -69,8 +69,8 @@
 **단계 0(병렬: Node 후보 gap·ablation·SARIF·72B) → 데모 2 완주(Injection FIXED) → 데모 1 완주(임의
 사용자 E2E) + 측정 → 비전문 UX·안전·문서 → E2E·리허설.**
 ~~가장 큰 단일 리스크는 데모 2의 Injection 후보 gap 하나(4.1 I1).~~ **(2026-07-22 갱신, P1
-감사) I1은 이미 해결됐다**(커밋 `ac292a0`, 4.1 I1 참고) — 이제 남은 유일한 병목은 **7.1의
-J-3 실주행(P3)**뿐이다. 그것만 끝나면 실 235B FIXED 증거가 나오고 나머지는 병렬로 수렴한다.
+감사) I1은 이미 해결됐다**(커밋 `ac292a0`, 4.1 I1 참고) — ~~이제 남은 유일한 병목은 7.1의
+J-3 실주행(P3)뿐이다.~~ **(2026-07-22 P1) J-3 실주행 완료, FIXED.** 7.1 상세 참고.
 
 ---
 
@@ -443,13 +443,25 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 ## 7. 발표 필수 — 데모 완주 · 측정 · 문서 · 리허설
 
 ### 7.1 데모 2 완주(Injection FIXED) — 발표 핵심 증거
-- [ ] **[P3]** 4.1 **I1 해결 후 J-3 1회 완주**: Juice Shop SQLi → verify(불리언 차등) → localize →
-  **235B 패치** → 6게이트 → **FIXED**. run_id 공유. (Docker/런타임 경로는 P2가 default-bridge로 확보 완료.)
-  **(2026-07-22 P1 감사)** I1은 이미 해결됨(4.1 참고) — **지금 바로 J-3 실주행에 착수 가능.**
-  다만 Juice Shop default-bridge는 P2가 "smoke baseline"으로만 채택했고 발표 경로로 아직
-  승격하지 않았다는 점(Windows Docker Desktop internal-network 헬스체크 타임아웃, Linux
-  npm install 지연)을 감안해 실주행 전 P2와 런타임 상태를 먼저 맞추는 게 안전하다.
-- [ ] **[P1]** 이 완주가 승인 흐름(`PATCH_PROPOSED` 정지 → 승인 → `vc_resume_audit` → 6게이트)으로 도는지 확인.
+- [x] **[P1]** 4.1 **I1 해결 후 J-3 1회 완주**: Juice Shop SQLi → verify(불리언 차등) → localize →
+  **235B 패치** → 6게이트 → **FIXED**. **(완료 2026-07-22, P1 라이브 실행)** run_id
+  `run-4ce5d5400775`, finding `finding-fefac6430859`. scan → verify(13609B 불리언 차등,
+  CWE-89) → localize(`routes/search.ts::searchProducts`, decoy `codefixes/` 배제) →
+  235B 패치 attempt #1(`patch-0bcbe919e541`) → 6게이트: build/attack/positive_test/static/
+  scope 통과, **regression만 실패**(SQLite `+`는 문자열 결합이 아니라 산술 연산이라
+  `LIKE '%'+:criteria+'%'`가 `LIKE 0`으로 평가돼 검색 자체가 깨짐 — sqlite3로 직접 재현
+  확인) → verdict RETRY → attempt #2(`patch-501b47549e49`, SQL엔 문자열 결합 없이 JS에서
+  `` `%${criteria}%` ``를 완성해 바인딩) → 사용자 승인 → 6게이트 전부 통과 →
+  **verdict FIXED** → `vc_export_patch`로 `.vibecutter/runs/run-4ce5d5400775/security-fix.patch`
+  보존, `reset_run` 정상 완료. 과정에서 실제 버그 3건을 팀원과 함께 해소(I1 Node 인라인
+  핸들러 gap(P3), decoy-file 우선 localize(P3, 커밋 `7fac591`/`ea68e98`), regression 게이트가
+  non-compose test_suites 명령을 처리 못하던 `runtime/run_overlay.py` 버그(P2, 커밋
+  `fd50c76`)) + P1이 직접 고친 것 2건(Docker `internal:true`가 host-ingress를 막던 compose
+  네트워크 설정 → bridge+masquerade off로 교체, `vc_resume_audit`가 VALIDATING에서 재진입을
+  거부하던 가드 완화).
+- [x] **[P1]** 이 완주가 승인 흐름(`PATCH_PROPOSED` 정지 → 승인 → `vc_resume_audit` → 6게이트)으로 도는지 확인.
+  **(완료)** 위 J-3 실주행 자체가 그 흐름 그대로(생성 → diff 표시 → 사용자 승인 →
+  `vc_apply_patch(confirmed=True)` → `vc_resume_audit`)였다 — attempt #1/#2 둘 다 승인 후에만 적용됨.
 - [x] **[P4]** 그 run metadata(llm_used/tier/health)를 ablation 표본에 반영. **(완료)** `eval/reflect_runs.py`
   — run_id→235B(rag-llm)/heuristic-degrade(제외) 판정 + P2 `runtime_metadata.jsonl` 대조(같은 소스 일치 검증). 7/7.
 
@@ -491,16 +503,17 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 
 **(2026-07-22 P1 전수 감사 — 실제 코드/테스트 상태 기준. 아래 각 절의 상세 항목이 최신.)**
 
-- **[P1] 거의 완료.** 6절 UX(C1~C4) ✅ · U1~U3 ✅ · `SECURITY_POLICY.md` ✅. 남은 건 patch
-  diff/container log redaction(7.3, 미착수), 데모 2 승인흐름 확인(7.1, **지금 착수
-  가능** — I1 해결됨), `.env` 72B fallback 값 추가(3절, P2 URL 전달 대기로 블로킹), U4(전원).
+- **[P1] 거의 완료.** 6절 UX(C1~C4) ✅ · U1~U3 ✅ · `SECURITY_POLICY.md` ✅ · **7.1 데모 2
+  (J-3) 라이브 완주 ✅(2026-07-22, FIXED)**. 남은 건 patch diff/container log
+  redaction(7.3, 미착수), `.env` 72B fallback 값 추가(3절, P2 URL 전달 대기로 블로킹), U4(전원).
 - **[P2] 진척 적음, 대부분 의도적 보류.** 72B endpoint 미착수(문서화된 결정으로 보류) · X7
   XSS 데모 타깃 미착수(Juice Shop을 "발표 target 아님"으로 명시 제외) · M1 벤치 소스
   0→7/16(부분) · Juice Shop default-bridge는 "smoke baseline"으로만 채택, 발표 경로 미승격 ·
   루트 `RUNBOOK.md` 미착수(P2 전용 문서만 존재).
-- **[P3] ★ 가장 진척 큼.** I1·I2·I3 ✅ **완료 확인**(데모2 블로커 해소!) — 이어서 I4(선택)·I5·
-  X2~X6 미착수, X1은 부분(Python 계열 4패턴만 candidate 생성). `test_vulnerability_profiles.py`
-  선제 수정 완료. **다음 최우선: 7.1 J-3 실주행.**
+- **[P3] ★ 가장 진척 큼.** I1·I2·I3 ✅ **완료 확인**(데모2 블로커 해소!), locator decoy-file
+  우선 선택 버그도 커밋 `7fac591`/`ea68e98`로 해소(P1이 7.1 J-3 라이브 실행 중 발견·보고) —
+  이어서 I4(선택)·I5·X2~X6 미착수, X1은 부분(Python 계열 4패턴만 candidate 생성).
+  `test_vulnerability_profiles.py` 선제 수정 완료.
 - **[P4] 측정·redaction 코드 완료(2026-07-22 P4 갱신 — 위 P1 감사는 이 작업 전 스냅샷).**
   SARIF redaction ✅(`report_export` render_sarif에 `redact()`, 5/5) · M1 클래스별 하네스 ✅
   (`priority_ablation.compare_by_class`) · M2 클래스별 패치 성공률 하네스 ✅(`eval/patch_success.py`, 5/5) ·
@@ -512,8 +525,8 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
 
 ## 9. 크리티컬 패스 (다시 · endpoint UP 이후)
 
-~~I1(Node 인라인 핸들러) →~~ **(2026-07-22 갱신) I1 해결됨** → **데모 2 완주(7.1 J-3, P3
-착수 가능)** → 데모 1 E2E(+U1 스캐폴딩, ✅ 완료) → 4절 나머지 정확도·성능 + 6절 UX(✅ 완료) +
-3절 72B → 측정·문서·리허설.
-가장 큰 단일 리스크는 이제 **7.1 J-3 실주행 하나**(P3). 그 다음 큰 레버는 **X7(XSS
-데모 타깃, P2 — 아직 미착수)**과 **3절 72B endpoint(P2/P4 — 아직 미착수)**.
+~~I1(Node 인라인 핸들러) →~~ **(2026-07-22 갱신) I1 해결됨** → ~~데모 2 완주(7.1 J-3)~~
+**(2026-07-22) 완료, FIXED** → 데모 1 E2E(+U1 스캐폴딩, ✅ 완료) → 4절 나머지 정확도·성능 +
+6절 UX(✅ 완료) + 3절 72B → 측정·문서·리허설.
+가장 큰 단일 리스크는 이제 **X7(XSS 데모 타깃, P2 — 아직 미착수)**과 **3절 72B endpoint
+(P2/P4 — 아직 미착수)**.

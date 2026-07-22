@@ -630,10 +630,15 @@ def register(mcp: FastMCP) -> None:
     def vc_resume_audit(run_id: str) -> ResumeAuditResult:
         """사용자 승인 이후 재개: 남은 6게이트 → export → reset (§3A-7, 안전 불변식 4).
 
-        **전제**: run이 `PATCH_APPLIED`여야 한다 — 사용자가 diff를 보고 `vc_apply_patch(patch_id,
-        confirmed=True)`를 이미 호출했다는 뜻이다. driver(`mcp_server/driver.py`)의 자동 배치는
-        여기까지 넘어오지 않는다(더 이상 `confirmed=True`를 자동으로 넘기지 않는다) — 재개
-        주체는 항상 Host(사용자 승인 이후)다.
+        **전제**: run이 `PATCH_APPLIED` 또는 `VALIDATING`이어야 한다 — 사용자가 diff를 보고
+        `vc_apply_patch(patch_id, confirmed=True)`를 이미 호출했다는 뜻이다. driver
+        (`mcp_server/driver.py`)의 자동 배치는 여기까지 넘어오지 않는다(더 이상 `confirmed=True`를
+        자동으로 넘기지 않는다) — 재개 주체는 항상 Host(사용자 승인 이후)다. `VALIDATING`도
+        허용하는 이유: 이 tool이 내부적으로 부르는 `vc_build_and_test`/`vc_replay_attack`/
+        `vc_validate_regression`은 게이트 실행 중 예외(예: 인프라 버그)가 나도 `_advance_to_validating`
+        으로 이미 PATCH_APPLIED→VALIDATING을 멱등 전이시켜 두므로, 원인을 고친 뒤 `vc_resume_audit`를
+        다시 부르는 재시도 경로가 안전하게 열려 있어야 한다 — 여기서 PATCH_APPLIED만 허용하면
+        중간에 죽은 최초 시도 이후 재시도 자체가 막힌다.
 
         `vc_build_and_test`→`vc_replay_attack`→`vc_validate_regression` 순서로 나머지 게이트를
         채우고(각 tool이 이미 `_finalize_validation`으로 verdict를 확정한다), verdict가
@@ -644,9 +649,9 @@ def register(mcp: FastMCP) -> None:
         run = get(Run, run_id)
         if run is None:
             raise ValueError(f"run {run_id} not found")
-        if run.status != RunState.PATCH_APPLIED:
+        if run.status not in (RunState.PATCH_APPLIED, RunState.VALIDATING):
             raise ValueError(
-                "vc_resume_audit는 run이 PATCH_APPLIED 상태여야 호출할 수 있습니다"
+                "vc_resume_audit는 run이 PATCH_APPLIED 또는 VALIDATING 상태여야 호출할 수 있습니다"
                 f"(현재 {run.status}) — 먼저 vc_apply_patch(patch_id, confirmed=True)를 호출하세요"
             )
         patch = _applied_patch_for_run(run_id)
