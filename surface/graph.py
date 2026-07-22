@@ -111,7 +111,7 @@ def _iter_sources(root: Path):
     for p in root.rglob("*"):
         if p.suffix not in (".java", ".py", ".ts", ".js"):
             continue
-        s = str(p)
+        s = p.as_posix()
         if any(d in s for d in _SKIP_DIRS) or s.endswith((".d.ts", ".test.ts", ".spec.ts", ".test.js")):
             continue
         yield p
@@ -274,7 +274,7 @@ def find_idor_suspects(source_root: str | Path) -> list[IdorSuspect]:
 
     for p in _iter_sources(root):
         text = p.read_text(encoding="utf-8", errors="replace")
-        rel = str(p.relative_to(root)) if p.is_relative_to(root) else str(p)
+        rel = p.relative_to(root).as_posix() if p.is_relative_to(root) else p.as_posix()
 
         if p.suffix == ".java":
             handlers = ((pa, nm, sg, bd, "java") for pa, nm, sg, bd in _java_handlers(text))

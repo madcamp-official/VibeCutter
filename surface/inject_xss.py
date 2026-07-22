@@ -134,7 +134,7 @@ def _iter_frontend(root: Path):
     for p in root.rglob("*"):
         if p.suffix not in _FRONT_SUFFIX:
             continue
-        s = str(p)
+        s = p.as_posix()
         if any(d in s for d in _SKIP_DIRS) or any(d in s for d in _FRONT_SKIP):
             continue
         if s.endswith((".d.ts", ".test.ts", ".spec.ts", ".test.js", ".min.js")):
@@ -194,7 +194,7 @@ def find_injection_suspects(source_root: str | Path) -> list[InjectionSuspect]:
 
     for p in _iter_sources(root):  # .java/.py/.ts/.js, tests/dist/node_modules 제외
         text = p.read_text(encoding="utf-8", errors="replace")
-        rel = str(p.relative_to(root)) if p.is_relative_to(root) else str(p)
+        rel = p.relative_to(root).as_posix() if p.is_relative_to(root) else p.as_posix()
         stack = _stack_of(p.suffix)
         pending: dict[str, tuple[int, str]] = {}  # 동적 SQL 대입 변수 → (줄번호, 라인)
         for i, line in _code_lines(text):  # 통째 주석/블록 주석 라인 제외(precision)
@@ -235,7 +235,7 @@ def find_xss_suspects(source_root: str | Path) -> list[XssSuspect]:
     seen: set[tuple[str, int, str]] = set()
     for p in _iter_frontend(root):
         text = p.read_text(encoding="utf-8", errors="replace")
-        rel = str(p.relative_to(root)) if p.is_relative_to(root) else str(p)
+        rel = p.relative_to(root).as_posix() if p.is_relative_to(root) else p.as_posix()
         for i, line in _code_lines(text):  # 통째 주석/블록 주석 라인 제외(precision)
             for sink_name, rx in _XSS_SINKS:
                 m = rx.search(line)

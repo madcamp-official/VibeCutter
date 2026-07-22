@@ -425,7 +425,7 @@ def _node_source_files(root: Path) -> dict[str, str]:
         if p.suffix not in (".ts", ".js"):
             continue
         text = p.read_text(encoding="utf-8", errors="replace")
-        rel = str(p.relative_to(root)) if p.is_relative_to(root) else str(p)
+        rel = p.relative_to(root).as_posix() if p.is_relative_to(root) else p.as_posix()
         for m in _NODE_DECL.finditer(text):
             out.setdefault(m.group(1), rel)
     return out
@@ -491,7 +491,7 @@ def injection_xss_candidates(
 
     for p in _iter_sources(root):
         text = p.read_text(encoding="utf-8", errors="replace")
-        rel = str(p.relative_to(root)) if p.is_relative_to(root) else str(p)
+        rel = p.relative_to(root).as_posix() if p.is_relative_to(root) else p.as_posix()
         for _stack, (path, name, sig, body) in _handlers_for(text, p.suffix, root):
             if not path:
                 continue
