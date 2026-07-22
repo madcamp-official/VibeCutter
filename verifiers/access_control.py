@@ -24,7 +24,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -33,25 +32,17 @@ from pydantic import BaseModel
 
 from contracts.schemas import Candidate
 from core import evidence_store
+from core.redaction import redact
 from verifiers.types import MAX_REQUESTS_DEFAULT, VerifierOutput
 
 PRODUCER = "vc_verify_access_control"
 
 
 # --- secret redaction --------------------------------------------------------------
-# evidence_store 저장계층이 이제 동일 redaction을 걸지만(P1 구멍 ② 수정), 저장 직전 이중
-# 방어는 idempotent하고 무해하다. 제거 시점은 P1과 협의(Day5 하드닝 예정).
-_REDACTIONS = [
-    (re.compile(r"(JSESSIONID=)[^;\s\"]+"), r"\1<redacted>"),
-    (re.compile(r"(Bearer\s+)[A-Za-z0-9._\-]+"), r"\1<redacted>"),
-    (re.compile(r'("?(?:password|matchingPassword)"?\s*[=:]\s*"?)[^&"\s,}]+'), r"\1<redacted>"),
-]
-
-
-def redact(text: str) -> str:
-    for pattern, repl in _REDACTIONS:
-        text = pattern.sub(repl, text)
-    return text
+# 저장 직전 이중 방어(evidence_store가 저장 계층에서 한 번 더 건다). 예전엔 이 파일에 JSESSIONID/
+# Bearer/password 3패턴을 로컬로 들고 있었으나, 그 규칙이 core.redaction으로 승격되며 superset이
+# 됐다(connect.sid·sessionid·accessToken/token 계열·raw JWT 추가). 로컬 subset을 유지하면 인라인
+# 방어가 저장 계층보다 약해지므로, injection.py처럼 공용 redact를 그대로 쓴다(중복 적용은 idempotent).
 
 
 # --- ① IDOR oracle (핵심, 대상/언어/인증 무관) ----------------------------------------

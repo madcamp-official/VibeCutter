@@ -523,6 +523,22 @@ class RedactTests(unittest.TestCase):
         self.assertNotIn("hunter2", out)
         self.assertIn("<redacted>", out)
 
+    def test_redacts_full_superset_after_shared_redaction(self) -> None:
+        # 인라인 redact를 로컬 3패턴 subset에서 core.redaction superset으로 승격 —
+        # bearer 앱(자체 signup) IDOR 재현이 흘리던 Express connect.sid·Django sessionid·
+        # accessToken/token 계열·raw JWT가 이제 저장 계층 이전 단계(인라인)에서도 가려진다.
+        secret_jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ2aWN0aW0ifQ.s1gnatur3"
+        raw = (
+            f'Set-Cookie: connect.sid=s%3Aabc.def; sessionid=DJANGO123; '
+            f'"accessToken":"{secret_jwt}" bareJwt={secret_jwt}'
+        )
+        out = redact(raw)
+        self.assertNotIn("abc.def", out)          # connect.sid 값
+        self.assertNotIn("DJANGO123", out)         # Django sessionid 값
+        self.assertNotIn(secret_jwt, out)          # accessToken 값 + 헤더 없는 raw JWT 둘 다
+        self.assertIn("connect.sid=<redacted>", out)
+        self.assertIn("sessionid=<redacted>", out)
+
 
 # --- ⑥ verify() 조립 (evidence 저장, 200만으로는 verified 아님) ------------------------
 
