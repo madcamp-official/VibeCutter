@@ -1,6 +1,6 @@
 manifest_version: 1
 id: juice-shop
-display_name: OWASP Juice Shop SQLi training target
+display_name: OWASP Juice Shop SQLi/XSS engineering target
 adapter: generic-docker
 source_dir: .vibecutter/targets/sources/juice-shop
 base_url: http://127.0.0.1:14020
@@ -25,6 +25,10 @@ commands:
     argv: ["{vibecutter_python}", tools/juice_shop_smoke.py]
     working_dir: .
     timeout_seconds: 30
+  xss_search_smoke:
+    argv: ["{vibecutter_python}", tools/juice_shop_xss_smoke.py]
+    working_dir: .
+    timeout_seconds: 30
 healthcheck:
   path: /rest/products/search?q=apple
   expected_status: 200
@@ -35,6 +39,8 @@ reset:
 test_suites:
   - name: juice-shop-search-smoke
     command_id: search_smoke
+  - name: juice-shop-xss-search-route-smoke
+    command_id: xss_search_smoke
 docker_isolation:
   compose_file: targets/compose/juice-shop.yaml
   internal_network: vibecutter-internal
