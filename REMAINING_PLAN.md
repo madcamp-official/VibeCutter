@@ -213,7 +213,7 @@ Playwright에서 실제로 실행됐나**로 판정, reflected/stored 지원, eg
     `|safe`, EJS `<%- %>`, Handlebars `{{{ }}}`, Thymeleaf `th:utext`) 등으로 sink 패턴을 늘린다.
   - **완료 판정**: 각 패턴에 대한 단위 테스트가 xss candidate(라우트+파라미터 포함)를 생성.
 
-- [ ] **X2. 프론트/템플릿 XSS를 검증 가능한 후보로** — `surface/candidates.py:426`
+- [~] **X2. 프론트/템플릿 XSS를 검증 가능한 후보로** — **(a) fixture 계약 경로 완료(`a8484d8`)**. `injection_xss_candidates(xss_fixture_hints={파일:{inject_path,inject_param,context?,render_path?}})`로 프론트 sink을 blocked→verify 가능 candidate로 승격(`candidates_for_target` 배선). 계약 없거나 불완전이면 blocked 유지. **(b) crawl 기반 동적 라우트 발견은 follow-up.** — `surface/candidates.py`
   - **무엇**: 지금 프론트엔드 XSS sink(`.innerHTML=`, React `dangerouslySetInnerHTML`, DOM sink)는
     **전부 `blocked`**(라우트·파라미터를 정적으로 못 붙임)로 남는다 → 검증까지 못 간다.
   - **왜**: SPA/프론트 렌더 XSS가 현대 앱에서 큰 비중이라, blocked만 쌓이면 XSS 실증이 불가능.
