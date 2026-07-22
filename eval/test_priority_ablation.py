@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contracts.schemas import Candidate
 from eval.priority_ablation import (
+    compare_by_class,
     compare_orderings,
     first_true_rank,
     is_true,
@@ -58,6 +59,23 @@ def test_render_contains_mrr_and_delta() -> None:
         {"app1": [_c("z", "idor")]}, {"app1": [_c("z", "idor")]}, {"app1": {"idor"}})
     out = rep.render()
     assert "MRR" in out and "Δ" in out
+
+
+def test_compare_by_class_breaks_out_injection_and_xss() -> None:
+    # M1: injection·xss 를 클래스별로. heuristic은 injection 참을 2위, rag-llm은 1위로.
+    heuristic = {
+        "app1": [_c("x", "xss"), _c("i", "injection")],   # injection 참 2위
+        "app2": [_c("y", "xss"), _c("z", "idor")],        # xss 참 1위
+    }
+    ragllm = {
+        "app1": [_c("i", "injection"), _c("x", "xss")],   # injection 참 1위로 개선
+        "app2": [_c("y", "xss"), _c("z", "idor")],
+    }
+    truth = {"app1": {"injection"}, "app2": {"xss"}}
+    by_class = compare_by_class(heuristic, ragllm, truth)
+    assert set(by_class) == {"injection", "xss"}          # idor 는 truth 에 없어 제외
+    assert by_class["injection"].mrr_delta > 0            # injection 순위 개선 잡힘
+    assert by_class["xss"].heuristic_mrr == 1.0           # xss 는 이미 1위
 
 
 def _run() -> None:

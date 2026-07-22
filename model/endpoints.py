@@ -1,8 +1,9 @@
-"""LLM endpoint 티어 구성: 큰 외부 모델을 primary, 기존 7B 를 fallback 으로 묶는다.
+"""LLM endpoint 티어 구성: 큰 외부 모델을 primary, 로컬 모델을 fallback 으로 묶는다.
 
 배경(D5 결정): qwen3-235b 를 **외부 OpenAI 호환 API** 로 호출한다. 이 모델은 너무 커서
-학습시키지 않는다 — 우리는 쓰기만 한다. 기존 7B 는 버리는 게 아니라, 큰 모델이
-**답을 못 주거나 너무 오래 걸릴 때의 fallback** 으로 남긴다.
+학습시키지 않는다 — 우리는 쓰기만 한다. fallback 은 큰 모델이 **답을 못 주거나 너무
+오래 걸릴 때** 쓴다. **fallback 은 7B → 72B 로 전환 중**(REMAINING_PLAN §3; 72B 기동·
+model id 는 P2 소관). 현재 `.env` 엔 fallback endpoint 가 미설정이라 235B 단독 운영이다.
 
 계층 분리는 프로젝트 관행 그대로:
 - `model/serving.py` = 전송(urllib wrapper) + 훅 팩토리.
@@ -40,7 +41,11 @@ DEFAULT_PRIMARY_ENDPOINTS = (
 DEFAULT_PRIMARY_MODEL = "qwen3-235b"
 DEFAULT_PRIMARY_TIMEOUT = 600.0
 DEFAULT_PRIMARY_MAX_TOKENS = 512
-DEFAULT_FALLBACK_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"
+# fallback tier 의 기본 모델. 팀 결정: fallback 을 **72B 로 전환**(7B 는 72B 작동 확인 후 폐기,
+# REMAINING_PLAN §3). ⚠️ 72B 의 **정확한 model id 는 P2 가 endpoint 기동 시 제공** — 확정되면
+# 이 상수를 그 id 로 교체하거나 env `VIBECUTTER_LLM_FALLBACK_MODEL=<72B id>` 로 지정한다.
+# 그 전까지는 레거시 7B 문자열을 둔다(fallback endpoint 자체가 미설정이라 현재 미사용).
+DEFAULT_FALLBACK_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"  # TODO(P2 72B id): 72B 로 교체
 DEFAULT_FALLBACK_TIMEOUT = 60.0
 
 

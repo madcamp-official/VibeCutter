@@ -94,6 +94,22 @@ def test_export_report_writes_both_files() -> None:
         assert sarif["runs"][0]["results"][0]["ruleId"] == "CWE-639"
 
 
+def test_sarif_redacts_secrets_in_message() -> None:
+    # finding title/impact(분석·LLM 생성 텍스트)에 secret 이 섞이면 SARIF message.text 에서
+    # 제거돼야 한다(3A-10: report/SARIF 도 redaction 대상, 이전엔 redact() 0건).
+    finding = Finding(
+        id="f-sec", run_id="run-1", title="auth bug: Bearer sk-SECRET123abcDEF leaked in log",
+        cwe="CWE-522", owasp_category="A07:2021", severity="high",
+        verification_state=FindingStatus.CANDIDATE,
+        impact="response echoes password=hunter2secret to client",
+    )
+    rep = RunReport(run_id="run-1", findings=[FindingReportEntry(finding=finding, evidence=[])])
+    text = render_sarif(rep)["runs"][0]["results"][0]["message"]["text"]
+    assert "sk-SECRET123abcDEF" not in text, text
+    assert "hunter2secret" not in text, text
+    assert "<redacted>" in text            # 제거는 됐지만 finding 문맥은 남는다
+
+
 def _run() -> None:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

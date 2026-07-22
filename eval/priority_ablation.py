@@ -96,6 +96,29 @@ class PriorityAblationReport:
         return "\n".join(lines)
 
 
+FOCUS_CLASSES = ("idor", "xss", "injection")  # RQ3 대상 3군(eval.baseline.FOCUS_GROUPS 와 동일)
+
+
+def compare_by_class(
+    heuristic: Mapping[str, Sequence[Candidate]],
+    ragllm: Mapping[str, Sequence[Candidate]],
+    truth: Mapping[str, Iterable[str]],
+    classes: Sequence[str] = FOCUS_CLASSES,
+) -> dict[str, "PriorityAblationReport"]:
+    """클래스별 순위 ablation (M1). 각 클래스 c 마다, truth 에 c 가 든 앱만 대상으로
+    'focus==c 인 첫 후보'의 순위로 heuristic vs rag-llm MRR 을 낸다.
+
+    injection·xss 를 idor 와 나란히 클래스별로 편입해 RQ3 근거를 낸다. truth 에 그 클래스가
+    하나도 없으면 결과에서 뺀다(빈 표본).
+    """
+    out: dict[str, PriorityAblationReport] = {}
+    for c in classes:
+        truth_c = {app: {c} for app, foci in truth.items() if c in set(foci)}
+        if truth_c:
+            out[c] = compare_orderings(heuristic, ragllm, truth_c)
+    return out
+
+
 def compare_orderings(
     heuristic: Mapping[str, Sequence[Candidate]],
     ragllm: Mapping[str, Sequence[Candidate]],

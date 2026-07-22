@@ -23,6 +23,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from core.redaction import redact  # SARIF 사용자 대면 텍스트의 secret 제거(3A-10)
 from core.report import (
     FindingReportEntry,
     RunReport,
@@ -70,9 +71,12 @@ def _finding_to_sarif_result(entry: FindingReportEntry) -> dict:
             phys["region"] = {"startLine": line}
         locations.append({"physicalLocation": phys})
 
-    msg = f.title
+    # message.text 는 finding title/impact(분석·LLM 생성 자유 텍스트) → egress 경계에서
+    # secret 제거(3A-10: report/SARIF 도 redaction 대상). location URI(파일경로)·구조화
+    # 필드(severity/cwe/roles)는 secret 이 아니라 그대로 둔다.
+    msg = redact(f.title or "")
     if f.impact:
-        msg += f" — {f.impact}"
+        msg += f" — {redact(f.impact)}"
 
     validation = None
     if entry.validation is not None:
