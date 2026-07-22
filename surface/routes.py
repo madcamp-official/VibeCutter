@@ -211,7 +211,7 @@ def _collect_node_defs(texts: dict[Path, str], root: Path) -> dict[str, str]:
     handler 심볼을 정의 파일로 되짚어 그 문제를 없앤다."""
     defs: dict[str, str] = {}
     for f, text in texts.items():
-        rel = str(f.relative_to(root))
+        rel = f.relative_to(root).as_posix()
         for m in _JS_DEF.finditer(text):
             name = m.group(1)
             if name not in defs:
@@ -264,13 +264,13 @@ def extract_routes(source_root: Path | str) -> list[Route]:
             continue
         text = _read(java)
         if "Mapping" in text:
-            routes += _extract_java_routes(text, str(java.relative_to(root)))
+            routes += _extract_java_routes(text, java.relative_to(root).as_posix())
 
     for py in sorted(root.rglob("*.py")):
         if _skip(py, root):
             continue
         text = _read(py)
-        rel = str(py.relative_to(root))
+        rel = py.relative_to(root).as_posix()
         if _PY_ROUTE.search(text):
             routes += _extract_fastapi_routes(text, rel)
         if py.name == "urls.py":
@@ -285,7 +285,7 @@ def extract_routes(source_root: Path | str) -> list[Route]:
     handler_defs = _collect_node_defs(js_texts, root)
     for f, text in js_texts.items():
         if _JS_METHOD_CALL.search(text):
-            routes += _extract_express_routes(text, str(f.relative_to(root)), ctx, handler_defs)
+            routes += _extract_express_routes(text, f.relative_to(root).as_posix(), ctx, handler_defs)
 
     return routes
 
