@@ -162,7 +162,7 @@ class CodeIndex:
             if len(lines) > _MAX_LINES:
                 continue
             language = LANG_BY_EXT[path.suffix.lower()]
-            rel = str(path.relative_to(root))
+            rel = path.relative_to(root).as_posix()
             file_syms = _extract_symbols(language, lines, rel)
             symbols.extend(file_syms)
             for start in range(0, max(len(lines), 1), window):
